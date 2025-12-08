@@ -28,11 +28,13 @@
 
     function App() {
       const [file, setFile] = useState(null);
+      const [fileData, setFileData] = useState(null);
       const [processing, setProcessing] = useState(false);
+      const [processingType, setProcessingType] = useState('');
       const [notes, setNotes] = useState(null);
       const [cards, setCards] = useState([]);
       const [activeTab, setActiveTab] = useState('upload');
-      const [chatMessages, setChatMessages] = useState([{ role: 'assistant', content: "Hi! I'm your lecture study assistant. Upload your lecture slides (PDF) and I'll generate:\n\n• Concise, exam-ready notes organised by learning objectives\n• 10-40 high-yield Anki flashcards with proper tags\n\n⚙️ First, add your Anthropic API key in Settings (click the gear icon)." }]);
+      const [chatMessages, setChatMessages] = useState([{ role: 'assistant', content: "Hi! I'm your lecture study assistant. Upload your lecture slides (PDF) and I'll help you create:\n\n• Concise, exam-ready notes\n• Anki flashcards\n\n⚙️ First, add your Anthropic API key in Settings (click the gear icon)." }]);
       const [expandedCards, setExpandedCards] = useState({});
       const [copied, setCopied] = useState(false);
       const [lectureTag, setLectureTag] = useState('');
@@ -58,18 +60,26 @@
           return;
         }
         setFile(uploadedFile);
+        const data = await readFile(uploadedFile);
+        setFileData(data);
         const defaultTag = uploadedFile.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9]/g, '_');
         setLectureTag(defaultTag);
-        setChatMessages(prev => [...prev, { role: 'user', content: `Uploaded: ${uploadedFile.name}` }, { role: 'assistant', content: `Great! Tag: "${defaultTag}"\n\nClick "Generate" to create notes & flashcards.${!apiKey ? '\n\n⚠️ Add your API key in Settings first!' : ''}` }]);
+        setChatMessages(prev => [...prev,
+          { role: 'user', content: `Uploaded: ${uploadedFile.name}` },
+          { role: 'assistant', content: `Great! Tag: "${defaultTag}"\n\nNow choose what to generate:\n• "Generate Notes" - Create study notes from the PDF\n• "Generate Flashcards" - Create Anki cards (works best after notes are generated)${!apiKey ? '\n\n⚠️ Add your API key in Settings first!' : ''}` }
+        ]);
       };
 
-      const processLecture = async () => {
-        if (!file || !apiKey) { if (!apiKey) setChatMessages(prev => [...prev, { role: 'assistant', content: "⚠️ Add your API key in Settings first." }]); return; }
+      const generateNotes = async () => {
+        if (!file || !apiKey || !fileData) {
+          if (!apiKey) setChatMessages(prev => [...prev, { role: 'assistant', content: "⚠️ Add your API key in Settings first." }]);
+          return;
+        }
         setProcessing(true);
-        setChatMessages(prev => [...prev, { role: 'assistant', content: "Step 1/2: Generating notes..." }]);
+        setProcessingType('notes');
+        setChatMessages(prev => [...prev, { role: 'assistant', content: "Generating notes from PDF..." }]);
 
         try {
-          const fileData = await readFile(file);
           const notesPrompt = `You are a medical education assistant. Return ONLY valid JSON:\n{"title": "Lecture Title", "learningObjectives": ["LO1"], "notes": [{"section": "1. Section", "points": ["**Term**: explanation"]}]}\n\nUse **asterisks** for key terms. Be concise. UK English.`;
 
           const notesResponse = await fetch('https://api.anthropic.com/v1/messages', {
@@ -78,17 +88,39 @@
             body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 8000, messages: [{ role: 'user', content: [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData.data } }, { type: 'text', text: notesPrompt }] }] })
           });
 
-          if (!notesResponse.ok) throw new Error((await notesResponse.json()).error?.message || 'API failed');
+          if (!notesResponse.ok) {
+            const err = await notesResponse.json();
+            throw new Error(err.error?.message || 'API failed');
+          }
           const notesData = await notesResponse.json();
           const notesResult = JSON.parse(notesData.content?.[0]?.text?.match(/\{[\s\S]*\}/)?.[0] || '{}');
           setNotes(notesResult);
+          setActiveTab('notes');
+          setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Notes generated!\n• ${notesResult.notes?.length || 0} sections\n• ${notesResult.learningObjectives?.length || 0} learning objectives\n\nYou can now generate flashcards from these notes.` }]);
+        } catch (error) {
+          setChatMessages(prev => [...prev, { role: 'assistant', content: `❌ Error: ${error.message}` }]);
+        } finally {
+          setProcessing(false);
+          setProcessingType('');
+        }
+      };
 
-          setChatMessages(prev => [...prev, { role: 'assistant', content: "Step 2/2: Generating flashcards (waiting 2s for rate limit)..." }]);
+      const generateFlashcards = async () => {
+        if (!apiKey) {
+          setChatMessages(prev => [...prev, { role: 'assistant', content: "⚠️ Add your API key in Settings first." }]);
+          return;
+        }
+        if (!notes) {
+          setChatMessages(prev => [...prev, { role: 'assistant', content: "⚠️ Please generate notes first, then generate flashcards." }]);
+          return;
+        }
 
-          // Wait 2 seconds to avoid rate limiting
-          await new Promise(resolve => setTimeout(resolve, 2000));
+        setProcessing(true);
+        setProcessingType('cards');
+        setChatMessages(prev => [...prev, { role: 'assistant', content: "Generating flashcards from notes..." }]);
 
-          const notesText = notesResult.notes?.map(s => `## ${s.section}\n${s.points?.map(p => `- ${p}`).join('\n')}`).join('\n\n') || '';
+        try {
+          const notesText = notes.notes?.map(s => `## ${s.section}\n${s.points?.map(p => `- ${p}`).join('\n')}`).join('\n\n') || '';
           const cardsPrompt = `Create 10-40 Anki flashcards from these medical lecture notes.
 
 IMPORTANT: Return ONLY a JSON array, nothing else. No markdown, no explanation, just the array:
@@ -142,16 +174,19 @@ ${notesText}`;
           console.log('Parsed cards:', parsedCards);
 
           setCards(parsedCards);
-          setActiveTab('notes');
+          setActiveTab('cards');
 
           if (parsedCards.length === 0) {
-            setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Notes generated!\n• ${notesResult.notes?.length || 0} sections\n\n⚠️ Flashcard parsing failed. Check browser console (F12) for details.` }]);
+            setChatMessages(prev => [...prev, { role: 'assistant', content: `⚠️ Flashcard generation completed but no cards were parsed.\n\nCheck browser console for raw response.` }]);
           } else {
-            setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Done!\n• ${notesResult.notes?.length || 0} sections\n• ${parsedCards.length} flashcards` }]);
+            setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Flashcards generated!\n• ${parsedCards.length} cards created\n\nGo to the Cards tab to review and export.` }]);
           }
         } catch (error) {
           setChatMessages(prev => [...prev, { role: 'assistant', content: `❌ Error: ${error.message}` }]);
-        } finally { setProcessing(false); }
+        } finally {
+          setProcessing(false);
+          setProcessingType('');
+        }
       };
 
       const copyNotes = async () => {
@@ -168,7 +203,7 @@ ${notesText}`;
       };
 
       const renderText = (text) => {
-        return text.replace(/<b>/g,'**').replace(/<\/b>/g,'**').split(/(\*\*[^*]+\*\*)/g).map((p,i) => 
+        return text.replace(/<b>/g,'**').replace(/<\/b>/g,'**').split(/(\*\*[^*]+\*\*)/g).map((p,i) =>
           p.startsWith('**') ? <strong key={i} className="text-indigo-300">{p.slice(2,-2)}</strong> : p
         );
       };
@@ -198,7 +233,7 @@ ${notesText}`;
           <div className="flex bg-slate-800/30 border-b border-slate-700">
             {['upload', 'notes', 'cards'].map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)} className={`flex-1 py-3 text-sm font-medium ${activeTab === tab ? 'bg-slate-700/50 text-indigo-400 border-b-2 border-indigo-500' : 'text-slate-400'}`}>
-                {tab === 'upload' ? 'Chat' : tab === 'notes' ? 'Notes' : `Cards${cards.length ? ` (${cards.length})` : ''}`}
+                {tab === 'upload' ? 'Chat' : tab === 'notes' ? `Notes${notes ? ' ✓' : ''}` : `Cards${cards.length ? ` (${cards.length})` : ''}`}
               </button>
             ))}
           </div>
@@ -214,17 +249,26 @@ ${notesText}`;
                       </div>
                     </div>
                   ))}
-                  {processing && <div className="flex justify-start"><div className="bg-slate-700/70 rounded-2xl px-4 py-3 flex items-center gap-2"><div className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></div><span className="text-sm">Processing...</span></div></div>}
+                  {processing && <div className="flex justify-start"><div className="bg-slate-700/70 rounded-2xl px-4 py-3 flex items-center gap-2"><div className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></div><span className="text-sm">{processingType === 'notes' ? 'Generating notes...' : 'Generating flashcards...'}</span></div></div>}
                 </div>
                 <div className="p-4 bg-slate-800/50 border-t border-slate-700 space-y-3">
                   {file && <input type="text" value={lectureTag} onChange={(e) => setLectureTag(e.target.value)} placeholder="Lecture tag" className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />}
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
                     <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".pdf" className="hidden" />
                     <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-4 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl"><Icon name="upload" className="w-4 h-4" /><span className="text-sm">Upload PDF</span></button>
-                    {file && <div className="flex-1 flex items-center gap-2 px-3 bg-slate-700/50 rounded-xl"><span className="text-sm truncate">{file.name}</span><button onClick={() => setFile(null)} className="ml-auto text-slate-400 hover:text-white">×</button></div>}
-                    <button onClick={processLecture} disabled={!file || processing || !apiKey} className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-600 disabled:opacity-50 rounded-xl"><span className="text-sm">Generate</span></button>
+                    {file && <div className="flex items-center gap-2 px-3 bg-slate-700/50 rounded-xl"><span className="text-sm truncate max-w-[150px]">{file.name}</span><button onClick={() => {setFile(null); setFileData(null);}} className="text-slate-400 hover:text-white">×</button></div>}
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={generateNotes} disabled={!file || processing || !apiKey} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-600 disabled:opacity-50 rounded-xl">
+                      <Icon name="file-text" className="w-4 h-4" /><span className="text-sm">Generate Notes</span>
+                    </button>
+                    <button onClick={generateFlashcards} disabled={!notes || processing || !apiKey} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 hover:bg-green-500 disabled:bg-slate-600 disabled:opacity-50 rounded-xl">
+                      <Icon name="layers" className="w-4 h-4" /><span className="text-sm">Generate Flashcards</span>
+                    </button>
                   </div>
                   {!apiKey && <p className="text-orange-400 text-xs">⚠️ Add API key in Settings</p>}
+                  {file && !notes && <p className="text-slate-400 text-xs">Step 1: Generate notes from PDF</p>}
+                  {notes && !cards.length && <p className="text-slate-400 text-xs">Step 2: Generate flashcards from notes</p>}
                 </div>
               </div>
             )}
@@ -245,7 +289,7 @@ ${notesText}`;
                       </div>
                     ))}
                   </div>
-                ) : <div className="h-full flex items-center justify-center text-slate-400">No notes yet</div>}
+                ) : <div className="h-full flex items-center justify-center text-slate-400">No notes yet. Upload a PDF and click "Generate Notes".</div>}
               </div>
             )}
 
@@ -263,7 +307,7 @@ ${notesText}`;
                       </div>
                     ))}
                   </div>
-                ) : <div className="h-full flex items-center justify-center text-slate-400">No flashcards yet</div>}
+                ) : <div className="h-full flex items-center justify-center text-slate-400">No flashcards yet. Generate notes first, then click "Generate Flashcards".</div>}
               </div>
             )}
           </div>
