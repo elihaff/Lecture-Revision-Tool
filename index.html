@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Medical Lecture Study Assistant | Notes & Anki Cards</title>
+  <meta name="description" content="Generate concise study notes and Anki flashcards from your medical lecture slides">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    body { margin: 0; height: 100vh; }
+    #root { height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useRef, useEffect } = React;
+    const Icon = ({ name, className }) => {
+      const ref = useRef(null);
+      useEffect(() => { if (ref.current) lucide.createIcons({ nodes: [ref.current] }); }, []);
+      return <i ref={ref} data-lucide={name} className={className}></i>;
+    };
+
+    function App() {
+      const [file, setFile] = useState(null);
+      const [processing, setProcessing] = useState(false);
+      const [notes, setNotes] = useState(null);
+      const [cards, setCards] = useState([]);
+      const [activeTab, setActiveTab] = useState('upload');
+      const [chatMessages, setChatMessages] = useState([{ role: 'assistant', content: "Hi! I'm your lecture study assistant. Upload your lecture slides (PDF) and I'll generate:\n\n• Concise, exam-ready notes organised by learning objectives\n• 10-40 high-yield Anki flashcards with proper tags\n\n⚙️ First, add your Anthropic API key in Settings (click the gear icon)." }]);
+      const [expandedCards, setExpandedCards] = useState({});
+      const [copied, setCopied] = useState(false);
+      const [lectureTag, setLectureTag] = useState('');
+      const [apiKey, setApiKey] = useState('');
+      const [showSettings, setShowSettings] = useState(false);
+      const [keyVisible, setKeyVisible] = useState(false);
+      const fileInputRef = useRef(null);
+
+      useEffect(() => { const saved = localStorage.getItem('anthropic_api_key'); if (saved) setApiKey(saved); }, []);
+
+      const saveApiKey = (key) => { setApiKey(key); if (key) localStorage.setItem('anthropic_api_key', key); else localStorage.removeItem('anthropic_api_key'); };
+
+      const readFile = async (file) => {
+        const arrayBuffer = await file.arrayBuffer();
+        const base64 = btoa(new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), ''));
+        return { type: 'pdf', data: base64 };
+      };
+
+      const handleFileUpload = async (e) => {
+        const uploadedFile = e.target.files[0];
+        if (!uploadedFile || !uploadedFile.name.toLowerCase().endsWith('.pdf')) {
+          setChatMessages(prev => [...prev, { role: 'assistant', content: "Please upload a PDF file." }]);
+          return;
+        }
+        setFile(uploadedFile);
+        const defaultTag = uploadedFile.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9]/g, '_');
+        setLectureTag(defaultTag);
+        setChatMessages(prev => [...prev, { role: 'user', content: `Uploaded: ${uploadedFile.name}` }, { role: 'assistant', content: `Great! Tag: "${defaultTag}"\n\nClick "Generate" to create notes & flashcards.${!apiKey ? '\n\n⚠️ Add your API key in Settings first!' : ''}` }]);
+      };
+
+      const processLecture = async () => {
+        if (!file || !apiKey) { if (!apiKey) setChatMessages(prev => [...prev, { role: 'assistant', content: "⚠️ Add your API key in Settings first." }]); return; }
+        setProcessing(true);
+        setChatMessages(prev => [...prev, { role: 'assistant', content: "Step 1/2: Generating notes..." }]);
+
+        try {
+          const fileData = await readFile(file);
+          const notesPrompt = `You are a medical education assistant. Return ONLY valid JSON:\n{"title": "Lecture Title", "learningObjectives": ["LO1"], "notes": [{"section": "1. Section", "points": ["**Term**: explanation"]}]}\n\nUse **asterisks** for key terms. Be concise. UK English.`;
+
+          const notesResponse = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+            body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 8000, messages: [{ role: 'user', content: [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData.data } }, { type: 'text', text: notesPrompt }] }] })
+          });
+
+          if (!notesResponse.ok) throw new Error((await notesResponse.json()).error?.message || 'API failed');
+          const notesData = await notesResponse.json();
+          const notesResult = JSON.parse(notesData.content?.[0]?.text?.match(/\{[\s\S]*\}/)?.[0] || '{}');
+          setNotes(notesResult);
+
+          setChatMessages(prev => [...prev, { role: 'assistant', content: "Step 2/2: Generating flashcards..." }]);
+          const notesText = notesResult.notes?.map(s => `## ${s.section}\n${s.points?.map(p => `- ${p}`).join('\n')}`).join('\n\n') || '';
+          const cardsPrompt = `Create 10-40 Anki flashcards as CSV:\nFront,Back,Tags\n\nTags: ${lectureTag} Day2\nConvert **bold** to <b>tags</b>.\n\nNOTES:\n${notesText}`;
+
+          const cardsResponse = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+            body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 8000, messages: [{ role: 'user', content: cardsPrompt }] })
+          });
+
+          const csvContent = (await cardsResponse.json()).content?.[0]?.text || '';
+          const parsedCards = csvContent.trim().split('\n').slice(1).map(line => {
+            const m = line.match(/^"?([^"]*)"?,"?([^"]*)"?,"?([^"]*)"?$/) || line.split(',');
+            return m ? { front: (m[1]||'').trim(), back: (m[2]||'').trim(), tags: (m[3]||`${lectureTag} Day2`).trim() } : null;
+          }).filter(Boolean);
+
+          setCards(parsedCards);
+          setActiveTab('notes');
+          setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Done!\n• ${notesResult.notes?.length || 0} sections\n• ${parsedCards.length} flashcards` }]);
+        } catch (error) {
+          setChatMessages(prev => [...prev, { role: 'assistant', content: `❌ Error: ${error.message}` }]);
+        } finally { setProcessing(false); }
+      };
+
+      const copyNotes = async () => {
+        if (!notes) return;
+        let md = `# ${notes.title}\n\n## Learning Objectives\n\n${notes.learningObjectives?.map(l => `• ${l}`).join('\n')}\n\n---\n\n`;
+        notes.notes?.forEach(s => { md += `## ${s.section}\n\n${s.points?.map(p => `- ${p}`).join('\n')}\n\n`; });
+        await navigator.clipboard.writeText(md);
+        setCopied(true); setTimeout(() => setCopied(false), 2000);
+      };
+
+      const exportCSV = () => {
+        const csv = 'Front,Back,Tags\n' + cards.map(c => `"${c.front.replace(/"/g,'""')}","${c.back.replace(/"/g,'""')}","${c.tags}"`).join('\n');
+        const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'})); a.download = `${lectureTag}_anki.csv`; a.click();
+      };
+
+      const renderText = (text) => {
+        return text.replace(/<b>/g,'**').replace(/<\/b>/g,'**').split(/(\*\*[^*]+\*\*)/g).map((p,i) => 
+          p.startsWith('**') ? <strong key={i} className="text-indigo-300">{p.slice(2,-2)}</strong> : p
+        );
+      };
+
+      return (
+        <div className="h-full flex flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
+          <div className="bg-slate-800/50 border-b border-slate-700 px-4 py-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-indigo-600 rounded-lg"><Icon name="brain" className="w-5 h-5" /></div>
+                <div><h1 className="font-semibold">Medical Lecture Study Assistant</h1><p className="text-xs text-slate-400">Notes + Anki cards from PDF slides</p></div>
+              </div>
+              <button onClick={() => setShowSettings(!showSettings)} className={`p-2 rounded-lg ${apiKey ? 'bg-green-600/20 text-green-400' : 'bg-orange-600/20 text-orange-400'}`}><Icon name="settings" className="w-5 h-5" /></button>
+            </div>
+            {showSettings && (
+              <div className="mt-3 p-3 bg-slate-700/50 rounded-xl">
+                <div className="flex items-center gap-2 mb-2"><Icon name="key" className="w-4 h-4 text-slate-400" /><span className="text-sm font-medium">Anthropic API Key</span>{apiKey && <span className="text-xs bg-green-600/20 text-green-400 px-2 py-0.5 rounded">Saved</span>}</div>
+                <div className="flex gap-2">
+                  <input type={keyVisible ? 'text' : 'password'} value={apiKey} onChange={(e) => saveApiKey(e.target.value)} placeholder="sk-ant-..." className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
+                  <button onClick={() => setKeyVisible(!keyVisible)} className="px-3 py-2 bg-slate-600 rounded-lg text-sm">{keyVisible ? 'Hide' : 'Show'}</button>
+                </div>
+                <p className="text-xs text-slate-400 mt-2">Get key at <a href="https://console.anthropic.com/settings/keys" target="_blank" className="text-indigo-400 underline">console.anthropic.com</a></p>
+              </div>
+            )}
+          </div>
+
+          <div className="flex bg-slate-800/30 border-b border-slate-700">
+            {['upload', 'notes', 'cards'].map(tab => (
+              <button key={tab} onClick={() => setActiveTab(tab)} className={`flex-1 py-3 text-sm font-medium ${activeTab === tab ? 'bg-slate-700/50 text-indigo-400 border-b-2 border-indigo-500' : 'text-slate-400'}`}>
+                {tab === 'upload' ? 'Chat' : tab === 'notes' ? 'Notes' : `Cards${cards.length ? ` (${cards.length})` : ''}`}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1 overflow-hidden">
+            {activeTab === 'upload' && (
+              <div className="h-full flex flex-col">
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  {chatMessages.map((msg, i) => (
+                    <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 ${msg.role === 'user' ? 'bg-indigo-600' : 'bg-slate-700/70'}`}>
+                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      </div>
+                    </div>
+                  ))}
+                  {processing && <div className="flex justify-start"><div className="bg-slate-700/70 rounded-2xl px-4 py-3 flex items-center gap-2"><div className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></div><span className="text-sm">Processing...</span></div></div>}
+                </div>
+                <div className="p-4 bg-slate-800/50 border-t border-slate-700 space-y-3">
+                  {file && <input type="text" value={lectureTag} onChange={(e) => setLectureTag(e.target.value)} placeholder="Lecture tag" className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />}
+                  <div className="flex gap-2">
+                    <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".pdf" className="hidden" />
+                    <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-4 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl"><Icon name="upload" className="w-4 h-4" /><span className="text-sm">Upload PDF</span></button>
+                    {file && <div className="flex-1 flex items-center gap-2 px-3 bg-slate-700/50 rounded-xl"><span className="text-sm truncate">{file.name}</span><button onClick={() => setFile(null)} className="ml-auto text-slate-400 hover:text-white">×</button></div>}
+                    <button onClick={processLecture} disabled={!file || processing || !apiKey} className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-600 disabled:opacity-50 rounded-xl"><span className="text-sm">Generate</span></button>
+                  </div>
+                  {!apiKey && <p className="text-orange-400 text-xs">⚠️ Add API key in Settings</p>}
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'notes' && (
+              <div className="h-full overflow-y-auto p-4">
+                {notes ? (
+                  <div className="space-y-6">
+                    <div className="flex justify-between"><h2 className="text-xl font-bold">{notes.title}</h2><button onClick={copyNotes} className="px-3 py-1.5 bg-slate-700 rounded-lg text-sm">{copied ? '✓ Copied' : 'Copy'}</button></div>
+                    <div className="bg-indigo-900/30 border border-indigo-700/50 rounded-xl p-4">
+                      <h3 className="text-sm font-semibold text-indigo-400 mb-2">Learning Objectives</h3>
+                      <ul className="space-y-1">{notes.learningObjectives?.map((o,i) => <li key={i} className="text-sm text-slate-300">• {o}</li>)}</ul>
+                    </div>
+                    {notes.notes?.map((s,i) => (
+                      <div key={i} className="bg-slate-800/50 rounded-xl p-4">
+                        <h3 className="font-semibold mb-3">{s.section}</h3>
+                        <ul className="space-y-2">{s.points?.map((p,j) => <li key={j} className="text-sm text-slate-300 pl-4 border-l-2 border-slate-700">{renderText(p)}</li>)}</ul>
+                      </div>
+                    ))}
+                  </div>
+                ) : <div className="h-full flex items-center justify-center text-slate-400">No notes yet</div>}
+              </div>
+            )}
+
+            {activeTab === 'cards' && (
+              <div className="h-full overflow-y-auto p-4">
+                {cards.length ? (
+                  <div className="space-y-3">
+                    <div className="flex justify-between mb-4"><div><h2 className="font-semibold">{cards.length} Flashcards</h2></div><button onClick={exportCSV} className="px-3 py-1.5 bg-green-600 rounded-lg text-sm">Export CSV</button></div>
+                    {cards.map((c,i) => (
+                      <div key={i} className="bg-slate-800/50 rounded-xl">
+                        <button onClick={() => setExpandedCards(p => ({...p, [i]: !p[i]}))} className="w-full px-4 py-3 flex justify-between text-left">
+                          <span className="text-sm">#{i+1} {c.front}</span><span>{expandedCards[i] ? '▲' : '▼'}</span>
+                        </button>
+                        {expandedCards[i] && <div className="px-4 py-3 bg-indigo-900/20 border-t border-slate-700"><p className="text-sm text-indigo-300">{renderText(c.back)}</p><p className="text-xs text-slate-500 mt-2">Tags: {c.tags}</p></div>}
+                      </div>
+                    ))}
+                  </div>
+                ) : <div className="h-full flex items-center justify-center text-slate-400">No flashcards yet</div>}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
