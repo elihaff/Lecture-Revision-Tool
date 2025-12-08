@@ -85,7 +85,19 @@
 
           setChatMessages(prev => [...prev, { role: 'assistant', content: "Step 2/2: Generating flashcards..." }]);
           const notesText = notesResult.notes?.map(s => `## ${s.section}\n${s.points?.map(p => `- ${p}`).join('\n')}`).join('\n\n') || '';
-          const cardsPrompt = `Create 10-40 Anki flashcards as CSV:\nFront,Back,Tags\n\nTags: ${lectureTag} Day2\nConvert **bold** to <b>tags</b>.\n\nNOTES:\n${notesText}`;
+          const cardsPrompt = `Create 10-40 Anki flashcards from these lecture notes. Output ONLY valid CSV with this exact format:
+Front,Back,Tags
+
+Rules:
+- Each row: "question","answer","${lectureTag} Day2"
+- Wrap ALL fields in double quotes
+- Escape internal quotes by doubling them ("")
+- Use <b>term</b> for bold formatting
+- No markdown, no extra text, just CSV rows
+- Start directly with the first flashcard row (no header row)
+
+NOTES:
+${notesText}`;
 
           const cardsResponse = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
@@ -93,10 +105,37 @@
             body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 8000, messages: [{ role: 'user', content: cardsPrompt }] })
           });
 
-          const csvContent = (await cardsResponse.json()).content?.[0]?.text || '';
-          const parsedCards = csvContent.trim().split('\n').slice(1).map(line => {
-            const m = line.match(/^"?([^"]*)"?,"?([^"]*)"?,"?([^"]*)"?$/) || line.split(',');
-            return m ? { front: (m[1]||'').trim(), back: (m[2]||'').trim(), tags: (m[3]||`${lectureTag} Day2`).trim() } : null;
+          const cardsData = await cardsResponse.json();
+          const csvContent = cardsData.content?.[0]?.text || '';
+
+          // Better CSV parsing that handles quotes and commas in fields
+          const parseCSVLine = (line) => {
+            const result = [];
+            let current = '';
+            let inQuotes = false;
+            for (let i = 0; i < line.length; i++) {
+              const char = line[i];
+              if (char === '"') {
+                if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+                else { inQuotes = !inQuotes; }
+              } else if (char === ',' && !inQuotes) {
+                result.push(current.trim());
+                current = '';
+              } else {
+                current += char;
+              }
+            }
+            result.push(current.trim());
+            return result;
+          };
+
+          const lines = csvContent.trim().split('\n').filter(line => line.trim() && !line.toLowerCase().startsWith('front,'));
+          const parsedCards = lines.map(line => {
+            const fields = parseCSVLine(line);
+            if (fields.length >= 2 && fields[0]) {
+              return { front: fields[0], back: fields[1] || '', tags: fields[2] || `${lectureTag} Day2` };
+            }
+            return null;
           }).filter(Boolean);
 
           setCards(parsedCards);
