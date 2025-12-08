@@ -106,41 +106,62 @@ ${notesText}`;
           });
 
           const cardsData = await cardsResponse.json();
-          const csvContent = cardsData.content?.[0]?.text || '';
+          console.log('Cards API response:', cardsData);
 
-          // Better CSV parsing that handles quotes and commas in fields
-          const parseCSVLine = (line) => {
-            const result = [];
+          if (!cardsResponse.ok) {
+            throw new Error(cardsData.error?.message || 'Flashcard API failed');
+          }
+
+          const csvContent = cardsData.content?.[0]?.text || '';
+          console.log('CSV content:', csvContent);
+
+          // Parse CSV - handle various formats Claude might return
+          const parsedCards = [];
+          const lines = csvContent.trim().split('\n');
+
+          for (const line of lines) {
+            // Skip empty lines and header
+            if (!line.trim() || line.toLowerCase().includes('front,back')) continue;
+
+            // Try to parse as CSV with quotes
+            let fields = [];
             let current = '';
             let inQuotes = false;
+
             for (let i = 0; i < line.length; i++) {
               const char = line[i];
               if (char === '"') {
                 if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
                 else { inQuotes = !inQuotes; }
               } else if (char === ',' && !inQuotes) {
-                result.push(current.trim());
+                fields.push(current.trim().replace(/^"|"$/g, ''));
                 current = '';
               } else {
                 current += char;
               }
             }
-            result.push(current.trim());
-            return result;
-          };
+            fields.push(current.trim().replace(/^"|"$/g, ''));
 
-          const lines = csvContent.trim().split('\n').filter(line => line.trim() && !line.toLowerCase().startsWith('front,'));
-          const parsedCards = lines.map(line => {
-            const fields = parseCSVLine(line);
-            if (fields.length >= 2 && fields[0]) {
-              return { front: fields[0], back: fields[1] || '', tags: fields[2] || `${lectureTag} Day2` };
+            // If we got at least front and back, add the card
+            if (fields.length >= 2 && fields[0].length > 0) {
+              parsedCards.push({
+                front: fields[0],
+                back: fields[1] || '',
+                tags: fields[2] || `${lectureTag} Day2`
+              });
             }
-            return null;
-          }).filter(Boolean);
+          }
+
+          console.log('Parsed cards:', parsedCards);
 
           setCards(parsedCards);
           setActiveTab('notes');
-          setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Done!\n• ${notesResult.notes?.length || 0} sections\n• ${parsedCards.length} flashcards` }]);
+
+          if (parsedCards.length === 0) {
+            setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Notes generated!\n• ${notesResult.notes?.length || 0} sections\n\n⚠️ Flashcard parsing failed. Check browser console (F12) for details.` }]);
+          } else {
+            setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Done!\n• ${notesResult.notes?.length || 0} sections\n• ${parsedCards.length} flashcards` }]);
+          }
         } catch (error) {
           setChatMessages(prev => [...prev, { role: 'assistant', content: `❌ Error: ${error.message}` }]);
         } finally { setProcessing(false); }
