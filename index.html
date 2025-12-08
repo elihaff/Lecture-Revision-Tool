@@ -83,7 +83,11 @@
           const notesResult = JSON.parse(notesData.content?.[0]?.text?.match(/\{[\s\S]*\}/)?.[0] || '{}');
           setNotes(notesResult);
 
-          setChatMessages(prev => [...prev, { role: 'assistant', content: "Step 2/2: Generating flashcards..." }]);
+          setChatMessages(prev => [...prev, { role: 'assistant', content: "Step 2/2: Generating flashcards (waiting 2s for rate limit)..." }]);
+
+          // Wait 2 seconds to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 2000));
+
           const notesText = notesResult.notes?.map(s => `## ${s.section}\n${s.points?.map(p => `- ${p}`).join('\n')}`).join('\n\n') || '';
           const cardsPrompt = `Create 10-40 Anki flashcards from these medical lecture notes.
 
@@ -109,6 +113,9 @@ ${notesText}`;
           console.log('Cards API response:', cardsData);
 
           if (!cardsResponse.ok) {
+            if (cardsResponse.status === 429) {
+              throw new Error('Rate limit hit. Please wait a minute and try again.');
+            }
             throw new Error(cardsData.error?.message || 'Flashcard API failed');
           }
 
