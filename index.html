@@ -85,18 +85,18 @@
 
           setChatMessages(prev => [...prev, { role: 'assistant', content: "Step 2/2: Generating flashcards..." }]);
           const notesText = notesResult.notes?.map(s => `## ${s.section}\n${s.points?.map(p => `- ${p}`).join('\n')}`).join('\n\n') || '';
-          const cardsPrompt = `Create 10-40 Anki flashcards from these lecture notes. Output ONLY valid CSV with this exact format:
-Front,Back,Tags
+          const cardsPrompt = `Create 10-40 Anki flashcards from these medical lecture notes.
+
+IMPORTANT: Return ONLY a JSON array, nothing else. No markdown, no explanation, just the array:
+[{"front":"Question?","back":"Answer"}]
 
 Rules:
-- Each row: "question","answer","${lectureTag} Day2"
-- Wrap ALL fields in double quotes
-- Escape internal quotes by doubling them ("")
-- Use <b>term</b> for bold formatting
-- No markdown, no extra text, just CSV rows
-- Start directly with the first flashcard row (no header row)
+- front = question to test knowledge
+- back = concise answer
+- Use <b>term</b> for key terms in answers
+- UK English spelling
 
-NOTES:
+LECTURE NOTES:
 ${notesText}`;
 
           const cardsResponse = await fetch('https://api.anthropic.com/v1/messages', {
@@ -112,44 +112,24 @@ ${notesText}`;
             throw new Error(cardsData.error?.message || 'Flashcard API failed');
           }
 
-          const csvContent = cardsData.content?.[0]?.text || '';
-          console.log('CSV content:', csvContent);
+          const rawText = cardsData.content?.[0]?.text || '';
+          console.log('Raw flashcard text:', rawText);
 
-          // Parse CSV - handle various formats Claude might return
-          const parsedCards = [];
-          const lines = csvContent.trim().split('\n');
-
-          for (const line of lines) {
-            // Skip empty lines and header
-            if (!line.trim() || line.toLowerCase().includes('front,back')) continue;
-
-            // Try to parse as CSV with quotes
-            let fields = [];
-            let current = '';
-            let inQuotes = false;
-
-            for (let i = 0; i < line.length; i++) {
-              const char = line[i];
-              if (char === '"') {
-                if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
-                else { inQuotes = !inQuotes; }
-              } else if (char === ',' && !inQuotes) {
-                fields.push(current.trim().replace(/^"|"$/g, ''));
-                current = '';
-              } else {
-                current += char;
-              }
+          // Parse JSON array from response
+          let parsedCards = [];
+          try {
+            // Find JSON array in response (handles markdown code blocks too)
+            const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+            if (jsonMatch) {
+              const cardsArray = JSON.parse(jsonMatch[0]);
+              parsedCards = cardsArray.map(card => ({
+                front: card.front || card.q || card.question || '',
+                back: card.back || card.a || card.answer || '',
+                tags: `${lectureTag} Day2`
+              })).filter(card => card.front.length > 0);
             }
-            fields.push(current.trim().replace(/^"|"$/g, ''));
-
-            // If we got at least front and back, add the card
-            if (fields.length >= 2 && fields[0].length > 0) {
-              parsedCards.push({
-                front: fields[0],
-                back: fields[1] || '',
-                tags: fields[2] || `${lectureTag} Day2`
-              });
-            }
+          } catch (e) {
+            console.error('JSON parse error:', e);
           }
 
           console.log('Parsed cards:', parsedCards);
