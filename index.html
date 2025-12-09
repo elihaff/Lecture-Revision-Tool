@@ -154,21 +154,30 @@ ${notesText}`;
           const rawText = cardsData.content?.[0]?.text || '';
           console.log('Raw flashcard text:', rawText);
 
+          // Show first 500 chars of response for debugging
+          setChatMessages(prev => [...prev, { role: 'assistant', content: `API Response (first 500 chars):\n${rawText.substring(0, 500)}...` }]);
+
           // Parse JSON array from response
           let parsedCards = [];
+          let parseError = null;
           try {
             // Find JSON array in response (handles markdown code blocks too)
             const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+            console.log('JSON match found:', !!jsonMatch);
             if (jsonMatch) {
               const cardsArray = JSON.parse(jsonMatch[0]);
+              console.log('Parsed array length:', cardsArray.length);
               parsedCards = cardsArray.map(card => ({
                 front: card.front || card.q || card.question || '',
                 back: card.back || card.a || card.answer || '',
                 tags: `${lectureTag} Day2`
               })).filter(card => card.front.length > 0);
+            } else {
+              parseError = 'No JSON array found in response';
             }
           } catch (e) {
             console.error('JSON parse error:', e);
+            parseError = e.message;
           }
 
           console.log('Parsed cards:', parsedCards);
@@ -177,7 +186,7 @@ ${notesText}`;
           setActiveTab('cards');
 
           if (parsedCards.length === 0) {
-            setChatMessages(prev => [...prev, { role: 'assistant', content: `⚠️ Flashcard generation completed but no cards were parsed.\n\nCheck browser console for raw response.` }]);
+            setChatMessages(prev => [...prev, { role: 'assistant', content: `⚠️ No cards parsed.\n\nError: ${parseError || 'Unknown'}\n\nRaw text length: ${rawText.length}` }]);
           } else {
             setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Flashcards generated!\n• ${parsedCards.length} cards created\n\nGo to the Cards tab to review and export.` }]);
           }
