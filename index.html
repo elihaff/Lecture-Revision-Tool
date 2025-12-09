@@ -229,57 +229,85 @@ ${notesText}`;
 
       const exportWord = async () => {
         if (!notes) return;
-        const { Document, Packer, Paragraph, TextRun, HeadingLevel } = docx;
+        const { Document, Packer, Paragraph, TextRun, HeadingLevel, convertInchesToTwip } = docx;
 
         // Helper to parse **bold** text into TextRun array
         const parseText = (text) => {
           const parts = text.split(/(\*\*[^*]+\*\*)/g);
           return parts.filter(p => p).map(part => {
             if (part.startsWith('**') && part.endsWith('**')) {
-              return new TextRun({ text: part.slice(2, -2), bold: true });
+              return new TextRun({ text: part.slice(2, -2), bold: true, font: 'Calibri', size: 22 });
             }
-            return new TextRun({ text: part });
+            return new TextRun({ text: part, font: 'Calibri', size: 22 });
           });
         };
 
         const children = [];
 
-        // Title (Heading 1) - matches "Kidney Development (Concise Notes)" format
+        // Title (Heading 1) - Calibri 14pt bold, dark blue
         children.push(new Paragraph({
-          text: notes.title + ' (Concise Notes)',
-          heading: HeadingLevel.HEADING_1
+          children: [new TextRun({
+            text: notes.title + ' (Concise Notes)',
+            bold: true,
+            font: 'Calibri Light',
+            size: 28,
+            color: '365F91'
+          })],
+          spacing: { before: 480, after: 0 }
         }));
 
-        // Learning Objectives header (Heading 2)
+        // Learning Objectives header (Heading 2) - Calibri 13pt bold, blue
         children.push(new Paragraph({
-          text: 'Learning Objectives',
-          heading: HeadingLevel.HEADING_2
+          children: [new TextRun({
+            text: 'Learning Objectives',
+            bold: true,
+            font: 'Calibri Light',
+            size: 26,
+            color: '4F81BD'
+          })],
+          spacing: { before: 200, after: 0 }
         }));
 
         // Learning objectives as bullet points
         notes.learningObjectives?.forEach(obj => {
           children.push(new Paragraph({
-            children: [new TextRun({ text: '• ' + obj })]
+            children: [new TextRun({ text: '• ' + obj, font: 'Calibri', size: 22 })],
+            spacing: { after: 200 }
           }));
         });
 
         // Notes sections
         notes.notes?.forEach(section => {
-          // Section header (Heading 2)
+          // Section header (Heading 2) - Calibri 13pt bold, blue
           children.push(new Paragraph({
-            text: section.section,
-            heading: HeadingLevel.HEADING_2
+            children: [new TextRun({
+              text: section.section,
+              bold: true,
+              font: 'Calibri Light',
+              size: 26,
+              color: '4F81BD'
+            })],
+            spacing: { before: 200, after: 0 }
           }));
 
           // Section points as bullet points with bold terms
           section.points?.forEach(point => {
             children.push(new Paragraph({
-              children: [new TextRun({ text: '• ' }), ...parseText(point)]
+              children: [new TextRun({ text: '• ', font: 'Calibri', size: 22 }), ...parseText(point)],
+              spacing: { after: 200 }
             }));
           });
         });
 
         const doc = new Document({
+          styles: {
+            default: {
+              document: {
+                run: { font: 'Calibri', size: 22 },
+                paragraph: { spacing: { after: 200, line: 276 } }
+              }
+            }
+          },
           sections: [{
             properties: {},
             children
