@@ -38,7 +38,17 @@
       const [expandedCards, setExpandedCards] = useState({});
       const [copied, setCopied] = useState(false);
       const [lectureTag, setLectureTag] = useState('');
+      const [moduleAbbrev, setModuleAbbrev] = useState('');
       const [apiKey, setApiKey] = useState('');
+      const modules = [
+        { name: 'Cardiorespiratory', abbrev: 'CR2' },
+        { name: 'Metabolism', abbrev: 'MET2' },
+        { name: 'Human Development', abbrev: 'HD2' },
+        { name: 'Brain & Behaviour', abbrev: 'BB2' },
+        { name: 'Cancer', abbrev: 'CA2' },
+        { name: 'Human Sciences & Public Health', abbrev: 'PH2' },
+        { name: 'Locomotor', abbrev: 'LOC2' }
+      ];
       const [showSettings, setShowSettings] = useState(false);
       const [keyVisible, setKeyVisible] = useState(false);
       const fileInputRef = useRef(null);
@@ -85,7 +95,7 @@
           const notesResponse = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-            body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 8000, messages: [{ role: 'user', content: [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData.data } }, { type: 'text', text: notesPrompt }] }] })
+            body: JSON.stringify({ model: 'claude-3-5-sonnet-latest', max_tokens: 8000, messages: [{ role: 'user', content: [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData.data } }, { type: 'text', text: notesPrompt }] }] })
           });
 
           if (!notesResponse.ok) {
@@ -138,7 +148,7 @@ ${notesText}`;
           const cardsResponse = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-            body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 8000, messages: [{ role: 'user', content: cardsPrompt }] })
+            body: JSON.stringify({ model: 'claude-3-haiku-20240307', max_tokens: 4096, messages: [{ role: 'user', content: cardsPrompt }] })
           });
 
           const cardsData = await cardsResponse.json();
@@ -167,10 +177,14 @@ ${notesText}`;
             if (jsonMatch) {
               const cardsArray = JSON.parse(jsonMatch[0]);
               console.log('Parsed array length:', cardsArray.length);
+              // Generate tag: MODULE_LectureName format (every word capitalized, no spaces)
+              const lectureName = lectureTag.split(/[\s_\-\.]+/).map(word => word.charAt(0).toUpperCase() + word.slice(1)).join('');
+              const moduleTag = moduleAbbrev ? `${moduleAbbrev}_${lectureName}` : lectureName;
+
               parsedCards = cardsArray.map(card => ({
                 front: card.front || card.q || card.question || '',
                 back: card.back || card.a || card.answer || '',
-                tags: `${lectureTag} Day2`
+                tags: `Day2 ${moduleTag}`
               })).filter(card => card.front.length > 0);
             } else {
               parseError = 'No JSON array found in response';
@@ -261,7 +275,16 @@ ${notesText}`;
                   {processing && <div className="flex justify-start"><div className="bg-slate-700/70 rounded-2xl px-4 py-3 flex items-center gap-2"><div className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></div><span className="text-sm">{processingType === 'notes' ? 'Generating notes...' : 'Generating flashcards...'}</span></div></div>}
                 </div>
                 <div className="p-4 bg-slate-800/50 border-t border-slate-700 space-y-3">
-                  {file && <input type="text" value={lectureTag} onChange={(e) => setLectureTag(e.target.value)} placeholder="Lecture tag" className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />}
+                  {file && (
+                    <div className="space-y-2">
+                      <select value={moduleAbbrev} onChange={(e) => setModuleAbbrev(e.target.value)} className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
+                        <option value="">Select Module...</option>
+                        {modules.map(m => <option key={m.abbrev} value={m.abbrev}>{m.name} ({m.abbrev})</option>)}
+                      </select>
+                      <input type="text" value={lectureTag} onChange={(e) => setLectureTag(e.target.value)} placeholder="Lecture name (e.g. Applied Anatomy Of The Female Reproductive System)" className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
+                      {moduleAbbrev && lectureTag && <p className="text-xs text-slate-400">Tag preview: Day2 {moduleAbbrev}_{lectureTag.split(/[\s_\-\.]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('')}</p>}
+                    </div>
+                  )}
                   <div className="flex gap-2 flex-wrap">
                     <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".pdf" className="hidden" />
                     <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-4 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl"><Icon name="upload" className="w-4 h-4" /><span className="text-sm">Upload PDF</span></button>
@@ -271,8 +294,8 @@ ${notesText}`;
                     <button onClick={generateNotes} disabled={!file || processing || !apiKey} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-600 disabled:opacity-50 rounded-xl">
                       <Icon name="file-text" className="w-4 h-4" /><span className="text-sm">Generate Notes</span>
                     </button>
-                    <button onClick={generateFlashcards} disabled={!notes || processing || !apiKey} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 hover:bg-green-500 disabled:bg-slate-600 disabled:opacity-50 rounded-xl">
-                      <Icon name="layers" className="w-4 h-4" /><span className="text-sm">Generate Flashcards</span>
+                    <button onClick={() => { console.log('Flashcard button clicked, notes:', notes); generateFlashcards(); }} disabled={!notes || processing || !apiKey} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 hover:bg-green-500 disabled:bg-slate-600 disabled:opacity-50 rounded-xl">
+                      <Icon name="layers" className="w-4 h-4" /><span className="text-sm">Generate Flashcards {notes ? '✓' : ''}</span>
                     </button>
                   </div>
                   {!apiKey && <p className="text-orange-400 text-xs">⚠️ Add API key in Settings</p>}
