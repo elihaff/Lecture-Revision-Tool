@@ -229,12 +229,12 @@ ${notesText}`;
 
       const exportWord = async () => {
         if (!notes) return;
-        const { Document, Packer, Paragraph, TextRun, HeadingLevel, BorderStyle } = docx;
+        const { Document, Packer, Paragraph, TextRun, HeadingLevel } = docx;
 
-        // Helper to parse **bold** text
+        // Helper to parse **bold** text into TextRun array
         const parseText = (text) => {
           const parts = text.split(/(\*\*[^*]+\*\*)/g);
-          return parts.map(part => {
+          return parts.filter(p => p).map(part => {
             if (part.startsWith('**') && part.endsWith('**')) {
               return new TextRun({ text: part.slice(2, -2), bold: true });
             }
@@ -244,53 +244,46 @@ ${notesText}`;
 
         const children = [];
 
-        // Title
+        // Title (Heading 1) - matches "Kidney Development (Concise Notes)" format
         children.push(new Paragraph({
-          children: [new TextRun({ text: notes.title, bold: true, size: 32 })],
-          heading: HeadingLevel.HEADING_1,
-          spacing: { after: 200 }
+          text: notes.title + ' (Concise Notes)',
+          heading: HeadingLevel.HEADING_1
         }));
 
-        // Learning Objectives section
+        // Learning Objectives header (Heading 2)
         children.push(new Paragraph({
-          children: [new TextRun({ text: 'Learning Objectives', bold: true, size: 26 })],
-          heading: HeadingLevel.HEADING_2,
-          spacing: { before: 300, after: 150 }
+          text: 'Learning Objectives',
+          heading: HeadingLevel.HEADING_2
         }));
 
+        // Learning objectives as bullet points
         notes.learningObjectives?.forEach(obj => {
           children.push(new Paragraph({
-            children: [new TextRun({ text: '• ' + obj, size: 22 })],
-            spacing: { after: 80 }
+            children: [new TextRun({ text: '• ' + obj })]
           }));
         });
 
-        // Divider
-        children.push(new Paragraph({
-          children: [new TextRun({ text: '' })],
-          border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: '999999' } },
-          spacing: { before: 200, after: 200 }
-        }));
-
         // Notes sections
         notes.notes?.forEach(section => {
+          // Section header (Heading 2)
           children.push(new Paragraph({
-            children: [new TextRun({ text: section.section, bold: true, size: 26 })],
-            heading: HeadingLevel.HEADING_2,
-            spacing: { before: 300, after: 150 }
+            text: section.section,
+            heading: HeadingLevel.HEADING_2
           }));
 
+          // Section points as bullet points with bold terms
           section.points?.forEach(point => {
             children.push(new Paragraph({
-              children: [new TextRun({ text: '• ' }), ...parseText(point)],
-              spacing: { after: 100 },
-              indent: { left: 360 }
+              children: [new TextRun({ text: '• ' }), ...parseText(point)]
             }));
           });
         });
 
         const doc = new Document({
-          sections: [{ properties: {}, children }]
+          sections: [{
+            properties: {},
+            children
+          }]
         });
 
         const blob = await Packer.toBlob(doc);
