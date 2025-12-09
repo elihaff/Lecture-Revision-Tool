@@ -131,19 +131,20 @@
 
         try {
           const notesText = notes.notes?.map(s => `## ${s.section}\n${s.points?.map(p => `- ${p}`).join('\n')}`).join('\n\n') || '';
-          const cardsPrompt = `Create comprehensive Anki flashcards from these medical lecture notes.
+          const cardsPrompt = `Create 25-45 Anki flashcards from these medical lecture notes.
 
-CRITICAL: Your flashcards MUST cover ALL content in the lecture - every key concept, definition, mechanism, clinical point, and fact. Do not skip any topic. Create as many cards as needed to ensure complete coverage (typically 20-50 cards).
+Target the most important concepts, definitions, mechanisms, and clinical points. Ensure no major concepts are missed.
 
 IMPORTANT: Return ONLY a JSON array, nothing else. No markdown, no explanation, just the array:
 [{"front":"Question?","back":"Answer"}]
 
 Rules:
+- Create between 25-45 cards (not fewer, not more)
 - front = question to test knowledge
 - back = concise answer
 - Use <b>term</b> for key terms in answers
 - UK English spelling
-- Cover EVERY section and point from the notes - do not leave anything out
+- Prioritise key concepts, clinical relevance, and exam-likely material
 
 LECTURE NOTES:
 ${notesText}`;
