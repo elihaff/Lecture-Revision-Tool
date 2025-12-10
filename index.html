@@ -880,11 +880,19 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               // Handle line break from newline character
               if (lineIndex < lines.length - 1) {
                 currentX = startX;
-                // Check if next line is a sub-bullet (starts with spaces and dash)
+                // Check if current or next line is a sub-bullet (starts with spaces and dash)
                 const nextLine = lines[lineIndex + 1];
-                const isSubBullet = /^\s+-\s/.test(line) || /^\s+-\s/.test(nextLine);
-                // Use tighter spacing for sub-bullets
-                const spacingMultiplier = isSubBullet ? 1.1 : 1.5;
+                const currentIsSubBullet = /^\s+-\s/.test(line);
+                const nextIsSubBullet = /^\s+-\s/.test(nextLine);
+                // Different spacing: tight for sub-bullets, minimal when leaving sub-bullet section
+                let spacingMultiplier;
+                if (currentIsSubBullet && !nextIsSubBullet) {
+                  spacingMultiplier = 0.7; // Minimal spacing when leaving sub-bullet section
+                } else if (currentIsSubBullet || nextIsSubBullet) {
+                  spacingMultiplier = 1.1; // Tight spacing within sub-bullets
+                } else {
+                  spacingMultiplier = 1.5; // Normal spacing for main text
+                }
                 currentY += lineHeight * spacingMultiplier;
 
                 if (currentY > pageHeight - margin) {
