@@ -1008,11 +1008,15 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
             doc.setTextColor(...black);
             y = addMixedText(bulletParts, margin, y, 11, 6, contentWidth, black, isHTMLSubBullets);
-            // Use consistent spacing after any sub-bullet list (HTML)
-            y += isHTMLSubBullets ? 3 : 7;
+            // Spacing after point: less for sub-bullets, more for main bullets within section
+            // Last point gets uniform section spacing regardless of type
+            const isLastPoint = index === section.points.length - 1;
+            if (isLastPoint) {
+              y += 10; // Uniform spacing before next section
+            } else {
+              y += isHTMLSubBullets ? 3 : 7;
+            }
           });
-          // Uniform section spacing regardless of bullet type
-          y += 3;
         });
 
         // Open PDF in new tab instead of downloading
