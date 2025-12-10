@@ -534,9 +534,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           str = str.replace(/⇒/g, '=>');
           str = str.replace(/⇐/g, '<=');
 
-          // Handle superscript and subscript - convert to inline notation
-          str = str.replace(/<sup>(.*?)<\/sup>/gi, '^($1)');
-          str = str.replace(/<sub>(.*?)<\/sub>/gi, '_($1)');
+          // Handle superscript and subscript - just extract the text content (jsPDF doesn't support these)
+          str = str.replace(/<sup>(.*?)<\/sup>/gi, '$1');
+          str = str.replace(/<sub>(.*?)<\/sub>/gi, '$1');
 
           // Handle underline - add indicator
           str = str.replace(/<u>(.*?)<\/u>/gi, '$1');
@@ -896,21 +896,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
         const execCmd = commandMap[command];
         if (execCmd) {
-          // For superscript/subscript, always remove the opposite one first
-          if (execCmd === 'superscript') {
-            // If already in superscript, turn it off by toggling
-            // Otherwise, make sure subscript is off first
-            if (document.queryCommandState('subscript')) {
-              document.execCommand('subscript', false, null);
-            }
-          } else if (execCmd === 'subscript') {
-            // Make sure superscript is off first
-            if (document.queryCommandState('superscript')) {
-              document.execCommand('superscript', false, null);
+          // For superscript/subscript, turn off opposite formatting first
+          if (execCmd === 'superscript' || execCmd === 'subscript') {
+            const oppositeCmd = execCmd === 'superscript' ? 'subscript' : 'superscript';
+            const oppositeIsActive = document.queryCommandState(oppositeCmd);
+
+            // Turn off opposite formatting if it's on
+            if (oppositeIsActive) {
+              document.execCommand(oppositeCmd, false, null);
             }
           }
 
-          // Now toggle the requested formatting
+          // Always toggle the requested formatting (this handles both on and off)
           document.execCommand(execCmd, false, null);
         }
 
