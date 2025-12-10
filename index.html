@@ -1012,43 +1012,51 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               setActiveFormatting(newFormatting);
               console.log(`[FORMAT] New formatting state:`, newFormatting);
 
-              // Only call execCommand if we're turning ON (not turning OFF)
-              // When turning OFF, we need to check the DOM and manually remove tags
+              // Check if cursor is currently inside a formatting tag
+              let isInsideTag = false;
+              let formattedNode = null;
+
+              if (sel.rangeCount > 0) {
+                const range = sel.getRangeAt(0);
+                const container = range.commonAncestorContainer;
+                let node = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
+
+                while (node && node !== textareaRef.current) {
+                  if (node.tagName === sameTag) {
+                    isInsideTag = true;
+                    formattedNode = node;
+                    break;
+                  }
+                  node = node.parentElement;
+                }
+              }
+
+              console.log(`[FORMAT] Was active: ${wasActive}, Inside tag: ${isInsideTag}`);
+
               if (!wasActive) {
                 // Turning ON - use execCommand
                 console.log(`[FORMAT] Turning ON - using execCommand`);
                 document.execCommand(execCmd, false, null);
               } else {
-                // Turning OFF - need to manually remove the tag if cursor is inside one
-                console.log(`[FORMAT] Turning OFF - checking for tag to remove`);
+                // Turning OFF
+                console.log(`[FORMAT] Turning OFF`);
 
-                // Check if cursor is inside a formatting tag
-                if (sel.rangeCount > 0) {
-                  const range = sel.getRangeAt(0);
-                  const container = range.commonAncestorContainer;
+                if (isInsideTag && formattedNode) {
+                  // Cursor is inside a formatted tag - move it outside
+                  console.log(`[FORMAT] Moving cursor outside formatted tag`);
+                  const newRange = document.createRange();
+                  newRange.setStartAfter(formattedNode);
+                  newRange.collapse(true);
+                  sel.removeAllRanges();
+                  sel.addRange(newRange);
 
-                  let node = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
-                  let formattedNode = null;
-
-                  while (node && node !== textareaRef.current) {
-                    if (node.tagName === sameTag) {
-                      formattedNode = node;
-                      break;
-                    }
-                    node = node.parentElement;
-                  }
-
-                  if (formattedNode) {
-                    console.log(`[FORMAT] Found tag to remove, manually unwrapping`);
-                    // Move cursor to end of the formatted node
-                    const newRange = document.createRange();
-                    newRange.setStartAfter(formattedNode);
-                    newRange.collapse(true);
-                    sel.removeAllRanges();
-                    sel.addRange(newRange);
-                  } else {
-                    console.log(`[FORMAT] No tag found at cursor position`);
-                  }
+                  // Now call execCommand to turn off formatting for future typing
+                  // Since we're outside the tag, this won't create nested tags
+                  document.execCommand(execCmd, false, null);
+                } else {
+                  // Not inside a tag, just toggle off with execCommand
+                  console.log(`[FORMAT] Using execCommand to toggle OFF`);
+                  document.execCommand(execCmd, false, null);
                 }
               }
             } else {
