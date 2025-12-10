@@ -977,15 +977,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             const parts = parseTextForPDF(point);
             const bulletParts = [{ text: '•  ', bold: false }, ...parts];
 
-            // Check if this point contains nested content (sub-bullets, indented lines, or multi-line text)
-            // If a point has multiple lines (contains newlines), treat it as nested content
-            const hasNestedContent = point.includes('<ul>') || point.includes('</ul>') ||
-                                    parts.some(p => p.text && (p.text.match(/\n\s{3,}/) || p.text.includes('\n')));
-
             doc.setTextColor(...black);
             y = addMixedText(bulletParts, margin, y, 11, 6, contentWidth, black);
-            // Use less spacing after nested content (reduced spacing for better flow)
-            y += hasNestedContent ? 3 : 7;
+            // Use consistent moderate spacing after all points
+            y += 5;
           });
           y += 3;
         });
