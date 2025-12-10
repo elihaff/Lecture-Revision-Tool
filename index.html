@@ -884,7 +884,6 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
       // Formatting functions for contentEditable
       const insertFormatting = (command) => {
         if (!textareaRef.current) return;
-        textareaRef.current.focus();
 
         const commandMap = {
           'bold': 'bold',
@@ -896,6 +895,23 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
         const execCmd = commandMap[command];
         if (execCmd) {
+          // Store current selection/range before any operations
+          const selection = window.getSelection();
+          const hadSelection = selection.rangeCount > 0;
+          let savedRange;
+          if (hadSelection) {
+            savedRange = selection.getRangeAt(0).cloneRange();
+          }
+
+          // Focus the editor
+          textareaRef.current.focus();
+
+          // Restore selection if we had one
+          if (hadSelection && savedRange) {
+            selection.removeAllRanges();
+            selection.addRange(savedRange);
+          }
+
           // For superscript/subscript, turn off opposite formatting first
           if (execCmd === 'superscript' || execCmd === 'subscript') {
             const oppositeCmd = execCmd === 'superscript' ? 'subscript' : 'superscript';
@@ -909,13 +925,11 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
           // Always toggle the requested formatting (this handles both on and off)
           document.execCommand(execCmd, false, null);
-        }
 
-        // Update state
-        setTimeout(() => {
-          const html = textareaRef.current.innerHTML;
-          setEditingNote(p => ({ ...p, value: html }));
-        }, 10);
+          // Manually trigger input event to update React state (onInput handler will catch it)
+          const inputEvent = new Event('input', { bubbles: true });
+          textareaRef.current.dispatchEvent(inputEvent);
+        }
       };
 
       const insertSymbol = (symbol) => {
