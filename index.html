@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Medical Lecture Study Assistant | Notes & Anki Cards</title>
+  <title>Medical Lecture Study Assistant | Notes & Anki Cards [v2.1]</title>
   <meta name="description" content="Generate concise study notes and Anki flashcards from your medical lecture slides">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
   <script src="https://cdn.tailwindcss.com"></script>
@@ -13,6 +13,7 @@
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
   <script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <style>
     body { margin: 0; height: 100vh; }
     #root { height: 100%; }
@@ -21,11 +22,44 @@
 <body>
   <div id="root"></div>
   <script type="text/babel">
-    const { useState, useRef, useEffect } = React;
+    const { useState, useRef, useEffect, Component } = React;
+
+    // Error boundary to catch rendering crashes
+    class ErrorBoundary extends Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { hasError: true, error };
+      }
+      componentDidCatch(error, info) {
+        console.error('React error:', error, info);
+      }
+      render() {
+        if (this.state.hasError) {
+          return (
+            <div className="p-4 bg-red-900/30 border border-red-700 rounded-xl m-4">
+              <h3 className="text-red-400 font-semibold mb-2">Something went wrong</h3>
+              <p className="text-sm text-slate-300 mb-3">{this.state.error?.message || 'Unknown error'}</p>
+              <button onClick={() => this.setState({ hasError: false, error: null })} className="px-3 py-1.5 bg-red-600 hover:bg-red-500 rounded-lg text-sm">Try Again</button>
+            </div>
+          );
+        }
+        return this.props.children;
+      }
+    }
+
     const Icon = ({ name, className }) => {
-      const ref = useRef(null);
-      useEffect(() => { if (ref.current) lucide.createIcons({ nodes: [ref.current] }); }, []);
-      return <i ref={ref} data-lucide={name} className={className}></i>;
+      const containerRef = useRef(null);
+      useEffect(() => {
+        if (containerRef.current) {
+          // Create a fresh icon element each time
+          containerRef.current.innerHTML = `<i data-lucide="${name}" class="${className || ''}"></i>`;
+          lucide.createIcons({ nodes: [containerRef.current.firstChild] });
+        }
+      }, [name, className]);
+      return <span ref={containerRef} style={{ display: 'inline-flex' }}></span>;
     };
 
     function App() {
@@ -55,7 +89,13 @@
       const [keyVisible, setKeyVisible] = useState(false);
       const [modifyRequest, setModifyRequest] = useState('');
       const [modifying, setModifying] = useState(false);
+      const [userLearningObjectives, setUserLearningObjectives] = useState('');
+      const [editingCard, setEditingCard] = useState(null); // {index, front, back}
+      const [showAddCard, setShowAddCard] = useState(false);
+      const [newCard, setNewCard] = useState({ front: '', back: '' });
+      const [editingNote, setEditingNote] = useState(null); // {sectionIndex, pointIndex, value} or {type: 'section', sectionIndex, value} or {type: 'lo', index, value}
       const fileInputRef = useRef(null);
+      const textareaRef = useRef(null);
 
       useEffect(() => { const saved = localStorage.getItem('anthropic_api_key'); if (saved) setApiKey(saved); }, []);
 
@@ -94,7 +134,10 @@
         setChatMessages(prev => [...prev, { role: 'assistant', content: "Generating notes from PDF..." }]);
 
         try {
-          const notesPrompt = `You are a medical education assistant. Return ONLY valid JSON:\n{"title": "Lecture Title", "learningObjectives": ["LO1"], "notes": [{"section": "1. Section", "points": ["**Term**: explanation"]}]}\n\nUse **asterisks** for key terms. Be concise. UK English.`;
+          const loSection = userLearningObjectives.trim()
+            ? `\n\nIMPORTANT: The user has provided these learning objectives for this lecture. Use these EXACTLY as the learningObjectives in your response:\n${userLearningObjectives}\n\nStructure your notes to address these learning objectives.`
+            : '';
+          const notesPrompt = `You are a medical education assistant. Return ONLY valid JSON:\n{"title": "Lecture Title", "learningObjectives": ["LO1"], "notes": [{"section": "1. Section", "points": ["**Term**: explanation"]}]}\n\nUse **asterisks** for key terms. Be concise. UK English.${loSection}`;
 
           const notesResponse = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
@@ -144,12 +187,16 @@ IMPORTANT: Return ONLY a JSON array, nothing else. No markdown, no explanation, 
 
 Rules:
 - Create between 25-45 cards (not fewer, not more)
-- ATOMIC CARDS: Each card should test ONE small piece of information. If a concept has multiple parts, split it into separate cards. The answer should be short and easy to memorise.
+- ATOMIC CARDS: Each card should test ONE small piece of information. If a concept has multiple parts, split it into separate cards.
 - front = question to test knowledge
-- back = concise answer (ideally 1-2 sentences max)
+- back = VERY CONCISE answer (maximum 1-2 short sentences OR a brief list)
+- BREVITY IS KEY: Remove all unnecessary words. Use fragments, not full sentences where possible.
+- NEVER REPEAT THE QUESTION in the answer. Go straight to the answer. BAD: "Complications of chlamydia include: PID, infertility" GOOD: "PID<br>Infertility<br>Ectopic pregnancy"
+- FOR LISTS: Put each item on its own line using <br> tags. Example: "PID<br>Infertility<br>Ectopic pregnancy"
 - Use <b>term</b> for key terms in answers
 - UK English spelling
 - Prioritise key concepts, clinical relevance, and exam-likely material
+- Avoid wordy explanations - just the essential facts
 
 LECTURE NOTES:
 ${notesText}`;
@@ -224,14 +271,17 @@ ${notesText}`;
       const modifyNotes = async () => {
         if (!notes || !modifyRequest.trim() || !apiKey) return;
 
+        const requestText = modifyRequest;
         setModifying(true);
+        setModifyRequest('');
+
         try {
           const currentNotesJson = JSON.stringify(notes, null, 2);
           const modifyPrompt = `You are a medical education assistant. Here are the current lecture notes in JSON format:
 
 ${currentNotesJson}
 
-USER REQUEST: ${modifyRequest}
+USER REQUEST: ${requestText}
 
 Apply the user's requested changes to the notes. Return ONLY valid JSON in the exact same format:
 {"title": "...", "learningObjectives": [...], "notes": [{"section": "...", "points": [...]}]}
@@ -245,22 +295,83 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           });
 
           if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.error?.message || 'API failed');
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error?.message || 'API request failed');
           }
 
           const data = await response.json();
           const rawText = data.content?.[0]?.text || '';
-          const modifiedNotes = JSON.parse(rawText.match(/\{[\s\S]*\}/)?.[0] || '{}');
+          console.log('Modify notes raw response:', rawText.substring(0, 500));
 
-          if (modifiedNotes.title && modifiedNotes.notes) {
-            setNotes(modifiedNotes);
-            setModifyRequest('');
-            setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Notes modified!\nApplied: "${modifyRequest}"` }]);
-          } else {
-            throw new Error('Invalid response format');
+          // Try multiple parsing strategies
+          let modifiedNotes = null;
+          let parseError = null;
+
+          // Strategy 1: Direct parse of the entire response (if it's pure JSON)
+          try {
+            modifiedNotes = JSON.parse(rawText);
+            console.log('Strategy 1 worked: direct parse');
+          } catch (e) {
+            parseError = e.message;
           }
+
+          // Strategy 2: Find JSON object with greedy regex
+          if (!modifiedNotes) {
+            const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              try {
+                modifiedNotes = JSON.parse(jsonMatch[0]);
+                console.log('Strategy 2 worked: regex match');
+              } catch (e) {
+                parseError = e.message;
+              }
+            }
+          }
+
+          // Strategy 3: Look for ```json code block
+          if (!modifiedNotes) {
+            const codeBlockMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/);
+            if (codeBlockMatch) {
+              try {
+                modifiedNotes = JSON.parse(codeBlockMatch[1].trim());
+                console.log('Strategy 3 worked: code block');
+              } catch (e) {
+                parseError = e.message;
+              }
+            }
+          }
+
+          // Strategy 4: Find first { and last } and try to parse between them
+          if (!modifiedNotes) {
+            const firstBrace = rawText.indexOf('{');
+            const lastBrace = rawText.lastIndexOf('}');
+            if (firstBrace !== -1 && lastBrace > firstBrace) {
+              try {
+                modifiedNotes = JSON.parse(rawText.substring(firstBrace, lastBrace + 1));
+                console.log('Strategy 4 worked: first/last brace');
+              } catch (e) {
+                parseError = e.message;
+              }
+            }
+          }
+
+          if (!modifiedNotes) {
+            console.error('All parsing strategies failed. Raw response:', rawText);
+            throw new Error(`Could not parse response. Last error: ${parseError}`);
+          }
+
+          // Validate the parsed object has required fields
+          if (!modifiedNotes.title) {
+            throw new Error('Response missing "title" field');
+          }
+          if (!Array.isArray(modifiedNotes.notes)) {
+            throw new Error('Response missing "notes" array');
+          }
+
+          setNotes(modifiedNotes);
+          setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Notes modified!\nApplied: "${requestText}"` }]);
         } catch (error) {
+          console.error('Modify notes error:', error);
           setChatMessages(prev => [...prev, { role: 'assistant', content: `❌ Modification failed: ${error.message}` }]);
         } finally {
           setModifying(false);
@@ -275,95 +386,296 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         setCopied(true); setTimeout(() => setCopied(false), 2000);
       };
 
-      const exportWord = async () => {
+      const exportPDF = () => {
         if (!notes) return;
-        const { Document, Packer, Paragraph, TextRun, HeadingLevel, convertInchesToTwip } = docx;
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({
+          orientation: 'portrait',
+          unit: 'mm',
+          format: 'a4'
+        });
 
-        // Helper to parse **bold** text into TextRun array
-        const parseText = (text) => {
-          const parts = text.split(/(\*\*[^*]+\*\*)/g);
-          return parts.filter(p => p).map(part => {
-            if (part.startsWith('**') && part.endsWith('**')) {
-              return new TextRun({ text: part.slice(2, -2), bold: true, font: 'Calibri', size: 22 });
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+        const margin = 20;
+        const contentWidth = pageWidth - (margin * 2);
+        let y = margin;
+
+        // Colors matching the example PDF
+        const titleBlue = [54, 95, 145]; // #365F91
+        const headerBlue = [79, 129, 189]; // #4F81BD
+        const black = [0, 0, 0];
+
+        // Helper to parse text and return formatted segments
+        const parseTextForPDF = (text) => {
+          if (!text) return [{ text: '', bold: false }];
+          let str = String(text);
+
+          // Convert <br> tags to newlines
+          str = str.replace(/<br\s*\/?>/gi, '\n');
+
+          // Replace special characters that don't render well in jsPDF
+          str = str.replace(/→/g, '->');
+          str = str.replace(/←/g, '<-');
+          str = str.replace(/↑/g, '^');
+          str = str.replace(/↓/g, 'v');
+          str = str.replace(/⇒/g, '=>');
+          str = str.replace(/⇐/g, '<=');
+
+          // Handle superscript and subscript - convert to inline notation
+          str = str.replace(/<sup>(.*?)<\/sup>/gi, '^($1)');
+          str = str.replace(/<sub>(.*?)<\/sub>/gi, '_($1)');
+
+          // Handle underline - add indicator
+          str = str.replace(/<u>(.*?)<\/u>/gi, '$1');
+
+          // Handle italic
+          str = str.replace(/<i>(.*?)<\/i>/gi, '{{ITALIC}}$1{{/ITALIC}}');
+          str = str.replace(/<em>(.*?)<\/em>/gi, '{{ITALIC}}$1{{/ITALIC}}');
+
+          // Normalize bold markers
+          str = str.replace(/<b>/gi, '**').replace(/<\/b>/gi, '**');
+          str = str.replace(/<strong>/gi, '**').replace(/<\/strong>/gi, '**');
+          str = str.replace(/(?<![*\w])\*([^*]+)\*(?![*\w])/g, '**$1**');
+
+          // Parse formatting tags
+          const parts = [];
+          let currentPos = 0;
+          const regex = /(\*\*|\{\{ITALIC\}\}|\{\{\/ITALIC\}\})/g;
+          let match;
+          let boldActive = false;
+          let italicActive = false;
+          let buffer = '';
+
+          const addPart = () => {
+            if (buffer) {
+              parts.push({ text: buffer, bold: boldActive, italic: italicActive });
+              buffer = '';
             }
-            return new TextRun({ text: part, font: 'Calibri', size: 22 });
-          });
+          };
+
+          while ((match = regex.exec(str)) !== null) {
+            // Add text before the match
+            if (match.index > currentPos) {
+              buffer += str.substring(currentPos, match.index);
+            }
+
+            // Handle the tag
+            if (match[0] === '**') {
+              addPart();
+              boldActive = !boldActive;
+            } else if (match[0] === '{{ITALIC}}') {
+              addPart();
+              italicActive = true;
+            } else if (match[0] === '{{/ITALIC}}') {
+              addPart();
+              italicActive = false;
+            }
+
+            currentPos = match.index + match[0].length;
+          }
+
+          // Add remaining text
+          if (currentPos < str.length) {
+            buffer += str.substring(currentPos);
+          }
+          addPart();
+
+          return parts.length > 0 ? parts : [{ text: str, bold: false, italic: false }];
         };
 
-        const children = [];
+        // Helper to add text with mixed bold - returns new Y position
+        const addMixedText = (parts, startX, startY, fontSize, lineHeight, maxWidth, color = black) => {
+          doc.setFontSize(fontSize);
+          doc.setTextColor(...color);
 
-        // Title (Heading 1) - Calibri 14pt bold, dark blue
-        children.push(new Paragraph({
-          children: [new TextRun({
-            text: notes.title + ' (Concise Notes)',
-            bold: true,
-            font: 'Calibri Light',
-            size: 28,
-            color: '365F91'
-          })],
-          spacing: { before: 480, after: 0 }
-        }));
+          let currentX = startX;
+          let currentY = startY;
 
-        // Learning Objectives header (Heading 2) - Calibri 13pt bold, blue
-        children.push(new Paragraph({
-          children: [new TextRun({
-            text: 'Learning Objectives',
-            bold: true,
-            font: 'Calibri Light',
-            size: 26,
-            color: '4F81BD'
-          })],
-          spacing: { before: 200, after: 0 }
-        }));
+          parts.forEach((part, partIndex) => {
+            if (!part.text || part.text.length === 0) return;
 
-        // Learning objectives as bullet points
+            // Set font style based on formatting
+            if (part.bold && part.italic) {
+              doc.setFont('helvetica', 'bolditalic');
+            } else if (part.bold) {
+              doc.setFont('helvetica', 'bold');
+            } else if (part.italic) {
+              doc.setFont('helvetica', 'italic');
+            } else {
+              doc.setFont('helvetica', 'normal');
+            }
+
+            // Split by newlines first to handle line breaks
+            const lines = part.text.split('\n');
+
+            lines.forEach((line, lineIndex) => {
+              // Split by spaces but preserve them
+              const words = line.split(' ').filter(w => w.length > 0);
+
+              if (words.length === 0 && lineIndex < lines.length - 1) {
+                // Empty line - just add a line break
+                currentX = startX;
+                currentY += lineHeight;
+                if (currentY > pageHeight - margin) {
+                  doc.addPage();
+                  currentY = margin;
+                }
+                return;
+              }
+
+              words.forEach((word, wordIndex) => {
+                // Determine if we need a space after this word
+                const isLastWordInLine = wordIndex === words.length - 1;
+                const isLastLine = lineIndex === lines.length - 1;
+                const isLastPart = partIndex === parts.length - 1;
+                const needsSpaceAfter = !isLastWordInLine || (!isLastLine || !isLastPart);
+
+                const wordText = needsSpaceAfter ? word + ' ' : word;
+                const wordWidth = doc.getTextWidth(wordText);
+
+                // Check if we need to wrap to next line
+                if (currentX + wordWidth > startX + maxWidth && currentX > startX) {
+                  currentX = startX;
+                  currentY += lineHeight;
+
+                  // Check for page break
+                  if (currentY > pageHeight - margin) {
+                    doc.addPage();
+                    currentY = margin;
+                  }
+                }
+
+                // If single word is too long for the line, break it
+                if (wordWidth > maxWidth) {
+                  // Try without trailing space first
+                  const bareWord = word;
+                  const bareWidth = doc.getTextWidth(bareWord);
+
+                  if (bareWidth > maxWidth) {
+                    // Word is still too long, print what we can
+                    doc.text(bareWord, currentX, currentY);
+                  } else {
+                    doc.text(wordText, currentX, currentY);
+                  }
+
+                  currentX = startX;
+                  currentY += lineHeight;
+                  if (currentY > pageHeight - margin) {
+                    doc.addPage();
+                    currentY = margin;
+                  }
+                } else {
+                  // Normal case: print word and advance cursor
+                  doc.text(wordText, currentX, currentY);
+                  currentX += wordWidth;
+                }
+              });
+
+              // Handle line break from newline character
+              if (lineIndex < lines.length - 1) {
+                currentX = startX;
+                currentY += lineHeight;
+                if (currentY > pageHeight - margin) {
+                  doc.addPage();
+                  currentY = margin;
+                }
+              }
+            });
+          });
+
+          // Return Y position - if text was written on this line, return current Y
+          // The caller will add spacing to move to next element
+          return currentY;
+        };
+
+        // Helper to add wrapped text (simple, no bold parsing)
+        const addWrappedText = (text, x, startY, maxWidth, lineHeight) => {
+          const lines = doc.splitTextToSize(text, maxWidth);
+          let currentY = startY;
+          lines.forEach(line => {
+            if (currentY > pageHeight - margin) {
+              doc.addPage();
+              currentY = margin;
+            }
+            doc.text(line, x, currentY);
+            currentY += lineHeight;
+          });
+          return currentY;
+        };
+
+        // Title - larger blue text
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(16);
+        doc.setTextColor(...titleBlue);
+        const title = (notes.title || 'Lecture Notes') + ' (Concise Notes)';
+        y = addWrappedText(title, margin, y, contentWidth, 7);
+        y += 8;
+
+        // Learning Objectives Header
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(13);
+        doc.setTextColor(...headerBlue);
+        doc.text('Learning Objectives', margin, y);
+        y += 6;
+
+        // Learning Objectives bullets
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(11);
+        doc.setTextColor(...black);
         notes.learningObjectives?.forEach(obj => {
-          children.push(new Paragraph({
-            children: [new TextRun({ text: '• ' + obj, font: 'Calibri', size: 22 })],
-            spacing: { after: 200 }
-          }));
+          if (y > pageHeight - margin) {
+            doc.addPage();
+            y = margin;
+          }
+          const bulletText = '•  ' + String(obj);
+          y = addWrappedText(bulletText, margin, y, contentWidth, 5);
+          y += 2;
         });
+        y += 6;
 
         // Notes sections
         notes.notes?.forEach(section => {
-          // Section header (Heading 2) - Calibri 13pt bold, blue
-          children.push(new Paragraph({
-            children: [new TextRun({
-              text: section.section,
-              bold: true,
-              font: 'Calibri Light',
-              size: 26,
-              color: '4F81BD'
-            })],
-            spacing: { before: 200, after: 0 }
-          }));
+          // Check for page break before section header
+          if (y > pageHeight - 30) {
+            doc.addPage();
+            y = margin;
+          }
 
-          // Section points as bullet points with bold terms
-          section.points?.forEach(point => {
-            children.push(new Paragraph({
-              children: [new TextRun({ text: '• ', font: 'Calibri', size: 22 }), ...parseText(point)],
-              spacing: { after: 200 }
-            }));
+          // Section header - blue bold
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(13);
+          doc.setTextColor(...headerBlue);
+          const sectionLines = doc.splitTextToSize(section.section || 'Section', contentWidth);
+          sectionLines.forEach(line => {
+            doc.text(line, margin, y);
+            y += 6;
           });
-        });
+          y += 2;
 
-        const doc = new Document({
-          styles: {
-            default: {
-              document: {
-                run: { font: 'Calibri', size: 22 },
-                paragraph: { spacing: { after: 200, line: 276 } }
-              }
+          // Section points
+          doc.setFontSize(11);
+          section.points?.forEach(point => {
+            if (y > pageHeight - margin) {
+              doc.addPage();
+              y = margin;
             }
-          },
-          sections: [{
-            properties: {},
-            children
-          }]
+
+            // Parse text for bold segments
+            const parts = parseTextForPDF(point);
+            const bulletParts = [{ text: '•  ', bold: false }, ...parts];
+
+            doc.setTextColor(...black);
+            y = addMixedText(bulletParts, margin, y, 11, 6, contentWidth, black);
+            y += 8;
+          });
+          y += 4;
         });
 
-        const blob = await Packer.toBlob(doc);
-        saveAs(blob, `${lectureTag || notes.title || 'lecture'}_notes.docx`);
+        // Open PDF in new tab instead of downloading
+        const pdfBlob = doc.output('blob');
+        const pdfUrl = URL.createObjectURL(pdfBlob);
+        window.open(pdfUrl, '_blank');
       };
 
       const exportCSV = () => {
@@ -371,10 +683,280 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'})); a.download = `${lectureTag}_anki.csv`; a.click();
       };
 
+      // Card editing functions
+      const startEditCard = (index) => {
+        setEditingCard({ index, front: cards[index].front, back: cards[index].back });
+        setExpandedCards(p => ({ ...p, [index]: true }));
+      };
+
+      const saveEditCard = () => {
+        if (!editingCard) return;
+        const updated = [...cards];
+        updated[editingCard.index] = { ...updated[editingCard.index], front: editingCard.front, back: editingCard.back };
+        setCards(updated);
+        setEditingCard(null);
+      };
+
+      const deleteCard = (index) => {
+        setCards(cards.filter((_, i) => i !== index));
+        setExpandedCards({});
+      };
+
+      const addCard = () => {
+        if (!newCard.front.trim() || !newCard.back.trim()) return;
+        const lectureName = lectureTag.split(/[\s_\-\.]+/).map(word => word.charAt(0).toUpperCase() + word.slice(1)).join('');
+        const moduleTag = moduleAbbrev ? `${moduleAbbrev}_${lectureName}` : lectureName;
+        setCards([...cards, { front: newCard.front, back: newCard.back, tags: `Day2 ${moduleTag}` }]);
+        setNewCard({ front: '', back: '' });
+        setShowAddCard(false);
+      };
+
+      // Note editing functions
+      const startEditPoint = (sectionIndex, pointIndex) => {
+        // Convert <br> tags back to newlines for editing
+        const value = String(notes.notes[sectionIndex].points[pointIndex]).replace(/<br\s*\/?>/gi, '\n');
+        setEditingNote({ type: 'point', sectionIndex, pointIndex, value });
+      };
+
+      const startEditSection = (sectionIndex) => {
+        // Convert <br> tags back to newlines for editing
+        const value = String(notes.notes[sectionIndex].section).replace(/<br\s*\/?>/gi, '\n');
+        setEditingNote({ type: 'section', sectionIndex, value });
+      };
+
+      const startEditLO = (index) => {
+        // Convert <br> tags back to newlines for editing
+        const value = String(notes.learningObjectives[index]).replace(/<br\s*\/?>/gi, '\n');
+        setEditingNote({ type: 'lo', index, value });
+      };
+
+      const saveNoteEdit = () => {
+        if (!editingNote || !notes) return;
+        const updated = JSON.parse(JSON.stringify(notes)); // deep clone
+
+        // Convert newlines to <br> tags for proper rendering
+        const processedValue = editingNote.value.replace(/\n/g, '<br>');
+
+        if (editingNote.type === 'point') {
+          updated.notes[editingNote.sectionIndex].points[editingNote.pointIndex] = processedValue;
+        } else if (editingNote.type === 'section') {
+          updated.notes[editingNote.sectionIndex].section = processedValue;
+        } else if (editingNote.type === 'lo') {
+          updated.learningObjectives[editingNote.index] = processedValue;
+        }
+
+        setNotes(updated);
+        setEditingNote(null);
+      };
+
+      const deletePoint = (sectionIndex, pointIndex) => {
+        const updated = JSON.parse(JSON.stringify(notes));
+        updated.notes[sectionIndex].points.splice(pointIndex, 1);
+        setNotes(updated);
+      };
+
+      const addPoint = (sectionIndex) => {
+        const updated = JSON.parse(JSON.stringify(notes));
+        updated.notes[sectionIndex].points.push('New point - click to edit');
+        setNotes(updated);
+        // Auto-start editing the new point
+        setEditingNote({ type: 'point', sectionIndex, pointIndex: updated.notes[sectionIndex].points.length - 1, value: '' });
+      };
+
+      // Formatting functions
+      const insertFormatting = (before, after = '') => {
+        if (!textareaRef.current || !editingNote) return;
+        const textarea = textareaRef.current;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const selectedText = editingNote.value.substring(start, end);
+        const beforeText = editingNote.value.substring(0, start);
+        const afterText = editingNote.value.substring(end);
+
+        const newValue = beforeText + before + selectedText + after + afterText;
+        setEditingNote(p => ({ ...p, value: newValue }));
+
+        // Reset cursor position after formatting
+        setTimeout(() => {
+          textarea.focus();
+          textarea.setSelectionRange(start + before.length, end + before.length);
+        }, 0);
+      };
+
+      const insertSymbol = (symbol) => {
+        if (!textareaRef.current || !editingNote) return;
+        const textarea = textareaRef.current;
+        const start = textarea.selectionStart;
+        const beforeText = editingNote.value.substring(0, start);
+        const afterText = editingNote.value.substring(start);
+
+        const newValue = beforeText + symbol + afterText;
+        setEditingNote(p => ({ ...p, value: newValue }));
+
+        setTimeout(() => {
+          textarea.focus();
+          textarea.setSelectionRange(start + symbol.length, start + symbol.length);
+        }, 0);
+      };
+
+      const insertBullet = () => {
+        if (!textareaRef.current || !editingNote) return;
+        const textarea = textareaRef.current;
+        const start = textarea.selectionStart;
+        const beforeText = editingNote.value.substring(0, start);
+        const afterText = editingNote.value.substring(start);
+
+        // Check if we're at the start of a line
+        const lastNewline = beforeText.lastIndexOf('\n');
+        const currentLineStart = lastNewline + 1;
+        const textSinceLineStart = beforeText.substring(currentLineStart);
+
+        let newValue;
+        if (textSinceLineStart.trim() === '') {
+          // At start of line or line is empty - just add bullet
+          newValue = beforeText + '• ' + afterText;
+        } else {
+          // In middle of text - add newline then bullet
+          newValue = beforeText + '\n• ' + afterText;
+        }
+
+        setEditingNote(p => ({ ...p, value: newValue }));
+
+        setTimeout(() => {
+          textarea.focus();
+          const offset = textSinceLineStart.trim() === '' ? 2 : 3;
+          textarea.setSelectionRange(start + offset, start + offset);
+        }, 0);
+      };
+
+      // Essential symbols for medical/scientific notation (shortlist for one-click access)
+      const essentialSymbols = [
+        { symbol: 'α', title: 'alpha' },
+        { symbol: 'β', title: 'beta' },
+        { symbol: 'Δ', title: 'Delta' },
+        { symbol: 'μ', title: 'mu' },
+        { symbol: '→', title: 'right arrow' },
+        { symbol: '←', title: 'left arrow' },
+        { symbol: '↑', title: 'up arrow' },
+        { symbol: '↓', title: 'down arrow' },
+        { symbol: '>', title: 'greater than' },
+        { symbol: '<', title: 'less than' },
+        { symbol: '≥', title: 'greater than or equal' },
+        { symbol: '≤', title: 'less than or equal' },
+        { symbol: '±', title: 'plus or minus' },
+        { symbol: '≈', title: 'approximately equal' },
+        { symbol: '°', title: 'degree' }
+      ];
+
       const renderText = (text) => {
-        return text.replace(/<b>/g,'**').replace(/<\/b>/g,'**').split(/(\*\*[^*]+\*\*)/g).map((p,i) =>
-          p.startsWith('**') ? <strong key={i} className="text-indigo-300">{p.slice(2,-2)}</strong> : p
-        );
+        if (text === null || text === undefined) return '';
+        let str = String(text);
+
+        // Split by <br> tags first for line breaks
+        const lines = str.split(/<br\s*\/?>/gi);
+
+        return lines.map((line, lineIdx) => {
+          // Parse HTML-like tags for formatting
+          const parseFormatting = (text) => {
+            const parts = [];
+            let currentPos = 0;
+            const regex = /(<\/?(?:b|i|u|strong|em|sup|sub)>)/gi;
+            let match;
+            let stack = [];
+            let currentText = '';
+
+            const addPart = () => {
+              if (currentText) {
+                let content = currentText;
+                // Handle bold markers
+                content = content.replace(/\*\*([^*]+)\*\*/g, (_, text) => {
+                  return text;
+                });
+
+                const styles = {};
+                if (stack.includes('b') || stack.includes('strong')) styles.bold = true;
+                if (stack.includes('i') || stack.includes('em')) styles.italic = true;
+                if (stack.includes('u')) styles.underline = true;
+                if (stack.includes('sup')) styles.superscript = true;
+                if (stack.includes('sub')) styles.subscript = true;
+
+                parts.push({ text: content, ...styles });
+                currentText = '';
+              }
+            };
+
+            const tokens = line.split(/(<\/?(?:b|i|u|strong|em|sup|sub|\*\*)>|\*\*)/gi);
+            tokens.forEach(token => {
+              if (token.match(/^<(b|strong)>$/i)) {
+                addPart();
+                stack.push(token.match(/^<(b|strong)>$/i)[1].toLowerCase());
+              } else if (token.match(/^<\/(b|strong)>$/i)) {
+                addPart();
+                const tag = token.match(/^<\/(b|strong)>$/i)[1].toLowerCase();
+                stack = stack.filter(t => t !== tag);
+              } else if (token.match(/^<(i|em)>$/i)) {
+                addPart();
+                stack.push(token.match(/^<(i|em)>$/i)[1].toLowerCase());
+              } else if (token.match(/^<\/(i|em)>$/i)) {
+                addPart();
+                const tag = token.match(/^<\/(i|em)>$/i)[1].toLowerCase();
+                stack = stack.filter(t => t !== tag);
+              } else if (token.match(/^<u>$/i)) {
+                addPart();
+                stack.push('u');
+              } else if (token.match(/^<\/u>$/i)) {
+                addPart();
+                stack = stack.filter(t => t !== 'u');
+              } else if (token.match(/^<sup>$/i)) {
+                addPart();
+                stack.push('sup');
+              } else if (token.match(/^<\/sup>$/i)) {
+                addPart();
+                stack = stack.filter(t => t !== 'sup');
+              } else if (token.match(/^<sub>$/i)) {
+                addPart();
+                stack.push('sub');
+              } else if (token.match(/^<\/sub>$/i)) {
+                addPart();
+                stack = stack.filter(t => t !== 'sub');
+              } else if (token === '**') {
+                addPart();
+                if (stack.includes('**')) {
+                  stack = stack.filter(t => t !== '**');
+                } else {
+                  stack.push('**');
+                }
+              } else if (token) {
+                currentText += token;
+              }
+            });
+            addPart();
+
+            return parts.map((part, i) => {
+              if (!part.text) return null;
+              let className = 'text-slate-300';
+              if (part.bold) className += ' text-indigo-300 font-semibold';
+              if (part.italic) className += ' italic';
+              if (part.underline) className += ' underline';
+
+              if (part.superscript) {
+                return <sup key={i} className={className}>{part.text}</sup>;
+              } else if (part.subscript) {
+                return <sub key={i} className={className}>{part.text}</sub>;
+              } else {
+                return <span key={i} className={className}>{part.text}</span>;
+              }
+            });
+          };
+
+          const renderedLine = parseFormatting(line);
+
+          // Return line with line break after (except for last line)
+          if (lineIdx < lines.length - 1) {
+            return <span key={lineIdx}>{renderedLine}<br /></span>;
+          }
+          return <span key={lineIdx}>{renderedLine}</span>;
+        });
       };
 
       return (
@@ -383,7 +965,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-indigo-600 rounded-lg"><Icon name="brain" className="w-5 h-5" /></div>
-                <div><h1 className="font-semibold">Medical Lecture Study Assistant</h1><p className="text-xs text-slate-400">Notes + Anki cards from PDF slides</p></div>
+                <div><h1 className="font-semibold">Medical Lecture Study Assistant <span className="text-xs text-green-400 font-bold bg-green-900 px-2 py-1 rounded">v2.1 UPDATED</span></h1><p className="text-xs text-slate-400">Notes + Anki cards from PDF slides</p></div>
               </div>
               <button onClick={() => setShowSettings(!showSettings)} className={`p-2 rounded-lg ${apiKey ? 'bg-green-600/20 text-green-400' : 'bg-orange-600/20 text-orange-400'}`}><Icon name="settings" className="w-5 h-5" /></button>
             </div>
@@ -429,6 +1011,14 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                       </select>
                       <input type="text" value={lectureTag} onChange={(e) => setLectureTag(e.target.value)} placeholder="Lecture name (e.g. Applied Anatomy Of The Female Reproductive System)" className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
                       {moduleAbbrev && lectureTag && <p className="text-xs text-slate-400">Tag preview: Day2 {moduleAbbrev}_{lectureTag.split(/[\s_\-\.]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('')}</p>}
+                      <textarea
+                        value={userLearningObjectives}
+                        onChange={(e) => setUserLearningObjectives(e.target.value)}
+                        placeholder="Paste learning objectives here (optional)&#10;e.g.&#10;1. Describe the anatomy of...&#10;2. Explain the mechanism of..."
+                        className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 min-h-[80px] resize-y"
+                        rows={3}
+                      />
+                      <p className="text-xs text-slate-400">Learning objectives will be used to structure your notes</p>
                     </div>
                   )}
                   <div className="flex gap-2 flex-wrap">
@@ -456,15 +1046,132 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 <div className="flex-1 overflow-y-auto p-4">
                   {notes ? (
                     <div className="space-y-6">
-                      <div className="flex justify-between items-center"><h2 className="text-xl font-bold">{notes.title}</h2><div className="flex gap-2"><button onClick={copyNotes} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm">{copied ? '✓ Copied' : 'Copy'}</button><button onClick={exportWord} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm flex items-center gap-1"><Icon name="download" className="w-4 h-4" />Word</button></div></div>
+                      <div className="flex justify-between items-center"><h2 className="text-xl font-bold">{notes.title || 'Untitled'}</h2><div className="flex gap-2"><button onClick={() => setNotes({ ...notes })} className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 rounded-lg text-sm flex items-center gap-1"><Icon name="refresh-cw" className="w-4 h-4" />Reload</button><button onClick={copyNotes} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm">{copied ? '✓ Copied' : 'Copy'}</button><button onClick={exportPDF} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm flex items-center gap-1"><Icon name="download" className="w-4 h-4" />PDF</button></div></div>
                       <div className="bg-indigo-900/30 border border-indigo-700/50 rounded-xl p-4">
                         <h3 className="text-sm font-semibold text-indigo-400 mb-2">Learning Objectives</h3>
-                        <ul className="space-y-1">{notes.learningObjectives?.map((o,i) => <li key={i} className="text-sm text-slate-300">• {o}</li>)}</ul>
+                        <ul className="space-y-1">
+                          {Array.isArray(notes.learningObjectives) && notes.learningObjectives.map((o, i) => (
+                            <li key={i} className="text-sm text-slate-300 group flex items-start gap-2">
+                              {editingNote?.type === 'lo' && editingNote.index === i ? (
+                                <div className="flex-1 flex gap-2">
+                                  <input
+                                    type="text"
+                                    value={editingNote.value}
+                                    onChange={(e) => setEditingNote(p => ({ ...p, value: e.target.value }))}
+                                    onKeyDown={(e) => e.key === 'Enter' && saveNoteEdit()}
+                                    className="flex-1 bg-slate-700/50 border border-slate-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-indigo-500"
+                                    autoFocus
+                                  />
+                                  <button onClick={saveNoteEdit} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-xs">Save</button>
+                                  <button onClick={() => setEditingNote(null)} className="px-2 py-1 bg-slate-600 hover:bg-slate-500 rounded text-xs">Cancel</button>
+                                </div>
+                              ) : (
+                                <>
+                                  <span className="flex-1">• {String(o)}</span>
+                                  <button onClick={() => startEditLO(i)} className="opacity-0 group-hover:opacity-100 px-1 py-0.5 bg-slate-600 hover:bg-slate-500 rounded text-xs transition-opacity">
+                                    <Icon name="edit-2" className="w-3 h-3" />
+                                  </button>
+                                </>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
                       </div>
-                      {notes.notes?.map((s,i) => (
+                      {Array.isArray(notes.notes) && notes.notes.map((s, i) => (
                         <div key={i} className="bg-slate-800/50 rounded-xl p-4">
-                          <h3 className="font-semibold mb-3">{s.section}</h3>
-                          <ul className="space-y-2">{s.points?.map((p,j) => <li key={j} className="text-sm text-slate-300 pl-4 border-l-2 border-slate-700">{renderText(p)}</li>)}</ul>
+                          <div className="flex items-center gap-2 mb-3 group">
+                            {editingNote?.type === 'section' && editingNote.sectionIndex === i ? (
+                              <div className="flex-1 flex gap-2">
+                                <input
+                                  type="text"
+                                  value={editingNote.value}
+                                  onChange={(e) => setEditingNote(p => ({ ...p, value: e.target.value }))}
+                                  onKeyDown={(e) => e.key === 'Enter' && saveNoteEdit()}
+                                  className="flex-1 bg-slate-700/50 border border-slate-600 rounded px-2 py-1 text-sm font-semibold focus:outline-none focus:border-indigo-500"
+                                  autoFocus
+                                />
+                                <button onClick={saveNoteEdit} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-xs">Save</button>
+                                <button onClick={() => setEditingNote(null)} className="px-2 py-1 bg-slate-600 hover:bg-slate-500 rounded text-xs">Cancel</button>
+                              </div>
+                            ) : (
+                              <>
+                                <h3 className="font-semibold flex-1">{s?.section || `Section ${i + 1}`}</h3>
+                                <button onClick={() => startEditSection(i)} className="opacity-0 group-hover:opacity-100 px-1 py-0.5 bg-slate-600 hover:bg-slate-500 rounded text-xs transition-opacity">
+                                  <Icon name="edit-2" className="w-3 h-3" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                          <ul className="space-y-2">
+                            {Array.isArray(s?.points) && s.points.map((p, j) => (
+                              <li key={j} className="text-sm text-slate-300 pl-4 border-l-2 border-slate-700 group flex items-start gap-2">
+                                {editingNote?.type === 'point' && editingNote.sectionIndex === i && editingNote.pointIndex === j ? (
+                                  <div className="flex-1 space-y-2">
+                                    {/* Formatting Toolbar */}
+                                    <div className="flex flex-wrap gap-1 p-2 bg-red-900 rounded-lg border-2 border-red-500 mb-2">
+                                      <div className="text-xs text-white font-bold w-full mb-1 bg-red-700 p-1">🎨 FORMATTING TOOLBAR:</div>
+                                      <button onClick={() => insertFormatting('**', '**')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-bold" title="Bold">B</button>
+                                      <button onClick={() => insertFormatting('<i>', '</i>')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs italic" title="Italic">I</button>
+                                      <button onClick={() => insertFormatting('<u>', '</u>')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs underline" title="Underline">U</button>
+                                      <button onClick={() => insertFormatting('<sup>', '</sup>')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="Superscript">X<sup>2</sup></button>
+                                      <button onClick={() => insertFormatting('<sub>', '</sub>')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="Subscript">X<sub>2</sub></button>
+                                      <button onClick={insertBullet} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="Bullet point">•</button>
+                                      <span className="border-l border-slate-600 mx-1"></span>
+                                      <button onClick={() => insertSymbol('α')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="alpha">α</button>
+                                      <button onClick={() => insertSymbol('β')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="beta">β</button>
+                                      <button onClick={() => insertSymbol('Δ')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="Delta">Δ</button>
+                                      <button onClick={() => insertSymbol('μ')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="mu">μ</button>
+                                      <button onClick={() => insertSymbol('→')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="right arrow">→</button>
+                                      <button onClick={() => insertSymbol('←')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="left arrow">←</button>
+                                      <button onClick={() => insertSymbol('↑')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="up arrow">↑</button>
+                                      <button onClick={() => insertSymbol('↓')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="down arrow">↓</button>
+                                      <button onClick={() => insertSymbol('>')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="greater than">{'>'}</button>
+                                      <button onClick={() => insertSymbol('<')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="less than">{'<'}</button>
+                                      <button onClick={() => insertSymbol('≥')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="greater than or equal">≥</button>
+                                      <button onClick={() => insertSymbol('≤')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="less than or equal">≤</button>
+                                      <button onClick={() => insertSymbol('±')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="plus or minus">±</button>
+                                      <button onClick={() => insertSymbol('≈')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="approximately equal">≈</button>
+                                      <button onClick={() => insertSymbol('°')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="degree">°</button>
+                                    </div>
+                                    <textarea
+                                      ref={textareaRef}
+                                      value={editingNote.value}
+                                      onChange={(e) => setEditingNote(p => ({ ...p, value: e.target.value }))}
+                                      onKeyDown={(e) => {
+                                        // Allow Enter to create new lines, only save on Ctrl/Cmd+Enter
+                                        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                                          e.preventDefault();
+                                          saveNoteEdit();
+                                        }
+                                      }}
+                                      className="w-full bg-slate-700/50 border border-slate-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-indigo-500 min-h-[80px] resize-y"
+                                      autoFocus
+                                      placeholder="Press Enter for new line. Use toolbar for formatting. Ctrl/Cmd+Enter to save."
+                                    />
+                                    <div className="flex gap-2">
+                                      <button onClick={saveNoteEdit} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-xs">Save</button>
+                                      <button onClick={() => setEditingNote(null)} className="px-2 py-1 bg-slate-600 hover:bg-slate-500 rounded text-xs">Cancel</button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <span className="flex-1">{renderText(p)}</span>
+                                    <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity">
+                                      <button onClick={() => startEditPoint(i, j)} className="px-1 py-0.5 bg-slate-600 hover:bg-slate-500 rounded text-xs">
+                                        <Icon name="edit-2" className="w-3 h-3" />
+                                      </button>
+                                      <button onClick={() => deletePoint(i, j)} className="px-1 py-0.5 bg-red-600/50 hover:bg-red-600 rounded text-xs">
+                                        <Icon name="trash-2" className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                  </>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                          <button onClick={() => addPoint(i)} className="mt-3 px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs flex items-center gap-1 text-slate-400 hover:text-white">
+                            <Icon name="plus" className="w-3 h-3" />Add point
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -497,20 +1204,108 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             )}
 
             {activeTab === 'cards' && (
-              <div className="h-full overflow-y-auto p-4">
-                {cards.length ? (
-                  <div className="space-y-3">
-                    <div className="flex justify-between mb-4"><div><h2 className="font-semibold">{cards.length} Flashcards</h2></div><button onClick={exportCSV} className="px-3 py-1.5 bg-green-600 rounded-lg text-sm">Export CSV</button></div>
-                    {cards.map((c,i) => (
-                      <div key={i} className="bg-slate-800/50 rounded-xl">
-                        <button onClick={() => setExpandedCards(p => ({...p, [i]: !p[i]}))} className="w-full px-4 py-3 flex justify-between text-left">
-                          <span className="text-sm">#{i+1} {c.front}</span><span>{expandedCards[i] ? '▲' : '▼'}</span>
-                        </button>
-                        {expandedCards[i] && <div className="px-4 py-3 bg-indigo-900/20 border-t border-slate-700"><p className="text-sm text-indigo-300">{renderText(c.back)}</p><p className="text-xs text-slate-500 mt-2">Tags: {c.tags}</p></div>}
+              <div className="h-full flex flex-col">
+                <div className="flex-1 overflow-y-auto p-4">
+                  {cards.length ? (
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center mb-4">
+                        <h2 className="font-semibold">{cards.length} Flashcards</h2>
+                        <div className="flex gap-2">
+                          <button onClick={() => setShowAddCard(true)} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm flex items-center gap-1">
+                            <Icon name="plus" className="w-4 h-4" />Add
+                          </button>
+                          <button onClick={exportCSV} className="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded-lg text-sm">Export CSV</button>
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                ) : <div className="h-full flex items-center justify-center text-slate-400">No flashcards yet. Generate notes first, then click "Generate Flashcards".</div>}
+
+                      {/* Add Card Form */}
+                      {showAddCard && (
+                        <div className="bg-indigo-900/30 border border-indigo-700/50 rounded-xl p-4 mb-4">
+                          <h3 className="text-sm font-semibold text-indigo-400 mb-3">Add New Card</h3>
+                          <div className="space-y-2">
+                            <input
+                              type="text"
+                              value={newCard.front}
+                              onChange={(e) => setNewCard(p => ({ ...p, front: e.target.value }))}
+                              placeholder="Front (question)"
+                              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+                            />
+                            <textarea
+                              value={newCard.back}
+                              onChange={(e) => setNewCard(p => ({ ...p, back: e.target.value }))}
+                              placeholder="Back (answer) - use <b>text</b> for bold"
+                              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 min-h-[60px]"
+                              rows={2}
+                            />
+                            <div className="flex gap-2 justify-end">
+                              <button onClick={() => { setShowAddCard(false); setNewCard({ front: '', back: '' }); }} className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 rounded-lg text-sm">Cancel</button>
+                              <button onClick={addCard} disabled={!newCard.front.trim() || !newCard.back.trim()} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-600 disabled:opacity-50 rounded-lg text-sm">Add Card</button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {cards.map((c, i) => (
+                        <div key={i} className="bg-slate-800/50 rounded-xl">
+                          <div className="flex items-center">
+                            <button onClick={() => setExpandedCards(p => ({ ...p, [i]: !p[i] }))} className="flex-1 px-4 py-3 flex justify-between text-left">
+                              <span className="text-sm">#{i + 1} {editingCard?.index === i ? editingCard.front : c.front}</span>
+                              <span>{expandedCards[i] ? '▲' : '▼'}</span>
+                            </button>
+                          </div>
+                          {expandedCards[i] && (
+                            <div className="px-4 py-3 bg-indigo-900/20 border-t border-slate-700">
+                              {editingCard?.index === i ? (
+                                <div className="space-y-2">
+                                  <input
+                                    type="text"
+                                    value={editingCard.front}
+                                    onChange={(e) => setEditingCard(p => ({ ...p, front: e.target.value }))}
+                                    className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+                                    placeholder="Front (question)"
+                                  />
+                                  <textarea
+                                    value={editingCard.back}
+                                    onChange={(e) => setEditingCard(p => ({ ...p, back: e.target.value }))}
+                                    className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 min-h-[60px]"
+                                    placeholder="Back (answer)"
+                                    rows={2}
+                                  />
+                                  <div className="flex gap-2 justify-end">
+                                    <button onClick={() => setEditingCard(null)} className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 rounded-lg text-sm">Cancel</button>
+                                    <button onClick={saveEditCard} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm">Save</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <p className="text-sm text-indigo-300">{renderText(c.back)}</p>
+                                  <div className="flex justify-between items-center mt-3">
+                                    <p className="text-xs text-slate-500">Tags: {c.tags}</p>
+                                    <div className="flex gap-2">
+                                      <button onClick={() => startEditCard(i)} className="px-2 py-1 bg-slate-600 hover:bg-slate-500 rounded text-xs flex items-center gap-1">
+                                        <Icon name="edit-2" className="w-3 h-3" />Edit
+                                      </button>
+                                      <button onClick={() => deleteCard(i)} className="px-2 py-1 bg-red-600/50 hover:bg-red-600 rounded text-xs flex items-center gap-1">
+                                        <Icon name="trash-2" className="w-3 h-3" />Delete
+                                      </button>
+                                    </div>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center text-slate-400">
+                      <p>No flashcards yet. Generate notes first, then click "Generate Flashcards".</p>
+                      <button onClick={() => setShowAddCard(true)} className="mt-4 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm flex items-center gap-2 text-white">
+                        <Icon name="plus" className="w-4 h-4" />Add Card Manually
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -518,7 +1313,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
       );
     }
 
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App /></ErrorBoundary>);
   </script>
 </body>
 </html>
