@@ -983,8 +983,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
             doc.setTextColor(...black);
             y = addMixedText(bulletParts, margin, y, 11, 6, contentWidth, black);
-            // Check if this point contains sub-bullets (ends with indented dash lines)
-            const hasSubBullets = /\n\s+-\s[^\n]*$/.test(point);
+            // Check if this point contains sub-bullets (ends with indented dash lines or HTML lists)
+            const hasSubBullets = /\n\s+-\s[^\n]*$/.test(point) || /<\/li>\s*<\/ul>\s*$/.test(point);
             // Use less spacing after sub-bullet lists
             y += hasSubBullets ? 2 : 7;
           });
