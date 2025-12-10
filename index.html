@@ -619,9 +619,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           str = str.replace(/⇒/g, '=>');
           str = str.replace(/⇐/g, '<=');
 
-          // Handle superscript and subscript - just extract the text content (jsPDF doesn't support these)
-          str = str.replace(/<sup>(.*?)<\/sup>/gi, '$1');
-          str = str.replace(/<sub>(.*?)<\/sub>/gi, '$1');
+          // Handle superscript and subscript - mark them with special tags for later processing
+          str = str.replace(/<sup>(.*?)<\/sup>/gi, '{{SUP}}$1{{/SUP}}');
+          str = str.replace(/<sub>(.*?)<\/sub>/gi, '{{SUB}}$1{{/SUB}}');
 
           // Handle underline - add indicator
           str = str.replace(/<u>(.*?)<\/u>/gi, '$1');
@@ -644,15 +644,23 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Parse formatting tags
           const parts = [];
           let currentPos = 0;
-          const regex = /(\*\*|\{\{ITALIC\}\}|\{\{\/ITALIC\}\})/g;
+          const regex = /(\*\*|\{\{ITALIC\}\}|\{\{\/ITALIC\}\}|\{\{SUP\}\}|\{\{\/SUP\}\}|\{\{SUB\}\}|\{\{\/SUB\}\})/g;
           let match;
           let boldActive = false;
           let italicActive = false;
+          let superscriptActive = false;
+          let subscriptActive = false;
           let buffer = '';
 
           const addPart = () => {
             if (buffer) {
-              parts.push({ text: buffer, bold: boldActive, italic: italicActive });
+              parts.push({
+                text: buffer,
+                bold: boldActive,
+                italic: italicActive,
+                superscript: superscriptActive,
+                subscript: subscriptActive
+              });
               buffer = '';
             }
           };
@@ -673,6 +681,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             } else if (match[0] === '{{/ITALIC}}') {
               addPart();
               italicActive = false;
+            } else if (match[0] === '{{SUP}}') {
+              addPart();
+              superscriptActive = true;
+            } else if (match[0] === '{{/SUP}}') {
+              addPart();
+              superscriptActive = false;
+            } else if (match[0] === '{{SUB}}') {
+              addPart();
+              subscriptActive = true;
+            } else if (match[0] === '{{/SUB}}') {
+              addPart();
+              subscriptActive = false;
             }
 
             currentPos = match.index + match[0].length;
@@ -684,7 +704,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           }
           addPart();
 
-          return parts.length > 0 ? parts : [{ text: str, bold: false, italic: false }];
+          return parts.length > 0 ? parts : [{ text: str, bold: false, italic: false, superscript: false, subscript: false }];
         };
 
         // Helper to add text with mixed bold - returns new Y position
@@ -707,6 +727,13 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               doc.setFont('helvetica', 'italic');
             } else {
               doc.setFont('helvetica', 'normal');
+            }
+
+            // Handle superscript/subscript with smaller font and vertical offset
+            const isScript = part.superscript || part.subscript;
+            const originalFontSize = fontSize;
+            if (isScript) {
+              doc.setFontSize(fontSize * 0.6); // 60% of normal size
             }
 
             // Split by newlines first to handle line breaks
@@ -749,6 +776,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   }
                 }
 
+                // Calculate vertical offset for superscript/subscript
+                const yOffset = part.superscript ? -fontSize * 0.3 : (part.subscript ? fontSize * 0.2 : 0);
+                const renderY = currentY + yOffset;
+
                 // If single word is too long for the line, break it
                 if (wordWidth > maxWidth) {
                   // Try without trailing space first
@@ -757,9 +788,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
                   if (bareWidth > maxWidth) {
                     // Word is still too long, print what we can
-                    doc.text(bareWord, currentX, currentY);
+                    doc.text(bareWord, currentX, renderY);
                   } else {
-                    doc.text(wordText, currentX, currentY);
+                    doc.text(wordText, currentX, renderY);
                   }
 
                   currentX = startX;
@@ -770,7 +801,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   }
                 } else {
                   // Normal case: print word and advance cursor
-                  doc.text(wordText, currentX, currentY);
+                  doc.text(wordText, currentX, renderY);
                   currentX += wordWidth;
                 }
               });
@@ -785,6 +816,11 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 }
               }
             });
+
+            // Reset font size after superscript/subscript
+            if (isScript) {
+              doc.setFontSize(originalFontSize);
+            }
           });
 
           // Return Y position - if text was written on this line, return current Y
