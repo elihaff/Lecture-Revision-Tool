@@ -14,6 +14,8 @@
   <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
   <script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.min.js"></script>
   <style>
     body { margin: 0; height: 100vh; }
     #root { height: 100%; }
@@ -440,7 +442,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         setCopied(true); setTimeout(() => setCopied(false), 2000);
       };
 
-      const exportPDF = () => {
+      const exportPDF = async () => {
         console.log('===== PDF EXPORT STARTED =====');
         if (!notes) return;
         const { jsPDF } = window.jspdf;
@@ -450,6 +452,27 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           format: 'a4'
         });
         console.log('PDF document created successfully');
+
+        // Load and embed Roboto font which supports Greek characters
+        try {
+          console.log('[PDF] Loading Unicode font...');
+
+          // Fetch Roboto Regular font from Google Fonts (supports Greek)
+          const fontUrl = 'https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxK.woff';
+          const fontResponse = await fetch(fontUrl);
+          const fontArrayBuffer = await fontResponse.arrayBuffer();
+          const fontBase64 = btoa(String.fromCharCode(...new Uint8Array(fontArrayBuffer)));
+
+          // Add font to jsPDF
+          doc.addFileToVFS('Roboto-Regular.ttf', fontBase64);
+          doc.addFont('Roboto-Regular.ttf', 'Roboto', 'normal');
+          doc.setFont('Roboto');
+
+          console.log('[PDF] Unicode font loaded successfully');
+        } catch (e) {
+          console.warn('[PDF] Could not load Unicode font, using default:', e);
+          doc.setFont('helvetica');
+        }
 
         const pageWidth = doc.internal.pageSize.getWidth();
         const pageHeight = doc.internal.pageSize.getHeight();
@@ -684,20 +707,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Handle Greek letters and special characters that don't render well in PDF
           // Convert them to safe alternatives that won't cause rendering issues
           const handleSpecialChars = (text) => {
-            // Replace Greek letters and problematic characters with readable alternatives
+            // Only replace truly problematic characters, keep Greek letters
             const replacements = {
-              // Greek lowercase
-              'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon',
-              'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'ι': 'iota', 'κ': 'kappa',
-              'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron',
-              'π': 'pi', 'ρ': 'rho', 'ς': 'sigma', 'σ': 'sigma', 'τ': 'tau',
-              'υ': 'upsilon', 'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
-              // Greek uppercase
-              'Α': 'Alpha', 'Β': 'Beta', 'Γ': 'Gamma', 'Δ': 'Delta', 'Ε': 'Epsilon',
-              'Ζ': 'Zeta', 'Η': 'Eta', 'Θ': 'Theta', 'Ι': 'Iota', 'Κ': 'Kappa',
-              'Λ': 'Lambda', 'Μ': 'Mu', 'Ν': 'Nu', 'Ξ': 'Xi', 'Ο': 'Omicron',
-              'Π': 'Pi', 'Ρ': 'Rho', 'Σ': 'Sigma', 'Τ': 'Tau', 'Υ': 'Upsilon',
-              'Φ': 'Phi', 'Χ': 'Chi', 'Ψ': 'Psi', 'Ω': 'Omega',
               // Characters with macron/breve (these cause display issues)
               'ā': 'a', 'ē': 'e', 'ī': 'i', 'ō': 'o', 'ū': 'u',
               'Ā': 'A', 'Ē': 'E', 'Ī': 'I', 'Ō': 'O', 'Ū': 'U',
@@ -797,20 +808,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           const originalText = text;
           let sanitized = String(text);
 
-          // Replace Greek letters and problematic Unicode characters
+          // Only replace truly problematic characters, keep Greek letters
           const charMap = {
-            // Greek lowercase
-            'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon',
-            'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'ι': 'iota', 'κ': 'kappa',
-            'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron',
-            'π': 'pi', 'ρ': 'rho', 'ς': 'sigma', 'σ': 'sigma', 'τ': 'tau',
-            'υ': 'upsilon', 'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
-            // Greek uppercase
-            'Α': 'Alpha', 'Β': 'Beta', 'Γ': 'Gamma', 'Δ': 'Delta', 'Ε': 'Epsilon',
-            'Ζ': 'Zeta', 'Η': 'Eta', 'Θ': 'Theta', 'Ι': 'Iota', 'Κ': 'Kappa',
-            'Λ': 'Lambda', 'Μ': 'Mu', 'Ν': 'Nu', 'Ξ': 'Xi', 'Ο': 'Omicron',
-            'Π': 'Pi', 'Ρ': 'Rho', 'Σ': 'Sigma', 'Τ': 'Tau', 'Υ': 'Upsilon',
-            'Φ': 'Phi', 'Χ': 'Chi', 'Ψ': 'Psi', 'Ω': 'Omega',
             // Characters with macron (line over) - these cause display issues
             'ā': 'a', 'ē': 'e', 'ī': 'i', 'ō': 'o', 'ū': 'u',
             'Ā': 'A', 'Ē': 'E', 'Ī': 'I', 'Ō': 'O', 'Ū': 'U',
@@ -821,9 +820,16 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Apply character replacements
           for (const [char, replacement] of Object.entries(charMap)) {
             if (sanitized.includes(char)) {
-              console.log('[PDF SANITIZE] Replacing', char, 'with', replacement);
+              console.log('[PDF SANITIZE] Replacing diacritic', char, 'with', replacement);
               sanitized = sanitized.split(char).join(replacement);
             }
+          }
+
+          // Log if Greek letters are present (attempting to preserve them)
+          const greekPattern = /[\u0370-\u03FF]/g;
+          const greekMatches = sanitized.match(greekPattern);
+          if (greekMatches) {
+            console.log('[PDF] Greek letters detected, attempting to render:', greekMatches.join(', '));
           }
 
           if (sanitized !== originalText) {
@@ -849,6 +855,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             part.text = sanitizeForPDF(part.text);
 
             // Set font style based on formatting
+            // Use Roboto for normal text (supports Greek), fallback to helvetica for styles
             if (part.bold && part.italic) {
               doc.setFont('helvetica', 'bolditalic');
             } else if (part.bold) {
@@ -856,7 +863,11 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             } else if (part.italic) {
               doc.setFont('helvetica', 'italic');
             } else {
-              doc.setFont('helvetica', 'normal');
+              try {
+                doc.setFont('Roboto', 'normal');
+              } catch(e) {
+                doc.setFont('helvetica', 'normal');
+              }
             }
 
             // Handle superscript/subscript with smaller font and vertical offset
