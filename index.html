@@ -684,86 +684,13 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Handle Greek letters and special characters that don't render well in PDF
           // Convert them to safe alternatives that won't cause rendering issues
           const handleSpecialChars = (text) => {
+            // Only replace characters that cause rendering issues
+            // Preserve Greek letters and other Unicode
             const replacements = {
-              // Greek letters (lowercase)
-              'α': 'alpha',
-              'β': 'beta',
-              'γ': 'gamma',
-              'δ': 'delta',
-              'ε': 'epsilon',
-              'ζ': 'zeta',
-              'η': 'eta',
-              'θ': 'theta',
-              'ι': 'iota',
-              'κ': 'kappa',
-              'λ': 'lambda',
-              'μ': 'mu',
-              'ν': 'nu',
-              'ξ': 'xi',
-              'ο': 'omicron',
-              'π': 'pi',
-              'ρ': 'rho',
-              'ς': 'sigma',
-              'σ': 'sigma',
-              'τ': 'tau',
-              'υ': 'upsilon',
-              'φ': 'phi',
-              'χ': 'chi',
-              'ψ': 'psi',
-              'ω': 'omega',
-              // Greek letters (uppercase)
-              'Α': 'Alpha',
-              'Β': 'Beta',
-              'Γ': 'Gamma',
-              'Δ': 'Delta',
-              'Ε': 'Epsilon',
-              'Ζ': 'Zeta',
-              'Η': 'Eta',
-              'Θ': 'Theta',
-              'Ι': 'Iota',
-              'Κ': 'Kappa',
-              'Λ': 'Lambda',
-              'Μ': 'Mu',
-              'Ν': 'Nu',
-              'Ξ': 'Xi',
-              'Ο': 'Omicron',
-              'Π': 'Pi',
-              'Ρ': 'Rho',
-              'Σ': 'Sigma',
-              'Τ': 'Tau',
-              'Υ': 'Upsilon',
-              'Φ': 'Phi',
-              'Χ': 'Chi',
-              'Ψ': 'Psi',
-              'Ω': 'Omega',
-              // Characters with diacritics
-              'ā': 'a',
-              'ē': 'e',
-              'ī': 'i',
-              'ō': 'o',
-              'ū': 'u',
-              'Ā': 'A',
-              'Ē': 'E',
-              'Ī': 'I',
-              'Ō': 'O',
-              'Ū': 'U',
-              'ă': 'a',
-              'ĕ': 'e',
-              'ĭ': 'i',
-              'ŏ': 'o',
-              'ŭ': 'u',
-              // Keep plus-minus as text
-              '±': '+/-',
-              // Mathematical symbols
-              '≈': '~=',
-              '≠': '!=',
-              '≤': '<=',
-              '≥': '>=',
-              '∞': 'infinity',
-              '√': 'sqrt',
-              '∑': 'sum',
-              '∏': 'product',
-              '∫': 'integral'
+              // Characters with macron/breve (these cause display issues)
+              'ā': 'a', 'ē': 'e', 'ī': 'i', 'ō': 'o', 'ū': 'u',
+              'Ā': 'A', 'Ē': 'E', 'Ī': 'I', 'Ō': 'O', 'Ū': 'U',
+              'ă': 'a', 'ĕ': 'e', 'ĭ': 'i', 'ŏ': 'o', 'ŭ': 'u'
             };
 
             let result = text;
@@ -859,55 +786,29 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           const originalText = text;
           let sanitized = String(text);
 
-          // Replace all Greek letters and special Unicode characters
+          // Only replace characters that cause rendering issues (macrons/breves)
+          // Preserve Greek letters and most other Unicode characters
           const charMap = {
-            // Greek lowercase
-            'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon',
-            'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'ι': 'iota', 'κ': 'kappa',
-            'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron',
-            'π': 'pi', 'ρ': 'rho', 'ς': 'sigma', 'σ': 'sigma', 'τ': 'tau',
-            'υ': 'upsilon', 'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
-            // Greek uppercase
-            'Α': 'Alpha', 'Β': 'Beta', 'Γ': 'Gamma', 'Δ': 'Delta', 'Ε': 'Epsilon',
-            'Ζ': 'Zeta', 'Η': 'Eta', 'Θ': 'Theta', 'Ι': 'Iota', 'Κ': 'Kappa',
-            'Λ': 'Lambda', 'Μ': 'Mu', 'Ν': 'Nu', 'Ξ': 'Xi', 'Ο': 'Omicron',
-            'Π': 'Pi', 'Ρ': 'Rho', 'Σ': 'Sigma', 'Τ': 'Tau', 'Υ': 'Upsilon',
-            'Φ': 'Phi', 'Χ': 'Chi', 'Ψ': 'Psi', 'Ω': 'Omega',
-            // Characters with macron (line over)
+            // Characters with macron (line over) - these cause display issues
             'ā': 'a', 'ē': 'e', 'ī': 'i', 'ō': 'o', 'ū': 'u',
             'Ā': 'A', 'Ē': 'E', 'Ī': 'I', 'Ō': 'O', 'Ū': 'U',
-            // Characters with breve
-            'ă': 'a', 'ĕ': 'e', 'ĭ': 'i', 'ŏ': 'o', 'ŭ': 'u',
-            // Other diacritics
-            'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ú': 'u',
-            'à': 'a', 'è': 'e', 'ì': 'i', 'ò': 'o', 'ù': 'u',
-            'â': 'a', 'ê': 'e', 'î': 'i', 'ô': 'o', 'û': 'u',
-            'ä': 'a', 'ë': 'e', 'ï': 'i', 'ö': 'o', 'ü': 'u',
-            'ã': 'a', 'õ': 'o', 'ñ': 'n',
-            // Math symbols
-            '±': '+/-', '≈': '~=', '≠': '!=', '≤': '<=', '≥': '>=',
-            '∞': 'inf', '√': 'sqrt', '∑': 'sum', '∏': 'prod', '∫': 'int',
-            '×': 'x', '÷': '/', '·': '.', '°': 'deg'
+            // Characters with breve - these cause display issues
+            'ă': 'a', 'ĕ': 'e', 'ĭ': 'i', 'ŏ': 'o', 'ŭ': 'u'
           };
 
-          // Apply character replacements
+          // Apply character replacements only for problematic diacritics
           for (const [char, replacement] of Object.entries(charMap)) {
             if (sanitized.includes(char)) {
-              console.log('[PDF SANITIZE] Replacing', char, 'with', replacement);
+              console.log('[PDF SANITIZE] Replacing diacritic', char, 'with', replacement);
               sanitized = sanitized.split(char).join(replacement);
             }
           }
 
-          // Remove any remaining high Unicode characters that might cause issues
-          // Keep only ASCII printable characters, spaces, and common symbols
-          const hasNonAscii = /[^\x20-\x7E\n\r\t]/.test(sanitized);
-          if (hasNonAscii) {
-            console.warn('[PDF SANITIZE] Found non-ASCII characters, replacing with ?');
-            console.warn('[PDF SANITIZE] Text:', sanitized.substring(0, 100));
-            sanitized = sanitized.replace(/[^\x20-\x7E\n\r\t]/g, (match) => {
-              console.warn('[PDF SANITIZE] Char:', match, 'Code:', match.charCodeAt(0));
-              return '?';
-            });
+          // Log Greek letters if present (but keep them)
+          const greekPattern = /[\u0370-\u03FF\u1F00-\u1FFF]/g;
+          const greekMatches = sanitized.match(greekPattern);
+          if (greekMatches) {
+            console.log('[PDF SANITIZE] Greek letters found (preserving):', greekMatches.join(', '));
           }
 
           if (sanitized !== originalText) {
