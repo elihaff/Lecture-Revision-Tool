@@ -560,8 +560,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           let depth = -1;
           let result = '';
           let i = 0;
-          // Track if first list follows text (for indentation)
-          let indentFirstLevel = false;
+          // Track which depth level should get extra indentation (or -1 for none)
+          let indentDepthLevel = -1;
 
           while (i < str.length) {
             // Check for <ul> start
@@ -574,9 +574,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               // 2. There's already text on the current line
               if (depth >= 0 || hasTextBefore) {
                 result += '\n';
-                // If this is the first list and it follows text, indent its items
+                // If this is the first list and it follows text, mark this depth for indentation
                 if (depth === -1 && hasTextBefore) {
-                  indentFirstLevel = true;
+                  indentDepthLevel = 0; // The items at depth 0 should be indented
                 }
               }
               depth++;
@@ -591,7 +591,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               depth = Math.max(-1, depth - 1);
               // Reset indent flag when returning to top level
               if (depth === -1) {
-                indentFirstLevel = false;
+                indentDepthLevel = -1;
               }
               i += 5;
               continue;
@@ -602,9 +602,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               // Add appropriate indentation based on current depth
               let actualDepth = Math.max(0, depth);
 
-              // If first level list follows text (like "Topic: <ul>"), add extra indent
-              if (actualDepth === 0 && indentFirstLevel) {
-                actualDepth = 1;
+              // If we're indenting because of preceding text, shift ALL depths in that list
+              if (indentDepthLevel >= 0 && depth >= indentDepthLevel) {
+                actualDepth = depth - indentDepthLevel + 1;
               }
 
               // Use 3 spaces per level for indentation
