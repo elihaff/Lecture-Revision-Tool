@@ -581,13 +581,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Remove zero-width spaces used for formatting breaks
           str = str.replace(/\u200B/g, '');
 
-          // Replace special characters that don't render well in jsPDF
-          str = str.replace(/→/g, '->');
-          str = str.replace(/←/g, '<-');
-          str = str.replace(/↑/g, '^');
-          str = str.replace(/↓/g, 'v');
-          str = str.replace(/⇒/g, '=>');
-          str = str.replace(/⇐/g, '<=');
+          // Keep arrow symbols as-is - Helvetica should support these
+          // Note: Basic arrows (→←↑↓) are widely supported in standard fonts
+          // If they don't render, we can fall back to text equivalents
 
           // Handle superscript and subscript - mark them with special tags for later processing
           str = str.replace(/<sup>(.*?)<\/sup>/gi, '{{SUP}}$1{{/SUP}}');
