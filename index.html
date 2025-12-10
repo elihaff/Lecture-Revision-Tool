@@ -684,9 +684,20 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Handle Greek letters and special characters that don't render well in PDF
           // Convert them to safe alternatives that won't cause rendering issues
           const handleSpecialChars = (text) => {
-            // Only replace characters that cause rendering issues
-            // Preserve Greek letters and other Unicode
+            // Replace Greek letters and problematic characters with readable alternatives
             const replacements = {
+              // Greek lowercase
+              'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon',
+              'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'ι': 'iota', 'κ': 'kappa',
+              'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron',
+              'π': 'pi', 'ρ': 'rho', 'ς': 'sigma', 'σ': 'sigma', 'τ': 'tau',
+              'υ': 'upsilon', 'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
+              // Greek uppercase
+              'Α': 'Alpha', 'Β': 'Beta', 'Γ': 'Gamma', 'Δ': 'Delta', 'Ε': 'Epsilon',
+              'Ζ': 'Zeta', 'Η': 'Eta', 'Θ': 'Theta', 'Ι': 'Iota', 'Κ': 'Kappa',
+              'Λ': 'Lambda', 'Μ': 'Mu', 'Ν': 'Nu', 'Ξ': 'Xi', 'Ο': 'Omicron',
+              'Π': 'Pi', 'Ρ': 'Rho', 'Σ': 'Sigma', 'Τ': 'Tau', 'Υ': 'Upsilon',
+              'Φ': 'Phi', 'Χ': 'Chi', 'Ψ': 'Psi', 'Ω': 'Omega',
               // Characters with macron/breve (these cause display issues)
               'ā': 'a', 'ē': 'e', 'ī': 'i', 'ō': 'o', 'ū': 'u',
               'Ā': 'A', 'Ē': 'E', 'Ī': 'I', 'Ō': 'O', 'Ū': 'U',
@@ -786,9 +797,20 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           const originalText = text;
           let sanitized = String(text);
 
-          // Only replace characters that cause rendering issues (macrons/breves)
-          // Preserve Greek letters and most other Unicode characters
+          // Replace Greek letters and problematic Unicode characters
           const charMap = {
+            // Greek lowercase
+            'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon',
+            'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'ι': 'iota', 'κ': 'kappa',
+            'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron',
+            'π': 'pi', 'ρ': 'rho', 'ς': 'sigma', 'σ': 'sigma', 'τ': 'tau',
+            'υ': 'upsilon', 'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
+            // Greek uppercase
+            'Α': 'Alpha', 'Β': 'Beta', 'Γ': 'Gamma', 'Δ': 'Delta', 'Ε': 'Epsilon',
+            'Ζ': 'Zeta', 'Η': 'Eta', 'Θ': 'Theta', 'Ι': 'Iota', 'Κ': 'Kappa',
+            'Λ': 'Lambda', 'Μ': 'Mu', 'Ν': 'Nu', 'Ξ': 'Xi', 'Ο': 'Omicron',
+            'Π': 'Pi', 'Ρ': 'Rho', 'Σ': 'Sigma', 'Τ': 'Tau', 'Υ': 'Upsilon',
+            'Φ': 'Phi', 'Χ': 'Chi', 'Ψ': 'Psi', 'Ω': 'Omega',
             // Characters with macron (line over) - these cause display issues
             'ā': 'a', 'ē': 'e', 'ī': 'i', 'ō': 'o', 'ū': 'u',
             'Ā': 'A', 'Ē': 'E', 'Ī': 'I', 'Ō': 'O', 'Ū': 'U',
@@ -796,19 +818,12 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             'ă': 'a', 'ĕ': 'e', 'ĭ': 'i', 'ŏ': 'o', 'ŭ': 'u'
           };
 
-          // Apply character replacements only for problematic diacritics
+          // Apply character replacements
           for (const [char, replacement] of Object.entries(charMap)) {
             if (sanitized.includes(char)) {
-              console.log('[PDF SANITIZE] Replacing diacritic', char, 'with', replacement);
+              console.log('[PDF SANITIZE] Replacing', char, 'with', replacement);
               sanitized = sanitized.split(char).join(replacement);
             }
-          }
-
-          // Log Greek letters if present (but keep them)
-          const greekPattern = /[\u0370-\u03FF\u1F00-\u1FFF]/g;
-          const greekMatches = sanitized.match(greekPattern);
-          if (greekMatches) {
-            console.log('[PDF SANITIZE] Greek letters found (preserving):', greekMatches.join(', '));
           }
 
           if (sanitized !== originalText) {
