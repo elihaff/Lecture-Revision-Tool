@@ -1039,24 +1039,27 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 document.execCommand(execCmd, false, null);
               } else {
                 // Turning OFF
-                console.log(`[FORMAT] Turning OFF`);
+                console.log(`[FORMAT] Turning OFF - inserting plain text to break formatting`);
 
+                // Insert a zero-width space to break out of formatting
+                // This is more reliable than trying to use execCommand
                 if (isInsideTag && formattedNode) {
-                  // Cursor is inside a formatted tag - move it outside
-                  console.log(`[FORMAT] Moving cursor outside formatted tag`);
+                  // Create a text node with zero-width space after the formatted node
+                  const breakNode = document.createTextNode('\u200B');
+                  formattedNode.parentNode.insertBefore(breakNode, formattedNode.nextSibling);
+
+                  // Move cursor to after the zero-width space
                   const newRange = document.createRange();
-                  newRange.setStartAfter(formattedNode);
+                  newRange.setStartAfter(breakNode);
                   newRange.collapse(true);
                   sel.removeAllRanges();
                   sel.addRange(newRange);
 
-                  // Now call execCommand to turn off formatting for future typing
-                  // Since we're outside the tag, this won't create nested tags
-                  document.execCommand(execCmd, false, null);
+                  console.log(`[FORMAT] Inserted break character after formatted text`);
                 } else {
-                  // Not inside a tag, just toggle off with execCommand
-                  console.log(`[FORMAT] Using execCommand to toggle OFF`);
-                  document.execCommand(execCmd, false, null);
+                  // Not inside a tag, just insert a zero-width space
+                  document.execCommand('insertText', false, '\u200B');
+                  console.log(`[FORMAT] Inserted break character at cursor`);
                 }
               }
             } else {
