@@ -832,7 +832,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 // Check if we need to wrap to next line
                 if (currentX + wordWidth > startX + maxWidth && currentX > startX) {
                   currentX = startX;
-                  currentY += lineHeight;
+                  currentY += lineHeight * 1.5;
 
                   // Check for page break
                   if (currentY > pageHeight - margin) {
@@ -859,7 +859,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   }
 
                   currentX = startX;
-                  currentY += lineHeight;
+                  currentY += lineHeight * 1.5;
                   if (currentY > pageHeight - margin) {
                     doc.addPage();
                     currentY = margin;
