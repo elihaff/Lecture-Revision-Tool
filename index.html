@@ -996,6 +996,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             if (isCollapsed) {
               console.log(`[FORMAT] ${execCmd}: Toggling mode (no selection)`);
 
+              // Check if we're currently in this formatting mode
+              const wasActive = activeFormatting[execCmd];
+              console.log(`[FORMAT] Was active: ${wasActive}`);
+
               // Update formatting state
               const newFormatting = { ...activeFormatting };
 
@@ -1008,8 +1012,45 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               setActiveFormatting(newFormatting);
               console.log(`[FORMAT] New formatting state:`, newFormatting);
 
-              // Apply/remove the formatting at cursor using execCommand
-              document.execCommand(execCmd, false, null);
+              // Only call execCommand if we're turning ON (not turning OFF)
+              // When turning OFF, we need to check the DOM and manually remove tags
+              if (!wasActive) {
+                // Turning ON - use execCommand
+                console.log(`[FORMAT] Turning ON - using execCommand`);
+                document.execCommand(execCmd, false, null);
+              } else {
+                // Turning OFF - need to manually remove the tag if cursor is inside one
+                console.log(`[FORMAT] Turning OFF - checking for tag to remove`);
+
+                // Check if cursor is inside a formatting tag
+                if (sel.rangeCount > 0) {
+                  const range = sel.getRangeAt(0);
+                  const container = range.commonAncestorContainer;
+
+                  let node = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
+                  let formattedNode = null;
+
+                  while (node && node !== textareaRef.current) {
+                    if (node.tagName === sameTag) {
+                      formattedNode = node;
+                      break;
+                    }
+                    node = node.parentElement;
+                  }
+
+                  if (formattedNode) {
+                    console.log(`[FORMAT] Found tag to remove, manually unwrapping`);
+                    // Move cursor to end of the formatted node
+                    const newRange = document.createRange();
+                    newRange.setStartAfter(formattedNode);
+                    newRange.collapse(true);
+                    sel.removeAllRanges();
+                    sel.addRange(newRange);
+                  } else {
+                    console.log(`[FORMAT] No tag found at cursor position`);
+                  }
+                }
+              }
             } else {
               // Text is selected - format the selection
               // Save the current selection
