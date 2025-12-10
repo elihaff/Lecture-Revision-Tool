@@ -676,8 +676,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Remove any remaining HTML tags
           str = str.replace(/<[^>]+>/g, '');
 
-          // Clean up excessive newlines
-          str = str.replace(/\n{3,}/g, '\n\n');
+          // Clean up excessive newlines - keep only single newlines
+          str = str.replace(/\n{2,}/g, '\n');
 
           // Parse formatting tags
           const parts = [];
