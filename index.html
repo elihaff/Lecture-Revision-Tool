@@ -982,52 +982,53 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
         const execCmd = commandMap[command];
         if (execCmd) {
-          // DEBUG LOGGING
           const sel = window.getSelection();
-          const htmlBefore = textareaRef.current.innerHTML;
-          const superBefore = document.queryCommandState('superscript');
-          const subBefore = document.queryCommandState('subscript');
-          console.log(`[FORMAT] Command: ${execCmd}`);
-          console.log(`[FORMAT] States BEFORE: super=${superBefore}, sub=${subBefore}`);
-          console.log(`[FORMAT] Selection: rangeCount=${sel.rangeCount}, type="${sel.type}", isCollapsed=${sel.isCollapsed}`);
-          if (sel.rangeCount > 0) {
-            const range = sel.getRangeAt(0);
-            console.log(`[FORMAT] Selection text: "${sel.toString()}", startOffset=${range.startOffset}, endOffset=${range.endOffset}`);
-          }
-          console.log(`[FORMAT] HTML BEFORE: ${htmlBefore.substring(0, 100)}`);
 
-          // If there's no selection (collapsed cursor), we can't apply formatting
-          // This is the problem - execCommand needs a selection to work on
-          if (sel.isCollapsed) {
-            console.log(`[FORMAT] ⚠️ WARNING: No text selected! execCommand will not apply formatting.`);
-          }
-
-          // For superscript/subscript, turn off opposite formatting first
+          // For superscript/subscript, we need special handling
           if (execCmd === 'superscript' || execCmd === 'subscript') {
             const oppositeCmd = execCmd === 'superscript' ? 'subscript' : 'superscript';
-            const oppositeIsActive = document.queryCommandState(oppositeCmd);
+            const oppositeTag = oppositeCmd === 'superscript' ? 'SUP' : 'SUB';
+            const sameTag = execCmd === 'superscript' ? 'SUP' : 'SUB';
 
-            // Turn off opposite formatting if it's on
-            if (oppositeIsActive) {
-              console.log(`[FORMAT] Turning off opposite: ${oppositeCmd}`);
+            // Check if selection contains the same or opposite formatting
+            let hasSameFormat = false;
+            let hasOppositeFormat = false;
+
+            if (sel.rangeCount > 0) {
+              const range = sel.getRangeAt(0);
+              const container = range.commonAncestorContainer;
+
+              // Check parent elements for formatting tags
+              let node = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
+              while (node && node !== textareaRef.current) {
+                if (node.tagName === sameTag) hasSameFormat = true;
+                if (node.tagName === oppositeTag) hasOppositeFormat = true;
+                node = node.parentElement;
+              }
+            }
+
+            console.log(`[FORMAT] ${execCmd}: hasSame=${hasSameFormat}, hasOpposite=${hasOppositeFormat}`);
+
+            // Turn off opposite formatting if present
+            if (hasOppositeFormat) {
+              console.log(`[FORMAT] Removing opposite: ${oppositeCmd}`);
               document.execCommand(oppositeCmd, false, null);
             }
+
+            // If same formatting exists, remove it; otherwise add it
+            if (hasSameFormat) {
+              console.log(`[FORMAT] Removing ${execCmd} (already formatted)`);
+              document.execCommand(execCmd, false, null); // This removes it
+            } else {
+              console.log(`[FORMAT] Adding ${execCmd}`);
+              document.execCommand(execCmd, false, null); // This adds it
+            }
+          } else {
+            // For other formatting (bold, italic, underline), just toggle
+            document.execCommand(execCmd, false, null);
           }
 
-          // Always toggle the requested formatting (this handles both on and off)
-          console.log(`[FORMAT] Executing: ${execCmd}`);
-          document.execCommand(execCmd, false, null);
-
-          // DEBUG LOGGING AFTER
-          const htmlAfter = textareaRef.current.innerHTML;
-          const superAfter = document.queryCommandState('superscript');
-          const subAfter = document.queryCommandState('subscript');
-          console.log(`[FORMAT] States AFTER: super=${superAfter}, sub=${subAfter}`);
-          console.log(`[FORMAT] HTML AFTER: ${htmlAfter.substring(0, 100)}`);
-          console.log(`[FORMAT] Has nested <sup><sup>? ${htmlAfter.includes('<sup><sup>')}`);
-          console.log(`[FORMAT] ---`);
-
-          // Manually trigger input event to update React state (onInput handler will catch it)
+          // Manually trigger input event to update React state
           const inputEvent = new Event('input', { bubbles: true });
           textareaRef.current.dispatchEvent(inputEvent);
         }
