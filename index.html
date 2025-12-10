@@ -460,14 +460,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           let str = String(text);
 
           // Count <ul> nesting depth at each <li> to detect indentation
-          // Replace this with a more robust parser that tracks depth
-          let depth = 0;
+          // Start at -1 because first <ul> brings us to depth 0
+          let depth = -1;
           let result = '';
           let i = 0;
 
           while (i < str.length) {
             // Check for <ul> start
             if (str.substr(i, 3) === '<ul' || str.substr(i, 3) === '<UL') {
+              // If we're starting a nested list (depth >= 0), add a newline first
+              if (depth >= 0) {
+                result += '\n';
+              }
               depth++;
               // Skip to end of tag
               const endTag = str.indexOf('>', i);
@@ -477,7 +481,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
             // Check for </ul> end
             if (str.substr(i, 5) === '</ul>' || str.substr(i, 5) === '</UL>') {
-              depth = Math.max(0, depth - 1);
+              depth = Math.max(-1, depth - 1);
               i += 5;
               continue;
             }
@@ -485,8 +489,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             // Check for <li> start
             if (str.substr(i, 3) === '<li' || str.substr(i, 3) === '<LI') {
               // Add appropriate indentation based on current depth
-              const indentStr = '  '.repeat(depth);
-              const bullet = depth === 0 ? '• ' : depth === 1 ? '◦ ' : '▪ ';
+              const actualDepth = Math.max(0, depth);
+              const indentStr = '  '.repeat(actualDepth);
+              const bullet = actualDepth === 0 ? '• ' : actualDepth === 1 ? '◦ ' : '▪ ';
               result += indentStr + bullet;
 
               // Skip to end of opening <li> tag
@@ -517,6 +522,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
           // Convert <br> tags to newlines
           str = str.replace(/<br\s*\/?>/gi, '\n');
+
+          // Clean up double newlines that occur at list boundaries
+          str = str.replace(/\n\n+/g, '\n');
 
           // Replace special characters that don't render well in jsPDF
           str = str.replace(/→/g, '->');
