@@ -608,6 +608,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Clean up double newlines that occur at list boundaries
           str = str.replace(/\n\n+/g, '\n');
 
+          // Remove zero-width spaces used for formatting breaks
+          str = str.replace(/\u200B/g, '');
+
           // Replace special characters that don't render well in jsPDF
           str = str.replace(/→/g, '->');
           str = str.replace(/←/g, '<-');
