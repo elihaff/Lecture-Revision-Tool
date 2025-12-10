@@ -802,7 +802,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               if (words.length === 0 && lineIndex < lines.length - 1) {
                 // Empty line - just add a line break
                 currentX = startX;
-                const spacingMultiplier = 1.1;
+                const spacingMultiplier = 1.5;
                 currentY += lineHeight * spacingMultiplier;
                 if (currentY > pageHeight - margin) {
                   doc.addPage();
@@ -875,7 +875,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               if (lineIndex < lines.length - 1) {
                 currentX = startX;
                 // Use consistent spacing for all internal lines
-                const spacingMultiplier = 1.1;
+                const spacingMultiplier = 1.5;
                 currentY += lineHeight * spacingMultiplier;
 
                 if (currentY > pageHeight - margin) {
