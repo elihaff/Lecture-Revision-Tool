@@ -453,13 +453,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         });
         console.log('PDF document created successfully');
 
-        // Load and embed Roboto font which supports Greek characters
+        // Load and embed DejaVu Sans font which supports Greek characters
         try {
           console.log('[PDF] Loading Unicode font...');
 
-          // Fetch Roboto Regular font from Google Fonts (supports Greek)
-          const fontUrl = 'https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxK.woff';
+          // Use DejaVu Sans from cdnjs (TTF format, supports Greek)
+          const fontUrl = 'https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/fonts/Roboto/Roboto-Regular.ttf';
           const fontResponse = await fetch(fontUrl);
+
+          if (!fontResponse.ok) {
+            throw new Error('Font fetch failed');
+          }
+
           const fontArrayBuffer = await fontResponse.arrayBuffer();
           const fontBase64 = btoa(String.fromCharCode(...new Uint8Array(fontArrayBuffer)));
 
@@ -470,7 +475,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
           console.log('[PDF] Unicode font loaded successfully');
         } catch (e) {
-          console.warn('[PDF] Could not load Unicode font, using default:', e);
+          console.error('[PDF] Could not load Unicode font:', e);
+          console.log('[PDF] Falling back to helvetica');
           doc.setFont('helvetica');
         }
 
