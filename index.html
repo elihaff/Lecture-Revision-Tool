@@ -43,6 +43,27 @@
     [contenteditable] ul ul ul {
       list-style-type: square;
     }
+
+    /* Style for notes display (not editing) */
+    .notes-display ul {
+      margin-left: 20px;
+      list-style-type: disc;
+      margin-top: 0.5em;
+      margin-bottom: 0.5em;
+    }
+
+    .notes-display ul ul {
+      margin-left: 20px;
+      list-style-type: circle;
+    }
+
+    .notes-display ul ul ul {
+      list-style-type: square;
+    }
+
+    .notes-display li {
+      margin: 0.25em 0;
+    }
   </style>
 </head>
 <body>
@@ -438,10 +459,50 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           if (!text) return [{ text: '', bold: false }];
           let str = String(text);
 
-          // Handle list items - convert <ul><li> to bullet points
-          str = str.replace(/<ul[^>]*>/gi, '');
-          str = str.replace(/<\/ul>/gi, '');
-          str = str.replace(/<li[^>]*>/gi, '• ');
+          // Parse nested lists properly by tracking depth
+          // This handles both <ul> and contentEditable's margin-based indentation
+          let listDepth = 0;
+
+          // Convert nested <ul> to indented bullets
+          str = str.replace(/<ul[^>]*>/gi, () => {
+            listDepth++;
+            return '';
+          });
+
+          str = str.replace(/<\/ul>/gi, () => {
+            listDepth = Math.max(0, listDepth - 1);
+            return '';
+          });
+
+          // Convert <li> to bullets with proper indentation
+          str = str.replace(/<li[^>]*>/gi, (match) => {
+            // Check if this li has style attribute with margin/padding indicating nesting
+            const styleMatch = match.match(/style="([^"]*)"/);
+            let indent = 0;
+
+            if (styleMatch) {
+              const style = styleMatch[1];
+              // Look for margin-left or padding-left
+              const marginMatch = style.match(/margin-left:\s*(\d+)/);
+              const paddingMatch = style.match(/padding-left:\s*(\d+)/);
+
+              if (marginMatch) {
+                const pixels = parseInt(marginMatch[1]);
+                // Every ~40 pixels is one level of indentation
+                indent = Math.floor(pixels / 35);
+              } else if (paddingMatch) {
+                const pixels = parseInt(paddingMatch[1]);
+                indent = Math.floor(pixels / 35);
+              }
+            }
+
+            // Create indentation (2 spaces per level)
+            const indentStr = '  '.repeat(indent);
+            // Use different bullets for different levels
+            const bullet = indent === 0 ? '• ' : indent === 1 ? '◦ ' : '▪ ';
+            return indentStr + bullet;
+          });
+
           str = str.replace(/<\/li>/gi, '\n');
 
           // Handle divs and paragraphs - convert to line breaks
@@ -989,7 +1050,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-indigo-600 rounded-lg"><Icon name="brain" className="w-5 h-5" /></div>
-                <div><h1 className="font-semibold">Medical Lecture Study Assistant <span className="text-xs text-green-400 font-bold bg-green-900 px-2 py-1 rounded">v2.2 FIXED</span></h1><p className="text-xs text-slate-400">Notes + Anki cards from PDF slides</p></div>
+                <div><h1 className="font-semibold">Medical Lecture Study Assistant <span className="text-xs text-green-400 font-bold bg-green-900 px-2 py-1 rounded">v2.3</span></h1><p className="text-xs text-slate-400">Notes + Anki cards from PDF slides</p></div>
               </div>
               <button onClick={() => setShowSettings(!showSettings)} className={`p-2 rounded-lg ${apiKey ? 'bg-green-600/20 text-green-400' : 'bg-orange-600/20 text-orange-400'}`}><Icon name="settings" className="w-5 h-5" /></button>
             </div>
@@ -1213,7 +1274,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                                   </div>
                                 ) : (
                                   <>
-                                    <span className="flex-1" dangerouslySetInnerHTML={{ __html: p }} />
+                                    <span className="flex-1 notes-display" dangerouslySetInnerHTML={{ __html: p }} />
                                     <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity">
                                       <button onClick={() => startEditPoint(i, j)} className="px-1 py-0.5 bg-slate-600 hover:bg-slate-500 rounded text-xs">
                                         <Icon name="edit-2" className="w-3 h-3" />
