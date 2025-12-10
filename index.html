@@ -687,6 +687,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
           let currentX = startX;
           let currentY = startY;
+          const wrapIndent = 8; // Indent wrapped lines by 8 units
 
           parts.forEach((part, partIndex) => {
             if (!part.text || part.text.length === 0) return;
@@ -758,10 +759,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
                 // Check if we need to wrap to next line
                 if (currentX + wordWidth > startX + maxWidth && currentX > startX) {
-                  currentX = startX;
+                  currentX = startX + wrapIndent; // Indent wrapped lines
                   const bulletPattern = /^\s{3,}[-◦•▪]\s/;
                   const isSubBullet = bulletPattern.test(line);
-                  const spacingMultiplier = isSubBullet ? 1.1 : 1.5;
+                  const spacingMultiplier = isSubBullet ? 1.0 : 1.1; // Tighter spacing for wrapped lines
                   currentY += lineHeight * spacingMultiplier;
 
                   // Check for page break
@@ -788,10 +789,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                     doc.text(wordText, currentX, renderY);
                   }
 
-                  currentX = startX;
+                  currentX = startX + wrapIndent; // Indent wrapped lines
                   const bulletPattern = /^\s{3,}[-◦•▪]\s/;
                   const isSubBullet = bulletPattern.test(line);
-                  const spacingMultiplier = isSubBullet ? 1.1 : 1.5;
+                  const spacingMultiplier = isSubBullet ? 1.0 : 1.1; // Tighter spacing for wrapped lines
                   currentY += lineHeight * spacingMultiplier;
                   if (currentY > pageHeight - margin) {
                     doc.addPage();
