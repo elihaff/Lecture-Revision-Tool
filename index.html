@@ -560,15 +560,24 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           let depth = -1;
           let result = '';
           let i = 0;
+          // Track if first list follows text (for indentation)
+          let indentFirstLevel = false;
 
           while (i < str.length) {
             // Check for <ul> start
             if (str.substr(i, 3) === '<ul' || str.substr(i, 3) === '<UL') {
+              // Check if there's text before this list on the current line
+              const hasTextBefore = result.length > 0 && !result.endsWith('\n');
+
               // Add a newline before list if:
               // 1. We're already in a list (nested), OR
               // 2. There's already text on the current line
-              if (depth >= 0 || (result.length > 0 && !result.endsWith('\n'))) {
+              if (depth >= 0 || hasTextBefore) {
                 result += '\n';
+                // If this is the first list and it follows text, indent its items
+                if (depth === -1 && hasTextBefore) {
+                  indentFirstLevel = true;
+                }
               }
               depth++;
               // Skip to end of tag
@@ -580,6 +589,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             // Check for </ul> end
             if (str.substr(i, 5) === '</ul>' || str.substr(i, 5) === '</UL>') {
               depth = Math.max(-1, depth - 1);
+              // Reset indent flag when returning to top level
+              if (depth === -1) {
+                indentFirstLevel = false;
+              }
               i += 5;
               continue;
             }
@@ -587,7 +600,13 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             // Check for <li> start
             if (str.substr(i, 3) === '<li' || str.substr(i, 3) === '<LI') {
               // Add appropriate indentation based on current depth
-              const actualDepth = Math.max(0, depth);
+              let actualDepth = Math.max(0, depth);
+
+              // If first level list follows text (like "Topic: <ul>"), add extra indent
+              if (actualDepth === 0 && indentFirstLevel) {
+                actualDepth = 1;
+              }
+
               // Use 3 spaces per level for indentation
               const indentStr = '   '.repeat(actualDepth);
               // Use bullet circle for main items, dash for sub-items
