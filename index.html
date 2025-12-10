@@ -763,8 +763,15 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             const lines = part.text.split('\n');
 
             lines.forEach((line, lineIndex) => {
+              // Check for leading spaces (indentation)
+              const leadingSpaces = line.match(/^ */)[0];
+              const leadingSpaceWidth = leadingSpaces.length > 0 ? doc.getTextWidth(leadingSpaces) : 0;
+
+              // Remove leading spaces for word splitting, we'll add them back with positioning
+              const trimmedLine = line.trimStart();
+
               // Split by spaces but preserve them
-              const words = line.split(' ').filter(w => w.length > 0);
+              const words = trimmedLine.split(' ').filter(w => w.length > 0);
 
               if (words.length === 0 && lineIndex < lines.length - 1) {
                 // Empty line - just add a line break
@@ -775,6 +782,11 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   currentY = margin;
                 }
                 return;
+              }
+
+              // Add leading space width to current X position for indentation
+              if (leadingSpaceWidth > 0 && currentX === startX) {
+                currentX += leadingSpaceWidth;
               }
 
               words.forEach((word, wordIndex) => {
