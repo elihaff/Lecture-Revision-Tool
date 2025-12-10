@@ -983,12 +983,24 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         const execCmd = commandMap[command];
         if (execCmd) {
           // DEBUG LOGGING
+          const sel = window.getSelection();
           const htmlBefore = textareaRef.current.innerHTML;
           const superBefore = document.queryCommandState('superscript');
           const subBefore = document.queryCommandState('subscript');
           console.log(`[FORMAT] Command: ${execCmd}`);
           console.log(`[FORMAT] States BEFORE: super=${superBefore}, sub=${subBefore}`);
+          console.log(`[FORMAT] Selection: rangeCount=${sel.rangeCount}, type="${sel.type}", isCollapsed=${sel.isCollapsed}`);
+          if (sel.rangeCount > 0) {
+            const range = sel.getRangeAt(0);
+            console.log(`[FORMAT] Selection text: "${sel.toString()}", startOffset=${range.startOffset}, endOffset=${range.endOffset}`);
+          }
           console.log(`[FORMAT] HTML BEFORE: ${htmlBefore.substring(0, 100)}`);
+
+          // If there's no selection (collapsed cursor), we can't apply formatting
+          // This is the problem - execCommand needs a selection to work on
+          if (sel.isCollapsed) {
+            console.log(`[FORMAT] ⚠️ WARNING: No text selected! execCommand will not apply formatting.`);
+          }
 
           // For superscript/subscript, turn off opposite formatting first
           if (execCmd === 'superscript' || execCmd === 'subscript') {
