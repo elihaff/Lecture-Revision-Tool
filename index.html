@@ -982,6 +982,14 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
         const execCmd = commandMap[command];
         if (execCmd) {
+          // DEBUG LOGGING
+          const htmlBefore = textareaRef.current.innerHTML;
+          const superBefore = document.queryCommandState('superscript');
+          const subBefore = document.queryCommandState('subscript');
+          console.log(`[FORMAT] Command: ${execCmd}`);
+          console.log(`[FORMAT] States BEFORE: super=${superBefore}, sub=${subBefore}`);
+          console.log(`[FORMAT] HTML BEFORE: ${htmlBefore.substring(0, 100)}`);
+
           // For superscript/subscript, turn off opposite formatting first
           if (execCmd === 'superscript' || execCmd === 'subscript') {
             const oppositeCmd = execCmd === 'superscript' ? 'subscript' : 'superscript';
@@ -989,12 +997,23 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
             // Turn off opposite formatting if it's on
             if (oppositeIsActive) {
+              console.log(`[FORMAT] Turning off opposite: ${oppositeCmd}`);
               document.execCommand(oppositeCmd, false, null);
             }
           }
 
           // Always toggle the requested formatting (this handles both on and off)
+          console.log(`[FORMAT] Executing: ${execCmd}`);
           document.execCommand(execCmd, false, null);
+
+          // DEBUG LOGGING AFTER
+          const htmlAfter = textareaRef.current.innerHTML;
+          const superAfter = document.queryCommandState('superscript');
+          const subAfter = document.queryCommandState('subscript');
+          console.log(`[FORMAT] States AFTER: super=${superAfter}, sub=${subAfter}`);
+          console.log(`[FORMAT] HTML AFTER: ${htmlAfter.substring(0, 100)}`);
+          console.log(`[FORMAT] Has nested <sup><sup>? ${htmlAfter.includes('<sup><sup>')}`);
+          console.log(`[FORMAT] ---`);
 
           // Manually trigger input event to update React state (onInput handler will catch it)
           const inputEvent = new Event('input', { bubbles: true });
