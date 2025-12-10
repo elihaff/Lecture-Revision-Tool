@@ -541,6 +541,13 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           if (!text) return [{ text: '', bold: false }];
           let str = String(text);
 
+          // Decode any URL-encoded characters (e.g., %20 for space, %0A for newline)
+          try {
+            str = decodeURIComponent(str);
+          } catch (e) {
+            // If decoding fails, use original string
+          }
+
           // Count <ul> nesting depth at each <li> to detect indentation
           // Start at -1 because first <ul> brings us to depth 0
           let depth = -1;
@@ -597,10 +604,11 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           str = result;
 
           // Handle divs and paragraphs - convert to line breaks
-          str = str.replace(/<div[^>]*>/gi, '');
-          str = str.replace(/<\/div>/gi, '\n');
-          str = str.replace(/<p[^>]*>/gi, '');
-          str = str.replace(/<\/p>/gi, '\n');
+          // Opening <div> and <p> tags create a new line (except the first one)
+          str = str.replace(/<div[^>]*>/gi, '\n');
+          str = str.replace(/<\/div>/gi, '');
+          str = str.replace(/<p[^>]*>/gi, '\n');
+          str = str.replace(/<\/p>/gi, '');
 
           // Convert <br> tags to newlines
           str = str.replace(/<br\s*\/?>/gi, '\n');
