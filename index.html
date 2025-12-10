@@ -587,8 +587,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               // Add appropriate indentation based on current depth
               const actualDepth = Math.max(0, depth);
               const indentStr = '  '.repeat(actualDepth);
-              const bullet = actualDepth === 0 ? '• ' : actualDepth === 1 ? '◦ ' : '▪ ';
-              result += indentStr + bullet;
+              // Use ASCII-safe bullet characters instead of Unicode
+              const bullet = actualDepth === 0 ? '- ' : actualDepth === 1 ? '  - ' : '    - ';
+              result += bullet;
 
               // Skip to end of opening <li> tag
               const endTag = str.indexOf('>', i);
