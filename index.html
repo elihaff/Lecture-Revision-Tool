@@ -974,9 +974,14 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             const parts = parseTextForPDF(point);
             const bulletParts = [{ text: '•  ', bold: false }, ...parts];
 
+            // Check if this point ends with a sub-bullet (indented line)
+            const lastPart = parts[parts.length - 1];
+            const endsWithSubBullet = lastPart && lastPart.text && lastPart.text.match(/\n?\s{3,}-\s/);
+
             doc.setTextColor(...black);
             y = addMixedText(bulletParts, margin, y, 11, 6, contentWidth, black);
-            y += 7;
+            // Use less spacing after sub-bullet lists
+            y += endsWithSubBullet ? 3 : 7;
           });
           y += 2;
         });
