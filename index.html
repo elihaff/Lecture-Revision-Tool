@@ -802,7 +802,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               if (words.length === 0 && lineIndex < lines.length - 1) {
                 // Empty line - just add a line break
                 currentX = startX;
-                currentY += lineHeight;
+                const nextLine = lines[lineIndex + 1];
+                const nextLineIndented = nextLine && nextLine.match(/^   /);
+                const spacingMultiplier = nextLineIndented ? 0.7 : 1.2;
+                currentY += lineHeight * spacingMultiplier;
                 if (currentY > pageHeight - margin) {
                   doc.addPage();
                   currentY = margin;
@@ -870,7 +873,15 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               // Handle line break from newline character
               if (lineIndex < lines.length - 1) {
                 currentX = startX;
-                currentY += lineHeight;
+                // Check if next line is indented (sub-bullet) - use smaller spacing
+                const nextLine = lines[lineIndex + 1];
+                const nextLineIndented = nextLine && nextLine.match(/^   /); // 3 spaces = indented
+                const thisLineIndented = line.match(/^   /);
+
+                // Use smaller spacing for sub-bullets, larger for main bullets
+                const spacingMultiplier = (thisLineIndented || nextLineIndented) ? 0.7 : 1.2;
+                currentY += lineHeight * spacingMultiplier;
+
                 if (currentY > pageHeight - margin) {
                   doc.addPage();
                   currentY = margin;
@@ -967,7 +978,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
             doc.setTextColor(...black);
             y = addMixedText(bulletParts, margin, y, 11, 8, contentWidth, black);
-            y += 3;
+            y += 4;
           });
           y += 2;
         });
