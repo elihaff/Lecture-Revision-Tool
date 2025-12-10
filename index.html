@@ -804,7 +804,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 currentX = startX;
                 const nextLine = lines[lineIndex + 1];
                 const nextLineIndented = nextLine && nextLine.match(/^   /);
-                const spacingMultiplier = nextLineIndented ? 0.7 : 1.5;
+                const spacingMultiplier = nextLineIndented ? 0.7 : 2.0;
                 currentY += lineHeight * spacingMultiplier;
                 if (currentY > pageHeight - margin) {
                   doc.addPage();
@@ -879,7 +879,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 const thisLineIndented = line.match(/^   /);
 
                 // Use smaller spacing for sub-bullets, larger for main bullets
-                const spacingMultiplier = (thisLineIndented || nextLineIndented) ? 0.7 : 1.5;
+                const spacingMultiplier = (thisLineIndented || nextLineIndented) ? 0.7 : 2.0;
                 currentY += lineHeight * spacingMultiplier;
 
                 if (currentY > pageHeight - margin) {
