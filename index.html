@@ -122,6 +122,7 @@
       const [editingNote, setEditingNote] = useState(null); // {sectionIndex, pointIndex, value} or {type: 'section', sectionIndex, value} or {type: 'lo', index, value}
       const fileInputRef = useRef(null);
       const textareaRef = useRef(null);
+      const cardTextareaRef = useRef(null);
 
       useEffect(() => { const saved = localStorage.getItem('anthropic_api_key'); if (saved) setApiKey(saved); }, []);
 
@@ -789,57 +790,72 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         setEditingNote({ type: 'point', sectionIndex, pointIndex: updated.notes[sectionIndex].points.length - 1, value: '' });
       };
 
-      // Formatting functions for contentEditable
-      const insertFormatting = (tag) => {
-        if (!textareaRef.current) return;
-        textareaRef.current.focus();
+      // Formatting functions for textarea
+      const insertFormatting = (before, after) => {
+        if (!textareaRef.current || !editingNote) return;
+        const textarea = textareaRef.current;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const selectedText = editingNote.value.substring(start, end);
+        const beforeText = editingNote.value.substring(0, start);
+        const afterText = editingNote.value.substring(end);
 
-        // Map formatting tags to execCommand
-        const commandMap = {
-          '**': 'bold',
-          '<i>': 'italic',
-          '<u>': 'underline',
-          '<sup>': 'superscript',
-          '<sub>': 'subscript'
-        };
+        const newValue = beforeText + before + selectedText + after + afterText;
+        setEditingNote(p => ({ ...p, value: newValue }));
 
-        const command = commandMap[tag];
-        if (command) {
-          document.execCommand(command, false);
-        }
-
-        // Update state with new HTML
+        // Reset cursor position after formatting
         setTimeout(() => {
-          const html = textareaRef.current.innerHTML;
-          setEditingNote(p => ({ ...p, value: html }));
+          textarea.focus();
+          const newPos = start + before.length + selectedText.length + after.length;
+          textarea.setSelectionRange(newPos, newPos);
         }, 0);
       };
 
       const insertSymbol = (symbol) => {
-        if (!textareaRef.current) return;
-        textareaRef.current.focus();
+        if (!textareaRef.current || !editingNote) return;
+        const textarea = textareaRef.current;
+        const start = textarea.selectionStart;
+        const beforeText = editingNote.value.substring(0, start);
+        const afterText = editingNote.value.substring(start);
 
-        // Insert symbol at cursor position
-        document.execCommand('insertText', false, symbol);
+        const newValue = beforeText + symbol + afterText;
+        setEditingNote(p => ({ ...p, value: newValue }));
 
-        // Update state
         setTimeout(() => {
-          const html = textareaRef.current.innerHTML;
-          setEditingNote(p => ({ ...p, value: html }));
+          textarea.focus();
+          textarea.setSelectionRange(start + symbol.length, start + symbol.length);
         }, 0);
       };
 
       const insertBullet = () => {
-        if (!textareaRef.current) return;
-        textareaRef.current.focus();
+        if (!textareaRef.current || !editingNote) return;
+        const textarea = textareaRef.current;
+        const start = textarea.selectionStart;
+        const beforeText = editingNote.value.substring(0, start);
+        const afterText = editingNote.value.substring(start);
 
-        // Insert bullet with list formatting
-        document.execCommand('insertUnorderedList', false);
+        // Check if we're at the start of a line
+        const lastNewline = beforeText.lastIndexOf('\n');
+        const currentLineStart = lastNewline + 1;
+        const textSinceLineStart = beforeText.substring(currentLineStart);
 
-        // Update state
+        let newValue;
+        let cursorOffset;
+        if (textSinceLineStart.trim() === '') {
+          // At start of line or line is empty - just add bullet
+          newValue = beforeText + '• ' + afterText;
+          cursorOffset = 2;
+        } else {
+          // In middle of text - add newline then bullet
+          newValue = beforeText + '\n• ' + afterText;
+          cursorOffset = 3;
+        }
+
+        setEditingNote(p => ({ ...p, value: newValue }));
+
         setTimeout(() => {
-          const html = textareaRef.current.innerHTML;
-          setEditingNote(p => ({ ...p, value: html }));
+          textarea.focus();
+          textarea.setSelectionRange(start + cursorOffset, start + cursorOffset);
         }, 0);
       };
 
@@ -1124,11 +1140,11 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                                     {/* Formatting Toolbar */}
                                     <div className="flex flex-wrap gap-1 p-2 bg-red-900 rounded-lg border-2 border-red-500 mb-2">
                                       <div className="text-xs text-white font-bold w-full mb-1 bg-red-700 p-1">🎨 FORMATTING TOOLBAR:</div>
-                                      <button onClick={() => insertFormatting('**')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-bold" title="Bold">B</button>
-                                      <button onClick={() => insertFormatting('<i>')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs italic" title="Italic">I</button>
-                                      <button onClick={() => insertFormatting('<u>')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs underline" title="Underline">U</button>
-                                      <button onClick={() => insertFormatting('<sup>')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="Superscript">X<sup>2</sup></button>
-                                      <button onClick={() => insertFormatting('<sub>')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="Subscript">X<sub>2</sub></button>
+                                      <button onClick={() => insertFormatting('**', '**')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-bold" title="Bold">B</button>
+                                      <button onClick={() => insertFormatting('<i>', '</i>')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs italic" title="Italic">I</button>
+                                      <button onClick={() => insertFormatting('<u>', '</u>')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs underline" title="Underline">U</button>
+                                      <button onClick={() => insertFormatting('<sup>', '</sup>')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="Superscript">X<sup>2</sup></button>
+                                      <button onClick={() => insertFormatting('<sub>', '</sub>')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="Subscript">X<sub>2</sub></button>
                                       <button onClick={insertBullet} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="Bullet point">•</button>
                                       <span className="border-l border-slate-600 mx-1"></span>
                                       <button onClick={() => insertSymbol('α')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="alpha">α</button>
@@ -1147,38 +1163,54 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                                       <button onClick={() => insertSymbol('≈')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="approximately equal">≈</button>
                                       <button onClick={() => insertSymbol('°')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs" title="degree">°</button>
                                     </div>
-                                    <div
-                                      ref={textareaRef}
-                                      contentEditable
-                                      suppressContentEditableWarning
-                                      onInput={(e) => {
-                                        const html = e.currentTarget.innerHTML;
-                                        setEditingNote(p => ({ ...p, value: html }));
-                                      }}
-                                      onKeyDown={(e) => {
-                                        // Allow Enter to create new lines, only save on Ctrl/Cmd+Enter
-                                        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                                          e.preventDefault();
-                                          saveNoteEdit();
-                                        }
-                                        // Handle Tab for sub-bullets (indent)
-                                        if (e.key === 'Tab') {
-                                          e.preventDefault();
-                                          if (e.shiftKey) {
-                                            // Shift+Tab: outdent (remove one level of indentation)
-                                            document.execCommand('outdent', false);
-                                          } else {
-                                            // Tab: indent (add sub-bullet level)
-                                            document.execCommand('indent', false);
+                                    <div className="space-y-2">
+                                      <textarea
+                                        ref={textareaRef}
+                                        value={editingNote.value}
+                                        onChange={(e) => setEditingNote(p => ({ ...p, value: e.target.value }))}
+                                        onKeyDown={(e) => {
+                                          // Allow Enter to create new lines, only save on Ctrl/Cmd+Enter
+                                          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                                            e.preventDefault();
+                                            saveNoteEdit();
                                           }
-                                        }
-                                      }}
-                                      className="w-full bg-slate-700/50 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 min-h-[80px] max-h-[300px] overflow-y-auto resize-y"
-                                      style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}
-                                      dangerouslySetInnerHTML={{ __html: editingNote.value }}
-                                      autoFocus
-                                      data-placeholder="Press Enter for new line. Tab for sub-bullet. Use toolbar for formatting. Ctrl/Cmd+Enter to save."
-                                    />
+                                          // Handle Tab for sub-bullets (4 spaces indent)
+                                          if (e.key === 'Tab') {
+                                            e.preventDefault();
+                                            const start = e.target.selectionStart;
+                                            const end = e.target.selectionEnd;
+                                            const value = e.target.value;
+
+                                            if (e.shiftKey) {
+                                              // Shift+Tab: remove 4 spaces if they exist at start of line
+                                              const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+                                              const lineText = value.substring(lineStart, end);
+                                              if (lineText.startsWith('    ')) {
+                                                const newValue = value.substring(0, lineStart) + value.substring(lineStart + 4);
+                                                setEditingNote(p => ({ ...p, value: newValue }));
+                                                setTimeout(() => {
+                                                  e.target.selectionStart = e.target.selectionEnd = start - 4;
+                                                }, 0);
+                                              }
+                                            } else {
+                                              // Tab: add 4 spaces
+                                              const newValue = value.substring(0, start) + '    ' + value.substring(end);
+                                              setEditingNote(p => ({ ...p, value: newValue }));
+                                              setTimeout(() => {
+                                                e.target.selectionStart = e.target.selectionEnd = start + 4;
+                                              }, 0);
+                                            }
+                                          }
+                                        }}
+                                        className="w-full bg-slate-700/50 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 min-h-[80px] max-h-[200px] overflow-y-auto resize-y font-mono"
+                                        autoFocus
+                                        placeholder="Press Enter for new line. Tab for indent. Use toolbar for formatting. Ctrl/Cmd+Enter to save."
+                                      />
+                                      <div className="p-2 bg-slate-800/50 border border-slate-600 rounded-lg">
+                                        <div className="text-xs text-slate-400 mb-1">Preview:</div>
+                                        <div className="text-sm text-slate-300">{renderText(editingNote.value)}</div>
+                                      </div>
+                                    </div>
                                     <div className="flex gap-2">
                                       <button onClick={saveNoteEdit} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 rounded text-xs">Save</button>
                                       <button onClick={() => setEditingNote(null)} className="px-2 py-1 bg-slate-600 hover:bg-slate-500 rounded text-xs">Cancel</button>
@@ -1295,13 +1327,31 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                                     className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
                                     placeholder="Front (question)"
                                   />
-                                  <textarea
-                                    value={editingCard.back}
-                                    onChange={(e) => setEditingCard(p => ({ ...p, back: e.target.value }))}
-                                    className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 min-h-[60px]"
-                                    placeholder="Back (answer)"
-                                    rows={2}
-                                  />
+                                  {/* Formatting Toolbar for Card Back */}
+                                  <div className="flex flex-wrap gap-1 p-2 bg-slate-800/50 rounded-lg border border-slate-600">
+                                    <div className="text-xs text-slate-500 w-full mb-1">Format answer:</div>
+                                    <button onClick={() => { const ref = cardTextareaRef; const before = '**', after = '**'; if (!ref.current) return; const ta = ref.current; const s = ta.selectionStart, e = ta.selectionEnd; setEditingCard(p => ({ ...p, back: p.back.substring(0,s) + before + p.back.substring(s,e) + after + p.back.substring(e) })); setTimeout(() => ta.setSelectionRange(s+before.length+e-s+after.length, s+before.length+e-s+after.length), 0); }} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-bold">B</button>
+                                    <button onClick={() => { const ref = cardTextareaRef; const before = '<i>', after = '</i>'; if (!ref.current) return; const ta = ref.current; const s = ta.selectionStart, e = ta.selectionEnd; setEditingCard(p => ({ ...p, back: p.back.substring(0,s) + before + p.back.substring(s,e) + after + p.back.substring(e) })); setTimeout(() => ta.setSelectionRange(s+before.length+e-s+after.length, s+before.length+e-s+after.length), 0); }} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs italic">I</button>
+                                    <button onClick={() => { const ref = cardTextareaRef; const before = '<u>', after = '</u>'; if (!ref.current) return; const ta = ref.current; const s = ta.selectionStart, e = ta.selectionEnd; setEditingCard(p => ({ ...p, back: p.back.substring(0,s) + before + p.back.substring(s,e) + after + p.back.substring(e) })); setTimeout(() => ta.setSelectionRange(s+before.length+e-s+after.length, s+before.length+e-s+after.length), 0); }} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs underline">U</button>
+                                    <span className="border-l border-slate-600 mx-1"></span>
+                                    {essentialSymbols.slice(0,8).map(({ symbol }) => (
+                                      <button key={symbol} onClick={() => { if (!cardTextareaRef.current) return; const ta = cardTextareaRef.current; const s = ta.selectionStart; setEditingCard(p => ({ ...p, back: p.back.substring(0,s) + symbol + p.back.substring(s) })); setTimeout(() => ta.setSelectionRange(s+symbol.length, s+symbol.length), 0); }} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">{symbol}</button>
+                                    ))}
+                                  </div>
+                                  <div className="space-y-2">
+                                    <textarea
+                                      ref={cardTextareaRef}
+                                      value={editingCard.back}
+                                      onChange={(e) => setEditingCard(p => ({ ...p, back: e.target.value }))}
+                                      className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 min-h-[60px] font-mono"
+                                      placeholder="Back (answer) - use **bold** <i>italic</i>"
+                                      rows={2}
+                                    />
+                                    <div className="p-2 bg-slate-800/50 border border-slate-600 rounded-lg">
+                                      <div className="text-xs text-slate-400 mb-1">Preview:</div>
+                                      <div className="text-sm text-slate-300">{renderText(editingCard.back)}</div>
+                                    </div>
+                                  </div>
                                   <div className="flex gap-2 justify-end">
                                     <button onClick={() => setEditingCard(null)} className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 rounded-lg text-sm">Cancel</button>
                                     <button onClick={saveEditCard} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm">Save</button>
