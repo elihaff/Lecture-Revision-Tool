@@ -564,8 +564,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           while (i < str.length) {
             // Check for <ul> start
             if (str.substr(i, 3) === '<ul' || str.substr(i, 3) === '<UL') {
-              // If we're starting a nested list (depth >= 0), add a newline first
-              if (depth >= 0) {
+              // Add a newline before list if:
+              // 1. We're already in a list (nested), OR
+              // 2. There's already text on the current line
+              if (depth >= 0 || (result.length > 0 && !result.endsWith('\n'))) {
                 result += '\n';
               }
               depth++;
@@ -588,8 +590,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               const actualDepth = Math.max(0, depth);
               // Use 3 spaces per level for indentation
               const indentStr = '   '.repeat(actualDepth);
-              // Use ASCII-safe dash for bullet
-              result += indentStr + '- ';
+              // Use bullet circle for main items, dash for sub-items
+              const bullet = actualDepth === 0 ? '• ' : '- ';
+              result += indentStr + bullet;
 
               // Skip to end of opening <li> tag
               const endTag = str.indexOf('>', i);
