@@ -441,6 +441,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
       };
 
       const exportPDF = () => {
+        console.log('===== PDF EXPORT STARTED =====');
         if (!notes) return;
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF({
@@ -448,6 +449,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           unit: 'mm',
           format: 'a4'
         });
+        console.log('PDF document created successfully');
 
         const pageWidth = doc.internal.pageSize.getWidth();
         const pageHeight = doc.internal.pageSize.getHeight();
@@ -604,6 +606,176 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Remove any remaining HTML tags
           str = str.replace(/<[^>]+>/g, '');
 
+          // Decode HTML entities (e.g., &nbsp;, &amp;, &lt;, &gt;, etc.)
+          const decodeHTMLEntities = (text) => {
+            const entities = {
+              '&nbsp;': ' ',
+              '&amp;': '&',
+              '&lt;': '<',
+              '&gt;': '>',
+              '&quot;': '"',
+              '&#39;': "'",
+              '&apos;': "'",
+              '&cent;': '¢',
+              '&pound;': '£',
+              '&yen;': '¥',
+              '&euro;': '€',
+              '&copy;': '©',
+              '&reg;': '®',
+              '&trade;': '™',
+              '&times;': '×',
+              '&divide;': '÷',
+              '&deg;': '°',
+              '&plusmn;': '±',
+              '&micro;': 'µ',
+              '&para;': '¶',
+              '&sect;': '§',
+              '&mdash;': '—',
+              '&ndash;': '–',
+              '&hellip;': '…',
+              '&lsquo;': ''',
+              '&rsquo;': ''',
+              '&ldquo;': '"',
+              '&rdquo;': '"',
+              '&bull;': '•',
+              '&rarr;': '→',
+              '&larr;': '←',
+              '&uarr;': '↑',
+              '&darr;': '↓',
+              '&harr;': '↔',
+              '&ne;': '≠',
+              '&le;': '≤',
+              '&ge;': '≥',
+              '&sum;': '∑',
+              '&prod;': '∏',
+              '&int;': '∫',
+              '&infin;': '∞',
+              '&radic;': '√',
+              '&alpha;': 'α',
+              '&beta;': 'β',
+              '&gamma;': 'γ',
+              '&delta;': 'δ',
+              '&epsilon;': 'ε',
+              '&theta;': 'θ',
+              '&lambda;': 'λ',
+              '&mu;': 'μ',
+              '&pi;': 'π',
+              '&sigma;': 'σ',
+              '&tau;': 'τ',
+              '&phi;': 'φ',
+              '&omega;': 'ω'
+            };
+
+            // Replace named entities
+            let decoded = text;
+            for (const [entity, char] of Object.entries(entities)) {
+              decoded = decoded.split(entity).join(char);
+            }
+
+            // Replace numeric entities (&#123; or &#xAB;)
+            decoded = decoded.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
+            decoded = decoded.replace(/&#x([0-9A-Fa-f]+);/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
+
+            return decoded;
+          };
+
+          str = decodeHTMLEntities(str);
+
+          // Handle Greek letters and special characters that don't render well in PDF
+          // Convert them to safe alternatives that won't cause rendering issues
+          const handleSpecialChars = (text) => {
+            const replacements = {
+              // Greek letters (lowercase)
+              'α': 'alpha',
+              'β': 'beta',
+              'γ': 'gamma',
+              'δ': 'delta',
+              'ε': 'epsilon',
+              'ζ': 'zeta',
+              'η': 'eta',
+              'θ': 'theta',
+              'ι': 'iota',
+              'κ': 'kappa',
+              'λ': 'lambda',
+              'μ': 'mu',
+              'ν': 'nu',
+              'ξ': 'xi',
+              'ο': 'omicron',
+              'π': 'pi',
+              'ρ': 'rho',
+              'ς': 'sigma',
+              'σ': 'sigma',
+              'τ': 'tau',
+              'υ': 'upsilon',
+              'φ': 'phi',
+              'χ': 'chi',
+              'ψ': 'psi',
+              'ω': 'omega',
+              // Greek letters (uppercase)
+              'Α': 'Alpha',
+              'Β': 'Beta',
+              'Γ': 'Gamma',
+              'Δ': 'Delta',
+              'Ε': 'Epsilon',
+              'Ζ': 'Zeta',
+              'Η': 'Eta',
+              'Θ': 'Theta',
+              'Ι': 'Iota',
+              'Κ': 'Kappa',
+              'Λ': 'Lambda',
+              'Μ': 'Mu',
+              'Ν': 'Nu',
+              'Ξ': 'Xi',
+              'Ο': 'Omicron',
+              'Π': 'Pi',
+              'Ρ': 'Rho',
+              'Σ': 'Sigma',
+              'Τ': 'Tau',
+              'Υ': 'Upsilon',
+              'Φ': 'Phi',
+              'Χ': 'Chi',
+              'Ψ': 'Psi',
+              'Ω': 'Omega',
+              // Characters with diacritics
+              'ā': 'a',
+              'ē': 'e',
+              'ī': 'i',
+              'ō': 'o',
+              'ū': 'u',
+              'Ā': 'A',
+              'Ē': 'E',
+              'Ī': 'I',
+              'Ō': 'O',
+              'Ū': 'U',
+              'ă': 'a',
+              'ĕ': 'e',
+              'ĭ': 'i',
+              'ŏ': 'o',
+              'ŭ': 'u',
+              // Keep plus-minus as text
+              '±': '+/-',
+              // Mathematical symbols
+              '≈': '~=',
+              '≠': '!=',
+              '≤': '<=',
+              '≥': '>=',
+              '∞': 'infinity',
+              '√': 'sqrt',
+              '∑': 'sum',
+              '∏': 'product',
+              '∫': 'integral'
+            };
+
+            let result = text;
+            for (const [char, replacement] of Object.entries(replacements)) {
+              result = result.split(char).join(replacement);
+            }
+
+            return result;
+          };
+
+          str = handleSpecialChars(str);
+
           // Clean up excessive newlines - keep only single newlines
           str = str.replace(/\n{2,}/g, '\n');
 
@@ -680,6 +852,71 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           return parts.length > 0 ? parts : [{ text: str, bold: false, italic: false, superscript: false, subscript: false }];
         };
 
+        // Helper to sanitize text for PDF rendering - removes characters that cause issues
+        const sanitizeForPDF = (text) => {
+          if (!text) return text;
+
+          const originalText = text;
+          let sanitized = String(text);
+
+          // Replace all Greek letters and special Unicode characters
+          const charMap = {
+            // Greek lowercase
+            'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon',
+            'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'ι': 'iota', 'κ': 'kappa',
+            'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron',
+            'π': 'pi', 'ρ': 'rho', 'ς': 'sigma', 'σ': 'sigma', 'τ': 'tau',
+            'υ': 'upsilon', 'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
+            // Greek uppercase
+            'Α': 'Alpha', 'Β': 'Beta', 'Γ': 'Gamma', 'Δ': 'Delta', 'Ε': 'Epsilon',
+            'Ζ': 'Zeta', 'Η': 'Eta', 'Θ': 'Theta', 'Ι': 'Iota', 'Κ': 'Kappa',
+            'Λ': 'Lambda', 'Μ': 'Mu', 'Ν': 'Nu', 'Ξ': 'Xi', 'Ο': 'Omicron',
+            'Π': 'Pi', 'Ρ': 'Rho', 'Σ': 'Sigma', 'Τ': 'Tau', 'Υ': 'Upsilon',
+            'Φ': 'Phi', 'Χ': 'Chi', 'Ψ': 'Psi', 'Ω': 'Omega',
+            // Characters with macron (line over)
+            'ā': 'a', 'ē': 'e', 'ī': 'i', 'ō': 'o', 'ū': 'u',
+            'Ā': 'A', 'Ē': 'E', 'Ī': 'I', 'Ō': 'O', 'Ū': 'U',
+            // Characters with breve
+            'ă': 'a', 'ĕ': 'e', 'ĭ': 'i', 'ŏ': 'o', 'ŭ': 'u',
+            // Other diacritics
+            'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ú': 'u',
+            'à': 'a', 'è': 'e', 'ì': 'i', 'ò': 'o', 'ù': 'u',
+            'â': 'a', 'ê': 'e', 'î': 'i', 'ô': 'o', 'û': 'u',
+            'ä': 'a', 'ë': 'e', 'ï': 'i', 'ö': 'o', 'ü': 'u',
+            'ã': 'a', 'õ': 'o', 'ñ': 'n',
+            // Math symbols
+            '±': '+/-', '≈': '~=', '≠': '!=', '≤': '<=', '≥': '>=',
+            '∞': 'inf', '√': 'sqrt', '∑': 'sum', '∏': 'prod', '∫': 'int',
+            '×': 'x', '÷': '/', '·': '.', '°': 'deg'
+          };
+
+          // Apply character replacements
+          for (const [char, replacement] of Object.entries(charMap)) {
+            if (sanitized.includes(char)) {
+              console.log('[PDF SANITIZE] Replacing', char, 'with', replacement);
+              sanitized = sanitized.split(char).join(replacement);
+            }
+          }
+
+          // Remove any remaining high Unicode characters that might cause issues
+          // Keep only ASCII printable characters, spaces, and common symbols
+          const hasNonAscii = /[^\x20-\x7E\n\r\t]/.test(sanitized);
+          if (hasNonAscii) {
+            console.warn('[PDF SANITIZE] Found non-ASCII characters, replacing with ?');
+            console.warn('[PDF SANITIZE] Text:', sanitized.substring(0, 100));
+            sanitized = sanitized.replace(/[^\x20-\x7E\n\r\t]/g, (match) => {
+              console.warn('[PDF SANITIZE] Char:', match, 'Code:', match.charCodeAt(0));
+              return '?';
+            });
+          }
+
+          if (sanitized !== originalText) {
+            console.log('[PDF SANITIZE] Changed:', originalText.substring(0, 50), '-->', sanitized.substring(0, 50));
+          }
+
+          return sanitized;
+        };
+
         // Helper to add text with mixed bold - returns new Y position
         const addMixedText = (parts, startX, startY, fontSize, lineHeight, maxWidth, color = black, isHTMLSubBullets = false) => {
           doc.setFontSize(fontSize);
@@ -691,6 +928,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
           parts.forEach((part, partIndex) => {
             if (!part.text || part.text.length === 0) return;
+
+            // Sanitize the text first to ensure width calculations are accurate
+            part.text = sanitizeForPDF(part.text);
 
             // Set font style based on formatting
             if (part.bold && part.italic) {
@@ -860,7 +1100,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               doc.addPage();
               currentY = margin;
             }
-            doc.text(line, x, currentY);
+            doc.text(sanitizeForPDF(line), x, currentY);
             currentY += lineHeight;
           });
           return currentY;
@@ -910,7 +1150,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           doc.setTextColor(...headerBlue);
           const sectionLines = doc.splitTextToSize(section.section || 'Section', contentWidth);
           sectionLines.forEach(line => {
-            doc.text(line, margin, y);
+            doc.text(sanitizeForPDF(line), margin, y);
             y += 6;
           });
           y += 2;
