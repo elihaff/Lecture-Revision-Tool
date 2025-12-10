@@ -146,7 +146,87 @@
       const cardTextareaRef = useRef(null);
       const isFormattingRef = useRef(false); // Flag to prevent ref callback interference during formatting
 
-      useEffect(() => { const saved = localStorage.getItem('anthropic_api_key'); if (saved) setApiKey(saved); }, []);
+      useEffect(() => {
+        const saved = localStorage.getItem('anthropic_api_key');
+        if (saved) setApiKey(saved);
+
+        // Load test data on mount for testing
+        const testData = {
+          notes: {
+            title: "Cardiac Physiology - Test Lecture",
+            learningObjectives: [
+              "Understand the cardiac cycle phases",
+              "Explain ECG waveform components",
+              "Describe coronary blood flow regulation"
+            ],
+            notes: [
+              {
+                section: "Cardiac Cycle",
+                points: [
+                  "<b>Systole</b>: Ventricles contract, ejecting blood into arteries",
+                  "<b>Diastole</b>: Ventricles relax, filling with blood from atria",
+                  "Pressure changes: <ul><li>Aortic pressure peaks during systole</li><li>Ventricular pressure drops during diastole</li></ul>",
+                  "Heart sounds: S<sub>1</sub> (mitral/tricuspid closure), S<sub>2</sub> (aortic/pulmonary closure)"
+                ]
+              },
+              {
+                section: "ECG Interpretation",
+                points: [
+                  "<b>P wave</b>: Atrial depolarization",
+                  "<b>QRS complex</b>: Ventricular depolarization (0.08-0.12s normal duration)",
+                  "<b>T wave</b>: Ventricular repolarization",
+                  "PR interval: Time from atrial to ventricular depolarization (0.12-0.20s)",
+                  "Abnormalities: <ul><li>Prolonged QT → risk of torsades de pointes</li><li>ST elevation → acute MI</li><li>Inverted T waves → ischaemia</li></ul>"
+                ]
+              },
+              {
+                section: "Coronary Blood Flow",
+                points: [
+                  "Occurs mainly during <i>diastole</i> (left ventricle compresses vessels during systole)",
+                  "Autoregulation via: <ul><li>Metabolic factors (adenosine, CO<sub>2</sub>, O<sub>2</sub>)</li><li>Myogenic response</li></ul>",
+                  "Coronary perfusion pressure = Aortic pressure - LV pressure",
+                  "<b>Coronary steal phenomenon</b>: Vasodilators can reduce perfusion to ischaemic areas"
+                ]
+              }
+            ]
+          },
+          flashcards: [
+            {
+              front: "What are the two main phases of the cardiac cycle?",
+              back: "<b>Systole</b> (contraction/ejection) and <b>Diastole</b> (relaxation/filling)",
+              tags: "cardiac-cycle, physiology"
+            },
+            {
+              front: "What does the P wave on an ECG represent?",
+              back: "Atrial depolarization",
+              tags: "ecg, electrophysiology"
+            },
+            {
+              front: "What is the normal PR interval duration?",
+              back: "0.12-0.20 seconds (120-200 ms)",
+              tags: "ecg, electrophysiology"
+            },
+            {
+              front: "When does most coronary blood flow occur?",
+              back: "During <i>diastole</i>, because the left ventricle compresses coronary vessels during systole",
+              tags: "coronary-circulation, physiology"
+            },
+            {
+              front: "What causes the S<sub>1</sub> heart sound?",
+              back: "Closure of the mitral and tricuspid valves at the start of systole",
+              tags: "cardiac-cycle, heart-sounds"
+            },
+            {
+              front: "What is the coronary steal phenomenon?",
+              back: "When vasodilators paradoxically reduce perfusion to ischaemic areas by dilating healthy vessels, 'stealing' blood flow",
+              tags: "coronary-circulation, pharmacology"
+            }
+          ]
+        };
+
+        setNotes(testData.notes);
+        setFlashcards(testData.flashcards);
+      }, []);
 
       const saveApiKey = (key) => { setApiKey(key); if (key) localStorage.setItem('anthropic_api_key', key); else localStorage.removeItem('anthropic_api_key'); };
 
@@ -1083,7 +1163,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-indigo-600 rounded-lg"><Icon name="brain" className="w-5 h-5" /></div>
-                <div><h1 className="font-semibold">Medical Lecture Study Assistant <span className="text-xs text-green-400 font-bold bg-green-900 px-2 py-1 rounded">v2.6 ✓</span></h1><p className="text-xs text-slate-400">Notes + Anki cards from PDF slides</p></div>
+                <div><h1 className="font-semibold">Medical Lecture Study Assistant <span className="text-xs text-green-400 font-bold bg-green-900 px-2 py-1 rounded">v2.7 TEST</span></h1><p className="text-xs text-slate-400">Notes + Anki cards from PDF slides</p></div>
               </div>
               <button onClick={() => setShowSettings(!showSettings)} className={`p-2 rounded-lg ${apiKey ? 'bg-green-600/20 text-green-400' : 'bg-orange-600/20 text-orange-400'}`}><Icon name="settings" className="w-5 h-5" /></button>
             </div>
