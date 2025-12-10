@@ -990,9 +990,16 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             const oppositeTag = oppositeCmd === 'superscript' ? 'SUP' : 'SUB';
             const sameTag = execCmd === 'superscript' ? 'SUP' : 'SUB';
 
+            // Save the current selection
+            let savedRange = null;
+            if (sel.rangeCount > 0) {
+              savedRange = sel.getRangeAt(0).cloneRange();
+            }
+
             // Check if selection contains the same or opposite formatting
             let hasSameFormat = false;
             let hasOppositeFormat = false;
+            let formattedNode = null;
 
             if (sel.rangeCount > 0) {
               const range = sel.getRangeAt(0);
@@ -1001,7 +1008,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               // Check parent elements for formatting tags
               let node = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
               while (node && node !== textareaRef.current) {
-                if (node.tagName === sameTag) hasSameFormat = true;
+                if (node.tagName === sameTag) {
+                  hasSameFormat = true;
+                  formattedNode = node;
+                }
                 if (node.tagName === oppositeTag) hasOppositeFormat = true;
                 node = node.parentElement;
               }
@@ -1013,15 +1023,29 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             if (hasOppositeFormat) {
               console.log(`[FORMAT] Removing opposite: ${oppositeCmd}`);
               document.execCommand(oppositeCmd, false, null);
+              // Restore selection after command
+              if (savedRange) {
+                sel.removeAllRanges();
+                sel.addRange(savedRange);
+              }
             }
 
-            // If same formatting exists, remove it; otherwise add it
-            if (hasSameFormat) {
-              console.log(`[FORMAT] Removing ${execCmd} (already formatted)`);
-              document.execCommand(execCmd, false, null); // This removes it
+            // If same formatting exists, we need to manually remove it
+            if (hasSameFormat && formattedNode) {
+              console.log(`[FORMAT] Manually removing ${sameTag.toLowerCase()} tag`);
+              // Get the text content and replace the formatted node with plain text
+              const textContent = formattedNode.textContent;
+              const textNode = document.createTextNode(textContent);
+              formattedNode.parentNode.replaceChild(textNode, formattedNode);
+
+              // Select the newly created text node
+              const newRange = document.createRange();
+              newRange.selectNodeContents(textNode);
+              sel.removeAllRanges();
+              sel.addRange(newRange);
             } else {
               console.log(`[FORMAT] Adding ${execCmd}`);
-              document.execCommand(execCmd, false, null); // This adds it
+              document.execCommand(execCmd, false, null);
             }
           } else {
             // For other formatting (bold, italic, underline), just toggle
