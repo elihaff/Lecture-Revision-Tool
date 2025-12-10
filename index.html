@@ -225,7 +225,7 @@
         };
 
         setNotes(testData.notes);
-        setFlashcards(testData.flashcards);
+        setCards(testData.flashcards);
       }, []);
 
       const saveApiKey = (key) => { setApiKey(key); if (key) localStorage.setItem('anthropic_api_key', key); else localStorage.removeItem('anthropic_api_key'); };
