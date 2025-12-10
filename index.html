@@ -803,8 +803,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 // Empty line - just add a line break
                 currentX = startX;
                 const nextLine = lines[lineIndex + 1];
-                const isSubBullet = /^\s{3,}-\s/.test(line) || /^\s{3,}◦\s/.test(line) || /^\s{3,}•\s/.test(line) ||
-                                   /^\s{3,}-\s/.test(nextLine) || /^\s{3,}◦\s/.test(nextLine) || /^\s{3,}•\s/.test(nextLine);
+                const bulletPattern = /^\s{3,}[-◦•▪]\s/;
+                const isSubBullet = bulletPattern.test(line) || bulletPattern.test(nextLine);
                 const spacingMultiplier = isSubBullet ? 1.1 : 1.5;
                 currentY += lineHeight * spacingMultiplier;
                 if (currentY > pageHeight - margin) {
@@ -835,7 +835,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 // Check if we need to wrap to next line
                 if (currentX + wordWidth > startX + maxWidth && currentX > startX) {
                   currentX = startX;
-                  const isSubBullet = /^\s{3,}-\s/.test(line) || /^\s{3,}◦\s/.test(line) || /^\s{3,}•\s/.test(line);
+                  const bulletPattern = /^\s{3,}[-◦•▪]\s/;
+                  const isSubBullet = bulletPattern.test(line);
                   const spacingMultiplier = isSubBullet ? 1.1 : 1.5;
                   currentY += lineHeight * spacingMultiplier;
 
@@ -864,7 +865,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   }
 
                   currentX = startX;
-                  const isSubBullet = /^\s{3,}-\s/.test(line) || /^\s{3,}◦\s/.test(line) || /^\s{3,}•\s/.test(line);
+                  const bulletPattern = /^\s{3,}[-◦•▪]\s/;
+                  const isSubBullet = bulletPattern.test(line);
                   const spacingMultiplier = isSubBullet ? 1.1 : 1.5;
                   currentY += lineHeight * spacingMultiplier;
                   if (currentY > pageHeight - margin) {
@@ -881,12 +883,15 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               // Handle line break from newline character
               if (lineIndex < lines.length - 1) {
                 currentX = startX;
-                // Check if current or next line is a sub-bullet or sub-sub-bullet
-                // Sub-bullets: "   - " (3+ spaces + dash)
-                // Sub-sub-bullets: "      - " or "      ◦ " (6+ spaces + dash/circle)
+                // Check if current or next line is any nested bullet level
+                // Sub-bullets: "   - " (3+ spaces + bullet char)
+                // Sub-sub-bullets: "      - " (6+ spaces + bullet char)
+                // Triple-sub-bullets: "         - " (9+ spaces + bullet char)
+                // Supports: dash (-), circle (◦), dot (•), or square (▪)
                 const nextLine = lines[lineIndex + 1];
-                const currentIsSubBullet = /^\s{3,}-\s/.test(line) || /^\s{3,}◦\s/.test(line) || /^\s{3,}•\s/.test(line);
-                const nextIsSubBullet = /^\s{3,}-\s/.test(nextLine) || /^\s{3,}◦\s/.test(nextLine) || /^\s{3,}•\s/.test(nextLine);
+                const bulletPattern = /^\s{3,}[-◦•▪]\s/;
+                const currentIsSubBullet = bulletPattern.test(line);
+                const nextIsSubBullet = bulletPattern.test(nextLine);
 
                 // Different spacing logic:
                 // - Leaving user-added sub-bullet/sub-sub-bullet: minimal spacing (0.15x)
