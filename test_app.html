@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>App Testing</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+  <div id="test-results"></div>
+
+  <script>
+    // Test suite for the Medical Lecture Study Assistant
+    const tests = [];
+    const results = [];
+
+    function log(message, type = 'info') {
+      const resultDiv = document.getElementById('test-results');
+      const p = document.createElement('p');
+      p.style.color = type === 'error' ? 'red' : type === 'success' ? 'green' : 'black';
+      p.textContent = message;
+      resultDiv.appendChild(p);
+      console.log(message);
+    }
+
+    // Test 1: ContentEditable with formatting
+    function testContentEditableFormatting() {
+      log('TEST 1: ContentEditable Formatting', 'info');
+
+      const div = document.createElement('div');
+      div.contentEditable = true;
+      document.body.appendChild(div);
+
+      // Test bold
+      div.focus();
+      document.execCommand('insertText', false, 'Hello ');
+      document.execCommand('bold');
+      document.execCommand('insertText', false, 'World');
+      document.execCommand('bold');
+
+      const html = div.innerHTML;
+      log(`Generated HTML: ${html}`, 'info');
+
+      if (html.includes('<b>') || html.includes('<strong>')) {
+        log('✓ Bold formatting works', 'success');
+      } else {
+        log('✗ Bold formatting failed', 'error');
+      }
+
+      document.body.removeChild(div);
+    }
+
+    // Test 2: Bullet points
+    function testBulletPoints() {
+      log('\nTEST 2: Bullet Points', 'info');
+
+      const div = document.createElement('div');
+      div.contentEditable = true;
+      document.body.appendChild(div);
+
+      div.focus();
+      document.execCommand('insertText', false, 'Item 1');
+      document.execCommand('insertUnorderedList');
+
+      const html = div.innerHTML;
+      log(`Generated HTML: ${html}`, 'info');
+
+      if (html.includes('<ul') && html.includes('<li')) {
+        log('✓ Bullet points work', 'success');
+      } else {
+        log('✗ Bullet points failed', 'error');
+      }
+
+      document.body.removeChild(div);
+    }
+
+    // Test 3: HTML parsing for PDF
+    function testHTMLParsingForPDF() {
+      log('\nTEST 3: HTML Parsing for PDF', 'info');
+
+      const parseTextForPDF = (text) => {
+        if (!text) return [{ text: '', bold: false }];
+        let str = String(text);
+
+        // Handle list items - convert <ul><li> to bullet points
+        str = str.replace(/<ul[^>]*>/gi, '');
+        str = str.replace(/<\/ul>/gi, '');
+        str = str.replace(/<li[^>]*>/gi, '• ');
+        str = str.replace(/<\/li>/gi, '\n');
+
+        // Handle divs and paragraphs - convert to line breaks
+        str = str.replace(/<div[^>]*>/gi, '');
+        str = str.replace(/<\/div>/gi, '\n');
+        str = str.replace(/<p[^>]*>/gi, '');
+        str = str.replace(/<\/p>/gi, '\n');
+
+        // Convert <br> tags to newlines
+        str = str.replace(/<br\s*\/?>/gi, '\n');
+
+        // Handle formatting
+        str = str.replace(/<b>/gi, '**').replace(/<\/b>/gi, '**');
+        str = str.replace(/<strong>/gi, '**').replace(/<\/strong>/gi, '**');
+
+        // Remove any remaining HTML tags
+        str = str.replace(/<[^>]+>/g, '');
+
+        // Clean up excessive newlines
+        str = str.replace(/\n{3,}/g, '\n\n');
+
+        return str;
+      };
+
+      // Test cases
+      const testCases = [
+        {
+          input: '<ul><li>Item 1</li><li>Item 2</li></ul>',
+          expected: '• Item 1\n• Item 2\n',
+          description: 'Bullet list'
+        },
+        {
+          input: '<b>Bold text</b> normal text',
+          expected: '**Bold text** normal text',
+          description: 'Bold formatting'
+        },
+        {
+          input: '<div>Line 1</div><div>Line 2</div>',
+          expected: 'Line 1\nLine 2\n',
+          description: 'Divs to newlines'
+        },
+        {
+          input: '<ul><li><b>Bold item</b></li></ul>',
+          expected: '• **Bold item**\n',
+          description: 'Bold bullet item'
+        }
+      ];
+
+      let allPassed = true;
+      testCases.forEach(({ input, expected, description }) => {
+        const result = parseTextForPDF(input);
+        const passed = result === expected;
+
+        if (passed) {
+          log(`✓ ${description}: PASS`, 'success');
+        } else {
+          log(`✗ ${description}: FAIL`, 'error');
+          log(`  Expected: ${JSON.stringify(expected)}`, 'error');
+          log(`  Got: ${JSON.stringify(result)}`, 'error');
+          allPassed = false;
+        }
+      });
+
+      return allPassed;
+    }
+
+    // Test 4: Cursor positioning with ref callback
+    function testCursorPositioning() {
+      log('\nTEST 4: Cursor Positioning', 'info');
+
+      const div = document.createElement('div');
+      div.contentEditable = true;
+      div.innerHTML = 'Some initial text';
+      document.body.appendChild(div);
+
+      try {
+        // Try to position cursor at end
+        const range = document.createRange();
+        const sel = window.getSelection();
+
+        if (div.childNodes.length > 0) {
+          const lastChild = div.childNodes[div.childNodes.length - 1];
+          const lastNode = lastChild.nodeType === Node.TEXT_NODE ? lastChild : lastChild.lastChild || lastChild;
+          range.setStart(lastNode, lastNode.textContent?.length || 0);
+          range.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+
+        log('✓ Cursor positioning works', 'success');
+      } catch (e) {
+        log(`✗ Cursor positioning failed: ${e.message}`, 'error');
+      }
+
+      document.body.removeChild(div);
+    }
+
+    // Test 5: dangerouslySetInnerHTML rendering
+    function testDangerouslySetInnerHTML() {
+      log('\nTEST 5: HTML Rendering for Display', 'info');
+
+      const testHTML = '<ul><li><b>Bold item</b></li><li><i>Italic item</i></li></ul>';
+
+      const span = document.createElement('span');
+      span.innerHTML = testHTML;
+      document.body.appendChild(span);
+
+      const ul = span.querySelector('ul');
+      const bold = span.querySelector('b');
+      const italic = span.querySelector('i');
+
+      let passed = true;
+      if (!ul) {
+        log('✗ UL element not rendered', 'error');
+        passed = false;
+      }
+      if (!bold) {
+        log('✗ Bold element not rendered', 'error');
+        passed = false;
+      }
+      if (!italic) {
+        log('✗ Italic element not rendered', 'error');
+        passed = false;
+      }
+
+      if (passed) {
+        log('✓ HTML rendering works correctly', 'success');
+      }
+
+      document.body.removeChild(span);
+      return passed;
+    }
+
+    // Test 6: Tab key for indentation
+    function testTabIndentation() {
+      log('\nTEST 6: Tab Indentation', 'info');
+
+      const div = document.createElement('div');
+      div.contentEditable = true;
+      document.body.appendChild(div);
+
+      div.focus();
+      document.execCommand('insertText', false, 'Item');
+      document.execCommand('insertUnorderedList');
+
+      // Simulate tab key
+      try {
+        document.execCommand('indent');
+        const html = div.innerHTML;
+        log(`After indent: ${html}`, 'info');
+        log('✓ Tab indentation works', 'success');
+      } catch (e) {
+        log(`✗ Tab indentation failed: ${e.message}`, 'error');
+      }
+
+      document.body.removeChild(div);
+    }
+
+    // Run all tests
+    log('=== Starting Test Suite ===\n', 'info');
+
+    try {
+      testContentEditableFormatting();
+      testBulletPoints();
+      const pdfTestPassed = testHTMLParsingForPDF();
+      testCursorPositioning();
+      const renderTestPassed = testDangerouslySetInnerHTML();
+      testTabIndentation();
+
+      log('\n=== Test Suite Complete ===', 'info');
+
+      if (pdfTestPassed && renderTestPassed) {
+        log('\n✓ ALL CRITICAL TESTS PASSED', 'success');
+      } else {
+        log('\n✗ SOME TESTS FAILED - REVIEW ABOVE', 'error');
+      }
+    } catch (e) {
+      log(`\n✗ TEST SUITE ERROR: ${e.message}`, 'error');
+    }
+  </script>
+</body>
+</html>

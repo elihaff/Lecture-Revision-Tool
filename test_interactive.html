@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Superscript/Subscript Toggle Test</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background: #1e293b; color: white; }
+    .editor {
+      background: #0f172a;
+      border: 2px solid #475569;
+      padding: 15px;
+      min-height: 200px;
+      margin: 20px 0;
+      border-radius: 8px;
+    }
+    .toolbar {
+      background: #334155;
+      padding: 10px;
+      margin-bottom: 10px;
+      border-radius: 8px;
+      display: flex;
+      gap: 10px;
+    }
+    button {
+      background: #4f46e5;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      cursor: pointer;
+      border-radius: 4px;
+      font-weight: bold;
+    }
+    button:hover { background: #4338ca; }
+    .log {
+      background: #0f172a;
+      padding: 15px;
+      margin-top: 20px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 12px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .log-entry { margin: 5px 0; }
+  </style>
+</head>
+<body>
+  <h1>🧪 Superscript/Subscript Toggle Test</h1>
+  <p>Click the buttons to test the toggle behavior. Watch the log below.</p>
+
+  <div class="toolbar">
+    <button onclick="insertFormatting('superscript')">Superscript (x²)</button>
+    <button onclick="insertFormatting('subscript')">Subscript (H₂O)</button>
+    <button onclick="insertFormatting('bold')">Bold</button>
+    <button onclick="clearLog()">Clear Log</button>
+  </div>
+
+  <div class="editor" contenteditable="true" id="editor">
+    Type here and test formatting... Try clicking superscript multiple times!
+  </div>
+
+  <div class="log" id="log"></div>
+
+  <script>
+    const editor = document.getElementById('editor');
+    const logDiv = document.getElementById('log');
+
+    function log(message) {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logDiv.appendChild(entry);
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function clearLog() {
+      logDiv.innerHTML = '';
+      log('Log cleared');
+    }
+
+    function insertFormatting(command) {
+      editor.focus();
+
+      const commandMap = {
+        'bold': 'bold',
+        'superscript': 'superscript',
+        'subscript': 'subscript'
+      };
+
+      const execCmd = commandMap[command];
+      if (!execCmd) return;
+
+      // Check states BEFORE executing
+      const superState = document.queryCommandState('superscript');
+      const subState = document.queryCommandState('subscript');
+      log(`BEFORE ${command}: super=${superState}, sub=${subState}`);
+
+      // Current implementation
+      if (execCmd === 'superscript' || execCmd === 'subscript') {
+        const oppositeCmd = execCmd === 'superscript' ? 'subscript' : 'superscript';
+        const oppositeIsActive = document.queryCommandState(oppositeCmd);
+
+        if (oppositeIsActive) {
+          log(`  → Turning off opposite: ${oppositeCmd}`);
+          document.execCommand(oppositeCmd, false, null);
+        }
+      }
+
+      log(`  → Executing: ${execCmd}`);
+      document.execCommand(execCmd, false, null);
+
+      // Check states AFTER executing
+      setTimeout(() => {
+        const superStateAfter = document.queryCommandState('superscript');
+        const subStateAfter = document.queryCommandState('subscript');
+        log(`AFTER ${command}: super=${superStateAfter}, sub=${subStateAfter}`);
+        log(`HTML: ${editor.innerHTML.substring(0, 100)}...`);
+        log('---');
+      }, 10);
+    }
+
+    // Initial log
+    log('Ready! Click buttons to test.');
+  </script>
+</body>
+</html>

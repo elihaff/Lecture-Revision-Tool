@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Visual Tests - WYSIWYG Editor</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #1e293b;
+      color: white;
+    }
+    .test-section {
+      background: #334155;
+      border: 1px solid #475569;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      color: #60a5fa;
+    }
+    h2 {
+      color: #818cf8;
+      margin-top: 0;
+    }
+    .editor {
+      background: #1e293b;
+      border: 1px solid #475569;
+      border-radius: 4px;
+      padding: 12px;
+      min-height: 100px;
+      margin: 10px 0;
+      outline: none;
+    }
+    .editor:focus {
+      border-color: #6366f1;
+    }
+    [contenteditable] ul {
+      margin-left: 20px;
+      list-style-type: disc;
+    }
+    [contenteditable] ul ul {
+      margin-left: 20px;
+      list-style-type: circle;
+    }
+    .toolbar {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      padding: 10px;
+      background: #475569;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+    button {
+      background: #334155;
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover {
+      background: #475569;
+    }
+    .output {
+      background: #0f172a;
+      border: 1px solid #475569;
+      border-radius: 4px;
+      padding: 12px;
+      margin: 10px 0;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .success {
+      color: #10b981;
+    }
+    .display {
+      background: #1e293b;
+      border: 1px solid #475569;
+      border-radius: 4px;
+      padding: 12px;
+      margin: 10px 0;
+    }
+    .label {
+      font-weight: bold;
+      color: #94a3b8;
+      margin-bottom: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🧪 Visual Tests - WYSIWYG Editor Features</h1>
+  <p>This page tests all the fixes made to the Medical Lecture Study Assistant</p>
+
+  <!-- Test 1: Basic Formatting -->
+  <div class="test-section">
+    <h2>Test 1: Basic Text Formatting</h2>
+    <div class="label">Try formatting text (Bold, Italic, Underline):</div>
+
+    <div class="toolbar">
+      <button onclick="format('bold')"><b>B</b> Bold</button>
+      <button onclick="format('italic')"><i>I</i> Italic</button>
+      <button onclick="format('underline')"><u>U</u> Underline</button>
+      <button onclick="format('superscript')">X<sup>2</sup> Superscript</button>
+      <button onclick="format('subscript')">X<sub>2</sub> Subscript</button>
+    </div>
+
+    <div
+      id="editor1"
+      class="editor"
+      contenteditable="true"
+      oninput="updateOutput1()"
+    >Type here and use the formatting buttons above...</div>
+
+    <div class="label">HTML Output (what gets saved):</div>
+    <div id="output1" class="output"></div>
+
+    <div class="label">Rendered Display (what user sees):</div>
+    <div id="display1" class="display"></div>
+  </div>
+
+  <!-- Test 2: Bullet Points -->
+  <div class="test-section">
+    <h2>Test 2: Bullet Points</h2>
+    <div class="label">Test bullet point functionality:</div>
+
+    <div class="toolbar">
+      <button onclick="format2('insertUnorderedList')">• Bullet List</button>
+      <button onclick="format2('indent')">→ Indent (Tab)</button>
+      <button onclick="format2('outdent')">← Outdent (Shift+Tab)</button>
+    </div>
+
+    <div
+      id="editor2"
+      class="editor"
+      contenteditable="true"
+      oninput="updateOutput2()"
+      onkeydown="handleTab(event)"
+    >Type text and click "Bullet List", then try Tab/Shift+Tab...</div>
+
+    <div class="label">HTML Output:</div>
+    <div id="output2" class="output"></div>
+
+    <div class="label">Rendered Display:</div>
+    <div id="display2" class="display"></div>
+
+    <div class="success" style="margin-top: 10px;">
+      ✓ Cursor should stay in place when adding bullets<br>
+      ✓ Tab key should indent without switching focus<br>
+      ✓ Display should show actual bullets, not HTML code
+    </div>
+  </div>
+
+  <!-- Test 3: Mixed Content -->
+  <div class="test-section">
+    <h2>Test 3: Mixed Formatting + Bullets</h2>
+    <div class="label">Test complex formatting scenarios:</div>
+
+    <div class="toolbar">
+      <button onclick="format3('bold')"><b>B</b></button>
+      <button onclick="format3('italic')"><i>I</i></button>
+      <button onclick="format3('insertUnorderedList')">•</button>
+      <button onclick="insertSymbol('→')">→</button>
+      <button onclick="insertSymbol('α')">α</button>
+      <button onclick="insertSymbol('±')">±</button>
+    </div>
+
+    <div
+      id="editor3"
+      class="editor"
+      contenteditable="true"
+      oninput="updateOutput3()"
+      onkeydown="handleTab(event)"
+    >Try: Bold text in bullets, special symbols, mixed formatting...</div>
+
+    <div class="label">HTML Output:</div>
+    <div id="output3" class="output"></div>
+
+    <div class="label">Rendered Display:</div>
+    <div id="display3" class="display"></div>
+  </div>
+
+  <!-- Test 4: PDF Export Simulation -->
+  <div class="test-section">
+    <h2>Test 4: PDF Export Parsing</h2>
+    <div class="label">This simulates how HTML will be converted for PDF export:</div>
+
+    <div
+      id="editor4"
+      class="editor"
+      contenteditable="true"
+      oninput="updateOutput4()"
+    >Type formatted content with bullets and formatting...</div>
+
+    <div class="toolbar">
+      <button onclick="format4('bold')"><b>B</b></button>
+      <button onclick="format4('insertUnorderedList')">•</button>
+    </div>
+
+    <div class="label">Raw HTML:</div>
+    <div id="output4" class="output"></div>
+
+    <div class="label">Converted for PDF (no HTML tags):</div>
+    <div id="pdfOutput" class="output"></div>
+
+    <div class="success" style="margin-top: 10px;">
+      ✓ Should show "• " for bullets, not &lt;ul&gt; or &lt;li&gt;<br>
+      ✓ Should show ** around bold text or just the text<br>
+      ✓ Should have line breaks, not &lt;div&gt; or &lt;br&gt;
+    </div>
+  </div>
+
+  <script>
+    let editor1, editor2, editor3, editor4;
+
+    window.onload = () => {
+      editor1 = document.getElementById('editor1');
+      editor2 = document.getElementById('editor2');
+      editor3 = document.getElementById('editor3');
+      editor4 = document.getElementById('editor4');
+    };
+
+    function format(cmd) {
+      editor1.focus();
+      document.execCommand(cmd);
+      updateOutput1();
+    }
+
+    function format2(cmd) {
+      editor2.focus();
+      document.execCommand(cmd);
+      updateOutput2();
+    }
+
+    function format3(cmd) {
+      editor3.focus();
+      document.execCommand(cmd);
+      updateOutput3();
+    }
+
+    function format4(cmd) {
+      editor4.focus();
+      document.execCommand(cmd);
+      updateOutput4();
+    }
+
+    function insertSymbol(symbol) {
+      editor3.focus();
+      document.execCommand('insertText', false, symbol);
+      updateOutput3();
+    }
+
+    function handleTab(e) {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          document.execCommand('outdent');
+        } else {
+          document.execCommand('indent');
+        }
+      }
+    }
+
+    function updateOutput1() {
+      const html = editor1.innerHTML;
+      document.getElementById('output1').textContent = html;
+      document.getElementById('display1').innerHTML = html;
+    }
+
+    function updateOutput2() {
+      const html = editor2.innerHTML;
+      document.getElementById('output2').textContent = html;
+      document.getElementById('display2').innerHTML = html;
+    }
+
+    function updateOutput3() {
+      const html = editor3.innerHTML;
+      document.getElementById('output3').textContent = html;
+      document.getElementById('display3').innerHTML = html;
+    }
+
+    function updateOutput4() {
+      const html = editor4.innerHTML;
+      document.getElementById('output4').textContent = html;
+
+      // Simulate parseTextForPDF
+      let str = String(html);
+
+      // Handle list items
+      str = str.replace(/<ul[^>]*>/gi, '');
+      str = str.replace(/<\/ul>/gi, '');
+      str = str.replace(/<li[^>]*>/gi, '• ');
+      str = str.replace(/<\/li>/gi, '\n');
+
+      // Handle divs and paragraphs
+      str = str.replace(/<div[^>]*>/gi, '');
+      str = str.replace(/<\/div>/gi, '\n');
+      str = str.replace(/<p[^>]*>/gi, '');
+      str = str.replace(/<\/p>/gi, '\n');
+
+      // Convert <br> tags to newlines
+      str = str.replace(/<br\s*\/?>/gi, '\n');
+
+      // Handle formatting
+      str = str.replace(/<b>/gi, '**').replace(/<\/b>/gi, '**');
+      str = str.replace(/<strong>/gi, '**').replace(/<\/strong>/gi, '**');
+
+      // Remove any remaining HTML tags
+      str = str.replace(/<[^>]+>/g, '');
+
+      // Clean up excessive newlines
+      str = str.replace(/\n{3,}/g, '\n\n');
+
+      document.getElementById('pdfOutput').textContent = str;
+    }
+
+    // Initialize outputs
+    updateOutput1();
+    updateOutput2();
+    updateOutput3();
+    updateOutput4();
+  </script>
+</body>
+</html>

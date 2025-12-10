@@ -17,5 +17,8 @@
   "bugs": {
     "url": "https://github.com/elihaff/Lecture-Revision-Tool/issues"
   },
-  "homepage": "https://github.com/elihaff/Lecture-Revision-Tool#readme"
+  "homepage": "https://github.com/elihaff/Lecture-Revision-Tool#readme",
+  "devDependencies": {
+    "puppeteer": "^24.32.1"
+  }
 }

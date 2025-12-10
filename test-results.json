@@ -1,0 +1,206 @@
+{
+  "timestamp": "2025-12-10T13:42:34.011Z",
+  "summary": {
+    "passed": 14,
+    "failed": 5,
+    "warnings": 1,
+    "total": 39
+  },
+  "results": [
+    {
+      "timestamp": "13:42:26",
+      "type": "info",
+      "message": "Launching browser..."
+    },
+    {
+      "timestamp": "13:42:27",
+      "type": "pass",
+      "message": "Browser launched successfully"
+    },
+    {
+      "timestamp": "13:42:27",
+      "type": "info",
+      "message": "\n=== TEST 1: Basic Page Load ==="
+    },
+    {
+      "timestamp": "13:42:27",
+      "type": "info",
+      "message": "Loading https://lecture-revision-tool-v2-fjj1s3y4v-elihaffs-projects.vercel.app..."
+    },
+    {
+      "timestamp": "13:42:27",
+      "type": "fail",
+      "message": "Browser Console Error: Failed to load resource: the server responded with a status of 401 ()"
+    },
+    {
+      "timestamp": "13:42:28",
+      "type": "fail",
+      "message": "Browser Console Error: Not signed in with the identity provider."
+    },
+    {
+      "timestamp": "13:42:28",
+      "type": "fail",
+      "message": "Browser Console Error: Failed to load resource: the server responded with a status of 403 ()"
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "pass",
+      "message": "Page loaded successfully"
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "warn",
+      "message": "React may not be loaded correctly"
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "info",
+      "message": "Screenshot saved: test-screenshots/01-page-load.png"
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "info",
+      "message": "\n=== TEST 2: ContentEditable Implementation Check ==="
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "info",
+      "message": "Checking implementation details..."
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "pass",
+      "message": "Notes editor uses ref callback pattern (correct)"
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "pass",
+      "message": "Flashcard editor uses ref callback pattern (correct)"
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "pass",
+      "message": "Cursor positioning logic present"
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "pass",
+      "message": "onInput handlers present"
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "pass",
+      "message": "Tab key handlers present"
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "pass",
+      "message": "Display uses dangerouslySetInnerHTML (correct)"
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "pass",
+      "message": "PDF parsing handles HTML tags"
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "info",
+      "message": "\n=== TEST 3: Formatting Toolbar Simulation ==="
+    },
+    {
+      "timestamp": "13:42:29",
+      "type": "info",
+      "message": "Loading local file for UI testing..."
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "fail",
+      "message": "Failed to test toolbar: page.waitForTimeout is not a function"
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "info",
+      "message": "\n=== TEST 4: HTML Rendering Simulation ==="
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "pass",
+      "message": "HTML renders as formatted elements (correct)"
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "pass",
+      "message": "Text content extracts correctly"
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "info",
+      "message": "Testing PDF conversion logic..."
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "info",
+      "message": "PDF Input:  <ul><li><b>Bold item</b></li><li>Normal item</li></ul><div>Text</div>"
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "info",
+      "message": "PDF Output: • **Bold item**\\n• Normal item\\nText\\n"
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "pass",
+      "message": "PDF conversion removes all HTML tags (correct)"
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "pass",
+      "message": "PDF conversion creates bullet points (correct)"
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "info",
+      "message": "\n=== TEST 5: ContentEditable Behavior Test ==="
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "pass",
+      "message": "Bullet list creation works"
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "fail",
+      "message": "Cursor jumps to beginning (BUG)"
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "info",
+      "message": "Generated HTML: <ul><li>Test text</li></ul>"
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "info",
+      "message": "\n=== FINAL TEST REPORT ==="
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "info",
+      "message": "Total Tests: 35"
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "pass",
+      "message": "Passed: 14"
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "fail",
+      "message": "Failed: 5"
+    },
+    {
+      "timestamp": "13:42:34",
+      "type": "warn",
+      "message": "Warnings: 1"
+    }
+  ]
+}

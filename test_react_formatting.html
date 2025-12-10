@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>React-like Formatting Test</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background: #1e293b; color: white; }
+    .editor {
+      background: #0f172a;
+      border: 2px solid #475569;
+      padding: 15px;
+      min-height: 200px;
+      margin: 20px 0;
+      border-radius: 8px;
+      outline: none;
+    }
+    .toolbar {
+      background: #334155;
+      padding: 10px;
+      margin-bottom: 10px;
+      border-radius: 8px;
+      display: flex;
+      gap: 10px;
+    }
+    button {
+      background: #4f46e5;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      cursor: pointer;
+      border-radius: 4px;
+      font-weight: bold;
+    }
+    button:hover { background: #4338ca; }
+    .log {
+      background: #0f172a;
+      padding: 15px;
+      margin-top: 20px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 12px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .log-entry { margin: 5px 0; }
+    .pass { color: #4ade80; }
+    .fail { color: #f87171; }
+    .info { color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <h1>🧪 React-like Formatting Test (Simulating Actual App)</h1>
+  <p>This simulates the ref callback pattern from the actual React app.</p>
+
+  <div class="toolbar">
+    <button onclick="testSuperscript()">Test Superscript Toggle</button>
+    <button onclick="testSubscript()">Test Subscript Toggle</button>
+    <button onclick="testBoth()">Test Both (Switch)</button>
+    <button onclick="runFullTest()">🚀 Run Full Automated Test</button>
+    <button onclick="clearLog()">Clear Log</button>
+  </div>
+
+  <div class="editor" contenteditable="true" id="editor">
+    Type here and test manually, or click "Run Full Automated Test"
+  </div>
+
+  <div class="log" id="log"></div>
+
+  <script>
+    const editor = document.getElementById('editor');
+    const logDiv = document.getElementById('log');
+
+    // Simulate React state
+    let editingNoteValue = '';
+    let isFormattingRef = false;
+    let textareaRef = editor;
+
+    function log(message, type = 'info') {
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      const timestamp = new Date().toLocaleTimeString();
+      entry.textContent = `[${timestamp}] ${message}`;
+      logDiv.appendChild(entry);
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function clearLog() {
+      logDiv.innerHTML = '';
+      log('Log cleared', 'info');
+    }
+
+    // Simulate the ref callback from React
+    function simulateRefCallback() {
+      if (textareaRef && !isFormattingRef && textareaRef.innerHTML !== editingNoteValue) {
+        log('⚠️  Ref callback: innerHTML would be reset here (prevented by flag)', 'info');
+        // In real app, this would do: textareaRef.innerHTML = editingNoteValue;
+      }
+    }
+
+    // Simulate the onInput handler from React
+    function simulateOnInput() {
+      editingNoteValue = textareaRef.innerHTML;
+      log('📝 State updated: ' + editingNoteValue.substring(0, 50) + '...', 'info');
+
+      // Simulate React re-render (would call ref callback)
+      setTimeout(() => {
+        simulateRefCallback();
+      }, 1);
+    }
+
+    // The actual insertFormatting function from the app
+    function insertFormatting(command) {
+      if (!textareaRef) return;
+
+      // Set flag to prevent ref callback from interfering
+      isFormattingRef = true;
+      log(`🎨 Formatting: ${command} (flag set)`, 'info');
+
+      // Focus the editor first
+      textareaRef.focus();
+
+      const commandMap = {
+        'bold': 'bold',
+        'superscript': 'superscript',
+        'subscript': 'subscript'
+      };
+
+      const execCmd = commandMap[command];
+      if (execCmd) {
+        const superBefore = document.queryCommandState('superscript');
+        const subBefore = document.queryCommandState('subscript');
+        log(`   States BEFORE: super=${superBefore}, sub=${subBefore}`, 'info');
+
+        // For superscript/subscript, turn off opposite formatting first
+        if (execCmd === 'superscript' || execCmd === 'subscript') {
+          const oppositeCmd = execCmd === 'superscript' ? 'subscript' : 'superscript';
+          const oppositeIsActive = document.queryCommandState(oppositeCmd);
+
+          if (oppositeIsActive) {
+            log(`   → Turning off opposite: ${oppositeCmd}`, 'info');
+            document.execCommand(oppositeCmd, false, null);
+          }
+        }
+
+        // Always toggle the requested formatting
+        log(`   → Executing: ${execCmd}`, 'info');
+        document.execCommand(execCmd, false, null);
+
+        const superAfter = document.queryCommandState('superscript');
+        const subAfter = document.queryCommandState('subscript');
+        log(`   States AFTER: super=${superAfter}, sub=${subAfter}`, 'info');
+
+        // Manually trigger input event to update React state
+        const inputEvent = new Event('input', { bubbles: true });
+        textareaRef.dispatchEvent(inputEvent);
+      }
+
+      // Clear flag after a short delay
+      setTimeout(() => {
+        isFormattingRef = false;
+        log(`✓ Formatting complete (flag cleared)`, 'info');
+      }, 50);
+    }
+
+    // Wire up onInput
+    editor.addEventListener('input', simulateOnInput);
+
+    // Manual test functions
+    function testSuperscript() {
+      log('=== Testing Superscript Toggle ===', 'info');
+      insertFormatting('superscript');
+    }
+
+    function testSubscript() {
+      log('=== Testing Subscript Toggle ===', 'info');
+      insertFormatting('subscript');
+    }
+
+    function testBoth() {
+      log('=== Testing Super → Sub Switch ===', 'info');
+      insertFormatting('superscript');
+      setTimeout(() => insertFormatting('subscript'), 100);
+    }
+
+    // Automated test
+    async function runFullTest() {
+      clearLog();
+      log('🚀 Starting Automated Test Suite', 'info');
+      log('='.repeat(60), 'info');
+
+      let passCount = 0;
+      let failCount = 0;
+
+      // Test 1: Toggle superscript on/off
+      log('\n📋 Test 1: Superscript Toggle', 'info');
+      editor.innerHTML = 'Test text';
+      editor.focus();
+      document.getSelection().selectAllChildren(editor);
+
+      await wait(100);
+      insertFormatting('superscript');
+      await wait(100);
+
+      if (editor.innerHTML.includes('<sup>')) {
+        log('✓ Superscript applied', 'pass');
+        passCount++;
+      } else {
+        log('✗ Superscript NOT applied', 'fail');
+        failCount++;
+      }
+
+      // Click again to toggle off
+      await wait(100);
+      insertFormatting('superscript');
+      await wait(100);
+
+      if (!editor.innerHTML.includes('<sup>')) {
+        log('✓ Superscript toggled OFF correctly', 'pass');
+        passCount++;
+      } else {
+        log('✗ Superscript did NOT toggle off (nested!)', 'fail');
+        log(`   HTML: ${editor.innerHTML}`, 'fail');
+        failCount++;
+      }
+
+      // Test 2: Toggle subscript on/off
+      log('\n📋 Test 2: Subscript Toggle', 'info');
+      editor.innerHTML = 'Test text 2';
+      editor.focus();
+      document.getSelection().selectAllChildren(editor);
+
+      await wait(100);
+      insertFormatting('subscript');
+      await wait(100);
+
+      if (editor.innerHTML.includes('<sub>')) {
+        log('✓ Subscript applied', 'pass');
+        passCount++;
+      } else {
+        log('✗ Subscript NOT applied', 'fail');
+        failCount++;
+      }
+
+      await wait(100);
+      insertFormatting('subscript');
+      await wait(100);
+
+      if (!editor.innerHTML.includes('<sub>')) {
+        log('✓ Subscript toggled OFF correctly', 'pass');
+        passCount++;
+      } else {
+        log('✗ Subscript did NOT toggle off (nested!)', 'fail');
+        log(`   HTML: ${editor.innerHTML}`, 'fail');
+        failCount++;
+      }
+
+      // Test 3: Switch from super to sub
+      log('\n📋 Test 3: Superscript → Subscript Switch', 'info');
+      editor.innerHTML = 'Test text 3';
+      editor.focus();
+      document.getSelection().selectAllChildren(editor);
+
+      await wait(100);
+      insertFormatting('superscript');
+      await wait(100);
+      insertFormatting('subscript');
+      await wait(100);
+
+      const hasSub = editor.innerHTML.includes('<sub>');
+      const hasSuper = editor.innerHTML.includes('<sup>');
+
+      if (hasSub && !hasSuper) {
+        log('✓ Switched from superscript to subscript correctly', 'pass');
+        passCount++;
+      } else {
+        log('✗ Switch failed', 'fail');
+        log(`   Has <sub>: ${hasSub}, Has <sup>: ${hasSuper}`, 'fail');
+        log(`   HTML: ${editor.innerHTML}`, 'fail');
+        failCount++;
+      }
+
+      // Test 4: Check for nested tags
+      log('\n📋 Test 4: No Nested Tags Check', 'info');
+      editor.innerHTML = 'Test text 4';
+      editor.focus();
+      document.getSelection().selectAllChildren(editor);
+
+      await wait(100);
+      insertFormatting('superscript');
+      await wait(100);
+      insertFormatting('superscript');
+      await wait(100);
+      insertFormatting('superscript');
+      await wait(100);
+
+      const html = editor.innerHTML;
+      const hasNestedSuper = html.includes('<sup><sup>') || html.match(/<sup>[^<]*<sup>/);
+
+      if (!hasNestedSuper) {
+        log('✓ No nested superscript tags found', 'pass');
+        passCount++;
+      } else {
+        log('✗ NESTED superscript tags detected!', 'fail');
+        log(`   HTML: ${html}`, 'fail');
+        failCount++;
+      }
+
+      // Summary
+      log('\n' + '='.repeat(60), 'info');
+      log(`📊 RESULTS: ${passCount} passed, ${failCount} failed`, passCount === 6 && failCount === 0 ? 'pass' : 'fail');
+      log('='.repeat(60), 'info');
+
+      if (failCount === 0) {
+        log('\n✅ All tests PASSED! The fix works correctly.', 'pass');
+      } else {
+        log('\n❌ Some tests FAILED. The issue persists.', 'fail');
+      }
+    }
+
+    function wait(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // Initial log
+    log('Ready! Click "Run Full Automated Test" or test manually.', 'info');
+  </script>
+</body>
+</html>
