@@ -977,14 +977,15 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             const parts = parseTextForPDF(point);
             const bulletParts = [{ text: '•  ', bold: false }, ...parts];
 
-            // Check if this point ends with a sub-bullet (indented line)
-            const lastPart = parts[parts.length - 1];
-            const endsWithSubBullet = lastPart && lastPart.text && lastPart.text.match(/\n?\s{3,}-\s/);
+            // Check if this point contains nested content (sub-bullets or indented lines)
+            // Check both the raw HTML and parsed text for nested lists or indented content
+            const hasNestedContent = point.includes('<ul>') || point.includes('</ul>') ||
+                                    parts.some(p => p.text && p.text.match(/\n\s{3,}/));
 
             doc.setTextColor(...black);
             y = addMixedText(bulletParts, margin, y, 11, 6, contentWidth, black);
-            // Use less spacing after sub-bullet lists
-            y += endsWithSubBullet ? 1 : 7;
+            // Use less spacing after nested content (sub-bullets or indented lines)
+            y += hasNestedContent ? 1 : 7;
           });
           y += 3;
         });
