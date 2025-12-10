@@ -886,12 +886,12 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 const nextIsSubBullet = /^\s+-\s/.test(nextLine);
 
                 // Different spacing logic:
-                // - Leaving sub-bullet: minimal spacing (0.5x) for user-added sub-bullets
+                // - Leaving sub-bullet: minimal spacing (0.25x) for user-added sub-bullets
                 // - Within sub-bullets: tight spacing (1.1x)
                 // - Regular text: normal spacing (1.5x)
                 let spacingMultiplier;
                 if (currentIsSubBullet && !nextIsSubBullet) {
-                  spacingMultiplier = 0.5; // Minimal spacing when leaving user-added sub-bullet
+                  spacingMultiplier = 0.25; // Minimal spacing when leaving user-added sub-bullet
                 } else if (currentIsSubBullet || nextIsSubBullet) {
                   spacingMultiplier = 1.1; // Tight spacing within sub-bullets
                 } else {
