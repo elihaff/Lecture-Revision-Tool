@@ -459,51 +459,55 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           if (!text) return [{ text: '', bold: false }];
           let str = String(text);
 
-          // Parse nested lists properly by tracking depth
-          // This handles both <ul> and contentEditable's margin-based indentation
-          let listDepth = 0;
+          // Count <ul> nesting depth at each <li> to detect indentation
+          // Replace this with a more robust parser that tracks depth
+          let depth = 0;
+          let result = '';
+          let i = 0;
 
-          // Convert nested <ul> to indented bullets
-          str = str.replace(/<ul[^>]*>/gi, () => {
-            listDepth++;
-            return '';
-          });
-
-          str = str.replace(/<\/ul>/gi, () => {
-            listDepth = Math.max(0, listDepth - 1);
-            return '';
-          });
-
-          // Convert <li> to bullets with proper indentation
-          str = str.replace(/<li[^>]*>/gi, (match) => {
-            // Check if this li has style attribute with margin/padding indicating nesting
-            const styleMatch = match.match(/style="([^"]*)"/);
-            let indent = 0;
-
-            if (styleMatch) {
-              const style = styleMatch[1];
-              // Look for margin-left or padding-left
-              const marginMatch = style.match(/margin-left:\s*(\d+)/);
-              const paddingMatch = style.match(/padding-left:\s*(\d+)/);
-
-              if (marginMatch) {
-                const pixels = parseInt(marginMatch[1]);
-                // Every ~40 pixels is one level of indentation
-                indent = Math.floor(pixels / 35);
-              } else if (paddingMatch) {
-                const pixels = parseInt(paddingMatch[1]);
-                indent = Math.floor(pixels / 35);
-              }
+          while (i < str.length) {
+            // Check for <ul> start
+            if (str.substr(i, 3) === '<ul' || str.substr(i, 3) === '<UL') {
+              depth++;
+              // Skip to end of tag
+              const endTag = str.indexOf('>', i);
+              i = endTag + 1;
+              continue;
             }
 
-            // Create indentation (2 spaces per level)
-            const indentStr = '  '.repeat(indent);
-            // Use different bullets for different levels
-            const bullet = indent === 0 ? '• ' : indent === 1 ? '◦ ' : '▪ ';
-            return indentStr + bullet;
-          });
+            // Check for </ul> end
+            if (str.substr(i, 5) === '</ul>' || str.substr(i, 5) === '</UL>') {
+              depth = Math.max(0, depth - 1);
+              i += 5;
+              continue;
+            }
 
-          str = str.replace(/<\/li>/gi, '\n');
+            // Check for <li> start
+            if (str.substr(i, 3) === '<li' || str.substr(i, 3) === '<LI') {
+              // Add appropriate indentation based on current depth
+              const indentStr = '  '.repeat(depth);
+              const bullet = depth === 0 ? '• ' : depth === 1 ? '◦ ' : '▪ ';
+              result += indentStr + bullet;
+
+              // Skip to end of opening <li> tag
+              const endTag = str.indexOf('>', i);
+              i = endTag + 1;
+              continue;
+            }
+
+            // Check for </li> end
+            if (str.substr(i, 5) === '</li>' || str.substr(i, 5) === '</LI>') {
+              result += '\n';
+              i += 5;
+              continue;
+            }
+
+            // Regular character - add to result
+            result += str[i];
+            i++;
+          }
+
+          str = result;
 
           // Handle divs and paragraphs - convert to line breaks
           str = str.replace(/<div[^>]*>/gi, '');
@@ -884,6 +888,21 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
         const execCmd = commandMap[command];
         if (execCmd) {
+          // For superscript/subscript, always remove the opposite one first
+          if (execCmd === 'superscript') {
+            // If already in superscript, turn it off by toggling
+            // Otherwise, make sure subscript is off first
+            if (document.queryCommandState('subscript')) {
+              document.execCommand('subscript', false, null);
+            }
+          } else if (execCmd === 'subscript') {
+            // Make sure superscript is off first
+            if (document.queryCommandState('superscript')) {
+              document.execCommand('superscript', false, null);
+            }
+          }
+
+          // Now toggle the requested formatting
           document.execCommand(execCmd, false, null);
         }
 
@@ -1050,7 +1069,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-indigo-600 rounded-lg"><Icon name="brain" className="w-5 h-5" /></div>
-                <div><h1 className="font-semibold">Medical Lecture Study Assistant <span className="text-xs text-green-400 font-bold bg-green-900 px-2 py-1 rounded">v2.3</span></h1><p className="text-xs text-slate-400">Notes + Anki cards from PDF slides</p></div>
+                <div><h1 className="font-semibold">Medical Lecture Study Assistant <span className="text-xs text-green-400 font-bold bg-green-900 px-2 py-1 rounded">v2.4</span></h1><p className="text-xs text-slate-400">Notes + Anki cards from PDF slides</p></div>
               </div>
               <button onClick={() => setShowSettings(!showSettings)} className={`p-2 rounded-lg ${apiKey ? 'bg-green-600/20 text-green-400' : 'bg-orange-600/20 text-orange-400'}`}><Icon name="settings" className="w-5 h-5" /></button>
             </div>
