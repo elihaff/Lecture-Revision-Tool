@@ -823,7 +823,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 const isLastWordInLine = wordIndex === words.length - 1;
                 const isLastLine = lineIndex === lines.length - 1;
                 const isLastPart = partIndex === parts.length - 1;
-                const needsSpaceAfter = !isLastWordInLine || (!isLastLine || !isLastPart);
+                // Don't add space after if next part is superscript/subscript, or this is last word
+                const nextPart = parts[partIndex + 1];
+                const nextIsScript = nextPart && (nextPart.superscript || nextPart.subscript);
+                const needsSpaceAfter = !isLastWordInLine || (!isLastLine || (!isLastPart && !nextIsScript));
 
                 const wordText = needsSpaceAfter ? word + ' ' : word;
                 const wordWidth = doc.getTextWidth(wordText);
@@ -840,8 +843,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   }
                 }
 
-                // Calculate vertical offset for superscript/subscript
-                const yOffset = part.superscript ? -fontSize * 0.3 : (part.subscript ? fontSize * 0.2 : 0);
+                // Calculate vertical offset for superscript/subscript (reduced for closer positioning)
+                const yOffset = part.superscript ? -fontSize * 0.25 : (part.subscript ? fontSize * 0.15 : 0);
                 const renderY = currentY + yOffset;
 
                 // If single word is too long for the line, break it
