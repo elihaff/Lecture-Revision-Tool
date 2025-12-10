@@ -803,7 +803,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 // Empty line - just add a line break
                 currentX = startX;
                 const nextLine = lines[lineIndex + 1];
-                const isSubBullet = /^\s+-\s/.test(line) || /^\s+-\s/.test(nextLine);
+                const isSubBullet = /^\s{3,}-\s/.test(line) || /^\s{3,}◦\s/.test(line) || /^\s{3,}•\s/.test(line) ||
+                                   /^\s{3,}-\s/.test(nextLine) || /^\s{3,}◦\s/.test(nextLine) || /^\s{3,}•\s/.test(nextLine);
                 const spacingMultiplier = isSubBullet ? 1.1 : 1.5;
                 currentY += lineHeight * spacingMultiplier;
                 if (currentY > pageHeight - margin) {
@@ -834,7 +835,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 // Check if we need to wrap to next line
                 if (currentX + wordWidth > startX + maxWidth && currentX > startX) {
                   currentX = startX;
-                  const isSubBullet = /^\s+-\s/.test(line);
+                  const isSubBullet = /^\s{3,}-\s/.test(line) || /^\s{3,}◦\s/.test(line) || /^\s{3,}•\s/.test(line);
                   const spacingMultiplier = isSubBullet ? 1.1 : 1.5;
                   currentY += lineHeight * spacingMultiplier;
 
@@ -863,7 +864,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   }
 
                   currentX = startX;
-                  const isSubBullet = /^\s+-\s/.test(line);
+                  const isSubBullet = /^\s{3,}-\s/.test(line) || /^\s{3,}◦\s/.test(line) || /^\s{3,}•\s/.test(line);
                   const spacingMultiplier = isSubBullet ? 1.1 : 1.5;
                   currentY += lineHeight * spacingMultiplier;
                   if (currentY > pageHeight - margin) {
@@ -880,13 +881,15 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               // Handle line break from newline character
               if (lineIndex < lines.length - 1) {
                 currentX = startX;
-                // Check if current or next line is a sub-bullet (starts with spaces and dash)
+                // Check if current or next line is a sub-bullet or sub-sub-bullet
+                // Sub-bullets: "   - " (3+ spaces + dash)
+                // Sub-sub-bullets: "      - " or "      ◦ " (6+ spaces + dash/circle)
                 const nextLine = lines[lineIndex + 1];
-                const currentIsSubBullet = /^\s+-\s/.test(line);
-                const nextIsSubBullet = /^\s+-\s/.test(nextLine);
+                const currentIsSubBullet = /^\s{3,}-\s/.test(line) || /^\s{3,}◦\s/.test(line) || /^\s{3,}•\s/.test(line);
+                const nextIsSubBullet = /^\s{3,}-\s/.test(nextLine) || /^\s{3,}◦\s/.test(nextLine) || /^\s{3,}•\s/.test(nextLine);
 
                 // Different spacing logic:
-                // - Leaving user-added sub-bullet: minimal spacing (0.15x)
+                // - Leaving user-added sub-bullet/sub-sub-bullet: minimal spacing (0.15x)
                 // - Within sub-bullets: tight spacing (1.1x)
                 // - Regular text: normal spacing (1.5x)
                 // Note: AI-generated HTML sub-bullets use y+= spacing, not this internal spacing
