@@ -586,10 +586,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             if (str.substr(i, 3) === '<li' || str.substr(i, 3) === '<LI') {
               // Add appropriate indentation based on current depth
               const actualDepth = Math.max(0, depth);
-              const indentStr = '  '.repeat(actualDepth);
-              // Use ASCII-safe bullet characters instead of Unicode
-              const bullet = actualDepth === 0 ? '- ' : actualDepth === 1 ? '  - ' : '    - ';
-              result += bullet;
+              // Use 3 spaces per level for indentation
+              const indentStr = '   '.repeat(actualDepth);
+              // Use ASCII-safe dash for bullet
+              result += indentStr + '- ';
 
               // Skip to end of opening <li> tag
               const endTag = str.indexOf('>', i);
