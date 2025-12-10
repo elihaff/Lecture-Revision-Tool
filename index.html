@@ -1003,19 +1003,17 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             const parts = parseTextForPDF(point);
             const bulletParts = [{ text: '•  ', bold: false }, ...parts];
 
-            // Check if this point contains HTML sub-bullets
+            // Check if this point contains HTML sub-bullets (all sub-bullets are HTML)
             const isHTMLSubBullets = /<\/li>\s*<\/ul>\s*$/.test(point);
 
             doc.setTextColor(...black);
             y = addMixedText(bulletParts, margin, y, 11, 6, contentWidth, black, isHTMLSubBullets);
-            // Check if this point contains sub-bullets (ends with indented dash lines or HTML lists)
-            const hasSubBullets = /\n\s+-\s[^\n]*$/.test(point) || isHTMLSubBullets;
-            // Use less spacing after AI-generated sub-bullet lists (HTML), more for user-added (plain text)
-            y += isHTMLSubBullets ? 3 : (hasSubBullets ? 1 : 7);
+            // Use consistent spacing after any sub-bullet list (HTML)
+            y += isHTMLSubBullets ? 3 : 7;
 
             // Track if last point has sub-bullets
             if (index === section.points.length - 1) {
-              lastPointHasSubBullets = hasSubBullets;
+              lastPointHasSubBullets = isHTMLSubBullets;
             }
           });
           // Adjust section spacing: if last point had sub-bullets, add more space to match main bullet spacing
