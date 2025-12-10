@@ -541,11 +541,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           if (!text) return [{ text: '', bold: false }];
           let str = String(text);
 
+          console.log('[PDF PARSE] Input HTML:', str.substring(0, 200));
+
           // Decode any URL-encoded characters (e.g., %20 for space, %0A for newline)
           try {
-            str = decodeURIComponent(str);
+            const decoded = decodeURIComponent(str);
+            if (decoded !== str) {
+              console.log('[PDF PARSE] Decoded URL encoding');
+            }
+            str = decoded;
           } catch (e) {
             // If decoding fails, use original string
+            console.log('[PDF PARSE] Decoding failed:', e.message);
           }
 
           // Count <ul> nesting depth at each <li> to detect indentation
@@ -711,6 +718,13 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             buffer += str.substring(currentPos);
           }
           addPart();
+
+          console.log('[PDF PARSE] Output parts:', parts.map(p => ({
+            text: p.text.substring(0, 50) + (p.text.length > 50 ? '...' : ''),
+            bold: p.bold,
+            super: p.superscript,
+            sub: p.subscript
+          })));
 
           return parts.length > 0 ? parts : [{ text: str, bold: false, italic: false, superscript: false, subscript: false }];
         };
