@@ -1008,11 +1008,12 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
             doc.setTextColor(...black);
             y = addMixedText(bulletParts, margin, y, 11, 6, contentWidth, black, isHTMLSubBullets);
-            // Spacing after point: less for sub-bullets, more for main bullets within section
-            // Last point gets uniform section spacing regardless of type
+            // Spacing after point
             const isLastPoint = index === section.points.length - 1;
             if (isLastPoint) {
-              y += 7; // Uniform spacing before next section
+              // Last point before next section: adjust based on type
+              // Sub-bullets need less space since they already have internal spacing
+              y += isHTMLSubBullets ? 4 : 7;
             } else {
               y += isHTMLSubBullets ? 3 : 7;
             }
