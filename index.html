@@ -757,7 +757,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         };
 
         // Helper to add text with mixed bold - returns new Y position
-        const addMixedText = (parts, startX, startY, fontSize, lineHeight, maxWidth, color = black) => {
+        const addMixedText = (parts, startX, startY, fontSize, lineHeight, maxWidth, color = black, isHTMLSubBullets = false) => {
           doc.setFontSize(fontSize);
           doc.setTextColor(...color);
 
@@ -886,12 +886,13 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 const nextIsSubBullet = /^\s+-\s/.test(nextLine);
 
                 // Different spacing logic:
-                // - Leaving sub-bullet: minimal spacing (0.25x) for user-added sub-bullets
+                // - Leaving user-added sub-bullet: minimal spacing (0.15x)
                 // - Within sub-bullets: tight spacing (1.1x)
                 // - Regular text: normal spacing (1.5x)
+                // Note: AI-generated HTML sub-bullets use y+= spacing, not this internal spacing
                 let spacingMultiplier;
-                if (currentIsSubBullet && !nextIsSubBullet) {
-                  spacingMultiplier = 0.25; // Minimal spacing when leaving user-added sub-bullet
+                if (currentIsSubBullet && !nextIsSubBullet && !isHTMLSubBullets) {
+                  spacingMultiplier = 0.15; // Minimal spacing when leaving user-added sub-bullet
                 } else if (currentIsSubBullet || nextIsSubBullet) {
                   spacingMultiplier = 1.1; // Tight spacing within sub-bullets
                 } else {
@@ -993,12 +994,14 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             const parts = parseTextForPDF(point);
             const bulletParts = [{ text: '•  ', bold: false }, ...parts];
 
-            doc.setTextColor(...black);
-            y = addMixedText(bulletParts, margin, y, 11, 6, contentWidth, black);
-            // Check if this point contains sub-bullets (ends with indented dash lines or HTML lists)
-            const hasSubBullets = /\n\s+-\s[^\n]*$/.test(point) || /<\/li>\s*<\/ul>\s*$/.test(point);
-            // Use less spacing after AI-generated sub-bullet lists (HTML), more for user-added (plain text)
+            // Check if this point contains HTML sub-bullets
             const isHTMLSubBullets = /<\/li>\s*<\/ul>\s*$/.test(point);
+
+            doc.setTextColor(...black);
+            y = addMixedText(bulletParts, margin, y, 11, 6, contentWidth, black, isHTMLSubBullets);
+            // Check if this point contains sub-bullets (ends with indented dash lines or HTML lists)
+            const hasSubBullets = /\n\s+-\s[^\n]*$/.test(point) || isHTMLSubBullets;
+            // Use less spacing after AI-generated sub-bullet lists (HTML), more for user-added (plain text)
             y += isHTMLSubBullets ? 3 : (hasSubBullets ? 1 : 7);
           });
           y += 3;
