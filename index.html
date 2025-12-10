@@ -1042,27 +1042,27 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 document.execCommand(execCmd, false, null);
               } else {
                 // Turning OFF
-                console.log(`[FORMAT] Turning OFF - inserting plain text to break formatting`);
+                console.log(`[FORMAT] Turning OFF - inserting space to break formatting`);
 
-                // Insert a zero-width space to break out of formatting
-                // This is more reliable than trying to use execCommand
+                // Insert a regular space followed by zero-width space to break out of formatting
+                // Regular space for visible spacing, zero-width space ensures we're outside the tag
                 if (isInsideTag && formattedNode) {
-                  // Create a text node with zero-width space after the formatted node
-                  const breakNode = document.createTextNode('\u200B');
+                  // Create a text node with space + zero-width space after the formatted node
+                  const breakNode = document.createTextNode(' \u200B');
                   formattedNode.parentNode.insertBefore(breakNode, formattedNode.nextSibling);
 
-                  // Move cursor to after the zero-width space
+                  // Move cursor to after the break characters
                   const newRange = document.createRange();
                   newRange.setStartAfter(breakNode);
                   newRange.collapse(true);
                   sel.removeAllRanges();
                   sel.addRange(newRange);
 
-                  console.log(`[FORMAT] Inserted break character after formatted text`);
+                  console.log(`[FORMAT] Inserted space + break character after formatted text`);
                 } else {
-                  // Not inside a tag, just insert a zero-width space
-                  document.execCommand('insertText', false, '\u200B');
-                  console.log(`[FORMAT] Inserted break character at cursor`);
+                  // Not inside a tag, just insert space + zero-width space
+                  document.execCommand('insertText', false, ' \u200B');
+                  console.log(`[FORMAT] Inserted space + break character at cursor`);
                 }
               }
             } else {
