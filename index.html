@@ -790,16 +790,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
         // Helper to draw arrow symbols as graphics
         const drawArrow = (doc, arrowChar, x, y, fontSize) => {
-          const arrowWidth = fontSize * 0.5;  // Reduced from 0.8 to match text width better
-          const arrowHeight = fontSize * 0.35; // Slightly reduced
-          const lineWidth = fontSize * 0.04;   // Reduced from 0.08 for thinner lines
-          const headSize = fontSize * 0.18;    // Reduced from 0.25 for smaller arrowheads
+          const arrowWidth = fontSize * 0.35;  // Much smaller to match Unicode arrow appearance
+          const arrowHeight = fontSize * 0.35; // Same as width for square proportions (no stretching)
+          const lineWidth = fontSize * 0.03;   // Even thinner for subtle appearance
+          const headSize = fontSize * 0.15;    // Smaller arrowhead for compact look
 
           doc.setLineWidth(lineWidth);
           doc.setDrawColor(0, 0, 0);
           doc.setFillColor(0, 0, 0);
 
-          const centerY = y - fontSize * 0.35; // Align with text baseline (adjusted for better vertical centering)
+          // Different vertical positioning for horizontal vs vertical arrows
+          const isHorizontal = arrowChar === '→' || arrowChar === '←' || arrowChar === '⇒' || arrowChar === '⇐' || arrowChar === '↔' || arrowChar === '⇔';
+          const centerY = isHorizontal ? y - fontSize * 0.30 : y - fontSize * 0.35; // Horizontal arrows slightly lower
 
           // Helper to draw filled triangle using lines
           const drawTriangle = (x1, y1, x2, y2, x3, y3) => {
@@ -1029,7 +1031,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                       doc.text(segment.content, currentX, currentY + yOffset);
                       currentX += segmentWidth;
                     } else if (segment.type === 'arrow') {
-                      const arrowWidth = fontSize * 0.5;
+                      const arrowWidth = fontSize * 0.35;
 
                       // Check if we need to wrap
                       if (currentX + arrowWidth > startX + maxWidth) {
