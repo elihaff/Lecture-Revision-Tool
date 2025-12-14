@@ -581,9 +581,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Remove zero-width spaces used for formatting breaks
           str = str.replace(/\u200B/g, '');
 
-          // Keep arrow symbols as-is - Helvetica should support these
-          // Note: Basic arrows (→←↑↓) are widely supported in standard fonts
-          // If they don't render, we can fall back to text equivalents
+          // Arrow symbols (→←↑↓⇒⇐↔⇔) are preserved in text and rendered as graphics
+          // They are detected during rendering and drawn using jsPDF's line/triangle functions
+          // This ensures arrows display correctly regardless of font support
 
           // Handle superscript and subscript - mark them with special tags for later processing
           str = str.replace(/<sup>(.*?)<\/sup>/gi, '{{SUP}}$1{{/SUP}}');
@@ -788,6 +788,79 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           return parts.length > 0 ? parts : [{ text: str, bold: false, italic: false, superscript: false, subscript: false }];
         };
 
+        // Helper to draw arrow symbols as graphics
+        const drawArrow = (doc, arrowChar, x, y, fontSize) => {
+          const arrowWidth = fontSize * 0.8;
+          const arrowHeight = fontSize * 0.4;
+          const lineWidth = fontSize * 0.08;
+          const headSize = fontSize * 0.25;
+
+          doc.setLineWidth(lineWidth);
+          doc.setDrawColor(0, 0, 0);
+          doc.setFillColor(0, 0, 0);
+
+          const centerY = y - fontSize * 0.3; // Align with text baseline
+
+          // Helper to draw filled triangle using lines
+          const drawTriangle = (x1, y1, x2, y2, x3, y3) => {
+            doc.setFillColor(0, 0, 0);
+            // Draw filled triangle using lines method
+            doc.lines([[x2 - x1, y2 - y1], [x3 - x2, y3 - y2], [x1 - x3, y1 - y3]], x1, y1, [1, 1], 'F');
+          };
+
+          switch(arrowChar) {
+            case '→': // Right arrow
+              doc.line(x, centerY, x + arrowWidth, centerY);
+              drawTriangle(x + arrowWidth - headSize, centerY - headSize/2,
+                          x + arrowWidth - headSize, centerY + headSize/2,
+                          x + arrowWidth, centerY);
+              break;
+            case '←': // Left arrow
+              doc.line(x, centerY, x + arrowWidth, centerY);
+              drawTriangle(x + headSize, centerY - headSize/2,
+                          x + headSize, centerY + headSize/2,
+                          x, centerY);
+              break;
+            case '↑': // Up arrow
+              doc.line(x + arrowWidth/2, centerY - arrowHeight, x + arrowWidth/2, centerY + arrowHeight);
+              drawTriangle(x + arrowWidth/2 - headSize/2, centerY - arrowHeight + headSize,
+                          x + arrowWidth/2 + headSize/2, centerY - arrowHeight + headSize,
+                          x + arrowWidth/2, centerY - arrowHeight);
+              break;
+            case '↓': // Down arrow
+              doc.line(x + arrowWidth/2, centerY - arrowHeight, x + arrowWidth/2, centerY + arrowHeight);
+              drawTriangle(x + arrowWidth/2 - headSize/2, centerY + arrowHeight - headSize,
+                          x + arrowWidth/2 + headSize/2, centerY + arrowHeight - headSize,
+                          x + arrowWidth/2, centerY + arrowHeight);
+              break;
+            case '⇒': // Double right arrow
+              doc.line(x, centerY - lineWidth*2, x + arrowWidth, centerY - lineWidth*2);
+              doc.line(x, centerY + lineWidth*2, x + arrowWidth, centerY + lineWidth*2);
+              drawTriangle(x + arrowWidth - headSize, centerY - headSize/2,
+                          x + arrowWidth - headSize, centerY + headSize/2,
+                          x + arrowWidth, centerY);
+              break;
+            case '⇐': // Double left arrow
+              doc.line(x, centerY - lineWidth*2, x + arrowWidth, centerY - lineWidth*2);
+              doc.line(x, centerY + lineWidth*2, x + arrowWidth, centerY + lineWidth*2);
+              drawTriangle(x + headSize, centerY - headSize/2,
+                          x + headSize, centerY + headSize/2,
+                          x, centerY);
+              break;
+            case '↔': // Bidirectional arrow
+              doc.line(x, centerY, x + arrowWidth, centerY);
+              drawTriangle(x + arrowWidth - headSize, centerY - headSize/2,
+                          x + arrowWidth - headSize, centerY + headSize/2,
+                          x + arrowWidth, centerY);
+              drawTriangle(x + headSize, centerY - headSize/2,
+                          x + headSize, centerY + headSize/2,
+                          x, centerY);
+              break;
+          }
+
+          return arrowWidth;
+        };
+
         // Helper to sanitize text for PDF rendering - removes characters that cause issues
         const sanitizeForPDF = (text) => {
           if (!text) return text;
@@ -909,6 +982,76 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 const needsSpaceAfter = !isLastWordInLine || (!isLastLine || (!isLastPart && !nextIsScript));
 
                 const wordText = needsSpaceAfter ? word + ' ' : word;
+
+                // Check if word contains arrow characters - split and render separately
+                const arrowPattern = /[→←↑↓⇒⇐⇑⇓↔⇔]/;
+                const hasArrow = arrowPattern.test(wordText);
+
+                if (hasArrow) {
+                  // Split word into segments of text and arrows
+                  const segments = [];
+                  let currentSegment = '';
+                  for (let i = 0; i < wordText.length; i++) {
+                    const char = wordText[i];
+                    if (arrowPattern.test(char)) {
+                      if (currentSegment) {
+                        segments.push({ type: 'text', content: currentSegment });
+                        currentSegment = '';
+                      }
+                      segments.push({ type: 'arrow', content: char });
+                    } else {
+                      currentSegment += char;
+                    }
+                  }
+                  if (currentSegment) {
+                    segments.push({ type: 'text', content: currentSegment });
+                  }
+
+                  // Render each segment
+                  segments.forEach(segment => {
+                    if (segment.type === 'text') {
+                      const segmentWidth = doc.getTextWidth(segment.content);
+
+                      // Check if we need to wrap
+                      if (currentX + segmentWidth > startX + maxWidth) {
+                        currentX = startX + wrapIndent;
+                        const bulletPattern = /^\s{3,}[-◦•▪]\s/;
+                        const isSubBullet = bulletPattern.test(line);
+                        const spacingMultiplier = isSubBullet ? 1.0 : 1.1;
+                        currentY += lineHeight * spacingMultiplier;
+                        if (currentY > pageHeight - margin) {
+                          doc.addPage();
+                          currentY = margin;
+                        }
+                      }
+
+                      const yOffset = part.superscript ? -fontSize * 0.25 : (part.subscript ? fontSize * 0.15 : 0);
+                      doc.text(segment.content, currentX, currentY + yOffset);
+                      currentX += segmentWidth;
+                    } else if (segment.type === 'arrow') {
+                      const arrowWidth = fontSize * 0.8;
+
+                      // Check if we need to wrap
+                      if (currentX + arrowWidth > startX + maxWidth) {
+                        currentX = startX + wrapIndent;
+                        const bulletPattern = /^\s{3,}[-◦•▪]\s/;
+                        const isSubBullet = bulletPattern.test(line);
+                        const spacingMultiplier = isSubBullet ? 1.0 : 1.1;
+                        currentY += lineHeight * spacingMultiplier;
+                        if (currentY > pageHeight - margin) {
+                          doc.addPage();
+                          currentY = margin;
+                        }
+                      }
+
+                      const yOffset = part.superscript ? -fontSize * 0.25 : (part.subscript ? fontSize * 0.15 : 0);
+                      drawArrow(doc, segment.content, currentX, currentY + yOffset, fontSize);
+                      currentX += arrowWidth;
+                    }
+                  });
+                  return; // Skip the normal rendering below
+                }
+
                 const wordWidth = doc.getTextWidth(wordText);
 
                 // Check if we need to wrap to next line
