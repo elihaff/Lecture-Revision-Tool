@@ -790,16 +790,16 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
         // Helper to draw arrow symbols as graphics
         const drawArrow = (doc, arrowChar, x, y, fontSize) => {
-          const arrowWidth = fontSize * 0.8;
-          const arrowHeight = fontSize * 0.4;
-          const lineWidth = fontSize * 0.08;
-          const headSize = fontSize * 0.25;
+          const arrowWidth = fontSize * 0.5;  // Reduced from 0.8 to match text width better
+          const arrowHeight = fontSize * 0.35; // Slightly reduced
+          const lineWidth = fontSize * 0.04;   // Reduced from 0.08 for thinner lines
+          const headSize = fontSize * 0.18;    // Reduced from 0.25 for smaller arrowheads
 
           doc.setLineWidth(lineWidth);
           doc.setDrawColor(0, 0, 0);
           doc.setFillColor(0, 0, 0);
 
-          const centerY = y - fontSize * 0.3; // Align with text baseline
+          const centerY = y - fontSize * 0.35; // Align with text baseline (adjusted for better vertical centering)
 
           // Helper to draw filled triangle using lines
           const drawTriangle = (x1, y1, x2, y2, x3, y3) => {
@@ -834,15 +834,15 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                           x + arrowWidth/2, centerY + arrowHeight);
               break;
             case '⇒': // Double right arrow
-              doc.line(x, centerY - lineWidth*2, x + arrowWidth, centerY - lineWidth*2);
-              doc.line(x, centerY + lineWidth*2, x + arrowWidth, centerY + lineWidth*2);
+              doc.line(x, centerY - lineWidth*3, x + arrowWidth, centerY - lineWidth*3);
+              doc.line(x, centerY + lineWidth*3, x + arrowWidth, centerY + lineWidth*3);
               drawTriangle(x + arrowWidth - headSize, centerY - headSize/2,
                           x + arrowWidth - headSize, centerY + headSize/2,
                           x + arrowWidth, centerY);
               break;
             case '⇐': // Double left arrow
-              doc.line(x, centerY - lineWidth*2, x + arrowWidth, centerY - lineWidth*2);
-              doc.line(x, centerY + lineWidth*2, x + arrowWidth, centerY + lineWidth*2);
+              doc.line(x, centerY - lineWidth*3, x + arrowWidth, centerY - lineWidth*3);
+              doc.line(x, centerY + lineWidth*3, x + arrowWidth, centerY + lineWidth*3);
               drawTriangle(x + headSize, centerY - headSize/2,
                           x + headSize, centerY + headSize/2,
                           x, centerY);
@@ -1029,7 +1029,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                       doc.text(segment.content, currentX, currentY + yOffset);
                       currentX += segmentWidth;
                     } else if (segment.type === 'arrow') {
-                      const arrowWidth = fontSize * 0.8;
+                      const arrowWidth = fontSize * 0.5;
 
                       // Check if we need to wrap
                       if (currentX + arrowWidth > startX + maxWidth) {
