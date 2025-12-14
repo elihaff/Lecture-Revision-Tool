@@ -801,7 +801,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
           // Different vertical positioning for horizontal vs vertical arrows
           const isHorizontal = arrowChar === '→' || arrowChar === '←' || arrowChar === '⇒' || arrowChar === '⇐' || arrowChar === '↔' || arrowChar === '⇔';
-          const centerY = isHorizontal ? y - fontSize * 0.30 : y - fontSize * 0.35; // Horizontal arrows slightly lower
+          const centerY = isHorizontal ? y - fontSize * 0.25 : y - fontSize * 0.35; // Horizontal arrows at text x-height/midline
 
           // Helper to draw filled triangle using lines
           const drawTriangle = (x1, y1, x2, y2, x3, y3) => {
