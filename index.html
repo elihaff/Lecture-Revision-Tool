@@ -790,18 +790,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
         // Helper to draw arrow symbols as graphics
         const drawArrow = (doc, arrowChar, x, y, fontSize) => {
-          const arrowWidth = fontSize * 0.35;  // Much smaller to match Unicode arrow appearance
-          const arrowHeight = fontSize * 0.35; // Same as width for square proportions (no stretching)
-          const lineWidth = fontSize * 0.03;   // Even thinner for subtle appearance
-          const headSize = fontSize * 0.15;    // Smaller arrowhead for compact look
+          const arrowWidth = fontSize * 0.35;  // Compact size to match Unicode arrows
+          const arrowHeight = fontSize * 0.35; // Same as width for consistent sizing
+          const lineWidth = fontSize * 0.03;   // Thin line for subtle appearance
+          const headSize = fontSize * 0.15;    // Small arrowhead for compact look
 
           doc.setLineWidth(lineWidth);
           doc.setDrawColor(0, 0, 0);
           doc.setFillColor(0, 0, 0);
 
-          // Different vertical positioning for horizontal vs vertical arrows
+          // Position arrows: horizontal at x-height (top of 'i'), vertical slightly higher
           const isHorizontal = arrowChar === '→' || arrowChar === '←' || arrowChar === '⇒' || arrowChar === '⇐' || arrowChar === '↔' || arrowChar === '⇔';
-          const centerY = isHorizontal ? y - fontSize * 0.25 : y - fontSize * 0.35; // Horizontal arrows at text x-height/midline
+          const centerY = isHorizontal ? y - fontSize * 0.5 : y - fontSize * 0.5; // Both at x-height level
 
           // Helper to draw filled triangle using lines
           const drawTriangle = (x1, y1, x2, y2, x3, y3) => {
@@ -824,16 +824,20 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                           x, centerY);
               break;
             case '↑': // Up arrow
-              doc.line(x + arrowWidth/2, centerY - arrowHeight, x + arrowWidth/2, centerY + arrowHeight);
-              drawTriangle(x + arrowWidth/2 - headSize/2, centerY - arrowHeight + headSize,
-                          x + arrowWidth/2 + headSize/2, centerY - arrowHeight + headSize,
-                          x + arrowWidth/2, centerY - arrowHeight);
+              // Make vertical arrow same length as horizontal (arrowWidth, not 2*arrowHeight)
+              const upLength = arrowWidth / 2;
+              doc.line(x + arrowWidth/2, centerY - upLength, x + arrowWidth/2, centerY + upLength);
+              drawTriangle(x + arrowWidth/2 - headSize/2, centerY - upLength + headSize,
+                          x + arrowWidth/2 + headSize/2, centerY - upLength + headSize,
+                          x + arrowWidth/2, centerY - upLength);
               break;
             case '↓': // Down arrow
-              doc.line(x + arrowWidth/2, centerY - arrowHeight, x + arrowWidth/2, centerY + arrowHeight);
-              drawTriangle(x + arrowWidth/2 - headSize/2, centerY + arrowHeight - headSize,
-                          x + arrowWidth/2 + headSize/2, centerY + arrowHeight - headSize,
-                          x + arrowWidth/2, centerY + arrowHeight);
+              // Make vertical arrow same length as horizontal (arrowWidth, not 2*arrowHeight)
+              const downLength = arrowWidth / 2;
+              doc.line(x + arrowWidth/2, centerY - downLength, x + arrowWidth/2, centerY + downLength);
+              drawTriangle(x + arrowWidth/2 - headSize/2, centerY + downLength - headSize,
+                          x + arrowWidth/2 + headSize/2, centerY + downLength - headSize,
+                          x + arrowWidth/2, centerY + downLength);
               break;
             case '⇒': // Double right arrow
               doc.line(x, centerY - lineWidth*3, x + arrowWidth, centerY - lineWidth*3);
