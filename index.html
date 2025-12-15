@@ -799,9 +799,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           doc.setDrawColor(0, 0, 0);
           doc.setFillColor(0, 0, 0);
 
-          // Position arrows: horizontal at x-height (top of 'i'), vertical slightly higher
+          // Position arrows: SMALLER multiplier = LOWER on page (y increases downward in jsPDF)
+          // For reference: y = baseline, y - fontSize = top of font, y + 0 = baseline level
           const isHorizontal = arrowChar === '→' || arrowChar === '←' || arrowChar === '⇒' || arrowChar === '⇐' || arrowChar === '↔' || arrowChar === '⇔';
-          const centerY = isHorizontal ? y - fontSize * 0.5 : y - fontSize * 0.5; // Both at x-height level
+          const centerY = isHorizontal ? y - fontSize * 0.18 : y - fontSize * 0.5; // Horizontal at lowercase letter middle height
 
           // Helper to draw filled triangle using lines
           const drawTriangle = (x1, y1, x2, y2, x3, y3) => {
