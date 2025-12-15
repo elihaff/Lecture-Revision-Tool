@@ -802,7 +802,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Position arrows: SMALLER multiplier = LOWER on page (y increases downward in jsPDF)
           // For reference: y = baseline, y - fontSize = top of font, y + 0 = baseline level
           const isHorizontal = arrowChar === '→' || arrowChar === '←' || arrowChar === '⇒' || arrowChar === '⇐' || arrowChar === '↔' || arrowChar === '⇔';
-          const centerY = isHorizontal ? y - fontSize * 0.18 : y - fontSize * 0.5; // Horizontal at lowercase letter middle height
+          const isVertical = arrowChar === '↑' || arrowChar === '↓' || arrowChar === '⇑' || arrowChar === '⇓';
+          // Horizontal arrows slightly lower, vertical arrows much lower to match text alignment
+          const centerY = isHorizontal ? y - fontSize * 0.15 : (isVertical ? y - fontSize * 0.15 : y - fontSize * 0.5);
 
           // Helper to draw filled triangle using lines
           const drawTriangle = (x1, y1, x2, y2, x3, y3) => {
