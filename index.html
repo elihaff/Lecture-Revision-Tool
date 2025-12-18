@@ -16,6 +16,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.min.js"></script>
+  <script src="custom-fonts.js"></script>
   <style>
     body { margin: 0; height: 100vh; }
     #root { height: 100%; }
@@ -494,33 +495,6 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
           str = decodeEntities(str);
 
-          // Replace Unicode symbols that don't render well in Roboto font
-          const replaceUnsupportedChars = (txt) => {
-            const replacements = {
-              // Arrows - convert to ASCII equivalents
-              '→': '->',
-              '←': '<-',
-              '↑': '^',
-              '↓': 'v',
-              '⇒': '=>',
-              '⇐': '<=',
-              '↔': '<->',
-              '⇔': '<=>',
-              // Keep comparison symbols that might not render
-              '≥': '>=',
-              '≤': '<=',
-              '≠': '!=',
-              '≈': '~='
-            };
-            let result = txt;
-            for (const [char, replacement] of Object.entries(replacements)) {
-              result = result.split(char).join(replacement);
-            }
-            return result;
-          };
-
-          str = replaceUnsupportedChars(str);
-
           // Remove HTML tags but preserve their content
           str = str.replace(/<[^>]+>/g, '');
 
@@ -555,7 +529,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           pageSize: 'A4',
           pageMargins: [40, 40, 40, 40],
           defaultStyle: {
-            font: 'Roboto'
+            font: 'NotoSans'
           },
           content: [],
           styles: {
