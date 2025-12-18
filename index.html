@@ -14,8 +14,8 @@
   <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
   <script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pdfmake@0.1.72/build/pdfmake.min.js"></script>
+  <script src="https://unpkg.com/pdfmake-unicode@0.0.1/dist/pdfmake-unicode.js"></script>
   <style>
     body { margin: 0; height: 100vh; }
     #root { height: 100%; }
@@ -528,7 +528,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           pageSize: 'A4',
           pageMargins: [40, 40, 40, 40],
           defaultStyle: {
-            font: 'Roboto'
+            font: 'ArialGEO'
           },
           content: [],
           styles: {
