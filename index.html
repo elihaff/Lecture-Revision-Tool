@@ -163,21 +163,40 @@
         return { type: 'pdf', data: base64 };
       };
 
+      // Convert markdown-style formatting to HTML for display
+      const markdownToHTML = (text) => {
+        if (!text) return '';
+        let html = String(text);
+
+        // Convert **bold** to <b>bold</b>
+        // Match ** that's not preceded by another *, followed by content, followed by ** not followed by another *
+        html = html.replace(/(?<!\*)\*\*(?!\*)(.+?)(?<!\*)\*\*(?!\*)/g, '<b>$1</b>');
+
+        return html;
+      };
+
       const handleFileUpload = async (e) => {
         const uploadedFile = e.target.files[0];
         if (!uploadedFile || !uploadedFile.name.toLowerCase().endsWith('.pdf')) {
           setChatMessages(prev => [...prev, { role: 'assistant', content: "Please upload a PDF file." }]);
           return;
         }
-        setFile(uploadedFile);
-        const data = await readFile(uploadedFile);
-        setFileData(data);
-        const defaultTag = uploadedFile.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9]/g, '_');
-        setLectureTag(defaultTag);
-        setChatMessages(prev => [...prev,
-          { role: 'user', content: `Uploaded: ${uploadedFile.name}` },
-          { role: 'assistant', content: `Great! Tag: "${defaultTag}"\n\nNow choose what to generate:\n• "Generate Notes" - Create study notes from the PDF\n• "Generate Flashcards" - Create Anki cards (works best after notes are generated)${!apiKey ? '\n\n⚠️ Add your API key in Settings first!' : ''}` }
-        ]);
+
+        try {
+          setFile(uploadedFile);
+          const data = await readFile(uploadedFile);
+          setFileData(data);
+          const defaultTag = uploadedFile.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9]/g, '_');
+          setLectureTag(defaultTag);
+          setChatMessages(prev => [...prev,
+            { role: 'user', content: `Uploaded: ${uploadedFile.name}` },
+            { role: 'assistant', content: `Great! Tag: "${defaultTag}"\n\nNow choose what to generate:\n• "Generate Notes" - Create study notes from the PDF\n• "Generate Flashcards" - Create Anki cards (works best after notes are generated)${!apiKey ? '\n\n⚠️ Add your API key in Settings first!' : ''}` }
+          ]);
+        } catch (error) {
+          setChatMessages(prev => [...prev, { role: 'assistant', content: `❌ Error loading PDF: ${error.message}. The file may be corrupted, too large, or in an unsupported format.` }]);
+          setFile(null);
+          setFileData(null);
+        }
       };
 
       const generateNotes = async () => {
@@ -443,817 +462,160 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
       };
 
       const exportPDF = () => {
-        console.log('===== PDF EXPORT STARTED =====');
+        console.log('===== PDF EXPORT STARTED (pdfmake) =====');
         if (!notes) return;
-        const { jsPDF } = window.jspdf;
-        const doc = new jsPDF({
-          orientation: 'portrait',
-          unit: 'mm',
-          format: 'a4'
-        });
-        console.log('PDF document created successfully');
 
-        const pageWidth = doc.internal.pageSize.getWidth();
-        const pageHeight = doc.internal.pageSize.getHeight();
-        const margin = 20;
-        const contentWidth = pageWidth - (margin * 2);
-        let y = margin;
-
-        // Colors matching the example PDF
-        const titleBlue = [54, 95, 145]; // #365F91
-        const headerBlue = [79, 129, 189]; // #4F81BD
-        const black = [0, 0, 0];
-
-        // Helper to parse text and return formatted segments
-        const parseTextForPDF = (text) => {
-          if (!text) return [{ text: '', bold: false }];
+        // Helper function to parse HTML/markdown text into pdfmake text array
+        const parseText = (text) => {
+          if (!text) return '';
           let str = String(text);
 
-          console.log('[PDF PARSE] Input HTML:', str.substring(0, 200));
+          // Remove <br> tags, convert to spaces
+          str = str.replace(/<br\s*\/?>/gi, ' ');
 
-          // Decode any URL-encoded characters (e.g., %20 for space, %0A for newline)
-          try {
-            const decoded = decodeURIComponent(str);
-            if (decoded !== str) {
-              console.log('[PDF PARSE] Decoded URL encoding');
-            }
-            str = decoded;
-          } catch (e) {
-            // If decoding fails, use original string
-            console.log('[PDF PARSE] Decoding failed:', e.message);
-          }
-
-          // Count <ul> nesting depth at each <li> to detect indentation
-          // Start at -1 because first <ul> brings us to depth 0
-          let depth = -1;
-          let result = '';
-          let i = 0;
-          // Track which depth level should get extra indentation (or -1 for none)
-          let indentDepthLevel = -1;
-
-          while (i < str.length) {
-            // Check for <ul> start
-            if (str.substr(i, 3) === '<ul' || str.substr(i, 3) === '<UL') {
-              // Check if there's text before this list on the current line
-              const hasTextBefore = result.length > 0 && !result.endsWith('\n');
-
-              // Add a newline before list if:
-              // 1. We're already in a list (nested), OR
-              // 2. There's already text on the current line
-              if (depth >= 0 || hasTextBefore) {
-                result += '\n';
-                // If this is the first list and it follows text, mark this depth for indentation
-                if (depth === -1 && hasTextBefore) {
-                  indentDepthLevel = 0; // The items at depth 0 should be indented
-                }
-              }
-              depth++;
-              // Skip to end of tag
-              const endTag = str.indexOf('>', i);
-              i = endTag + 1;
-              continue;
-            }
-
-            // Check for </ul> end
-            if (str.substr(i, 5) === '</ul>' || str.substr(i, 5) === '</UL>') {
-              depth = Math.max(-1, depth - 1);
-              // Reset indent flag when returning to top level
-              if (depth === -1) {
-                indentDepthLevel = -1;
-              }
-              i += 5;
-              continue;
-            }
-
-            // Check for <li> start
-            if (str.substr(i, 3) === '<li' || str.substr(i, 3) === '<LI') {
-              // Add appropriate indentation based on current depth
-              let actualDepth = Math.max(0, depth);
-
-              // If we're indenting because of preceding text, shift ALL depths in that list
-              if (indentDepthLevel >= 0 && depth >= indentDepthLevel) {
-                actualDepth = depth - indentDepthLevel + 1;
-              }
-
-              // Use 3 spaces per level for indentation
-              const indentStr = '   '.repeat(actualDepth);
-              // Use bullet circle for main items, dash for sub-items
-              const bullet = actualDepth === 0 ? '• ' : '- ';
-              result += indentStr + bullet;
-
-              // Skip to end of opening <li> tag
-              const endTag = str.indexOf('>', i);
-              i = endTag + 1;
-              continue;
-            }
-
-            // Check for </li> end
-            if (str.substr(i, 5) === '</li>' || str.substr(i, 5) === '</LI>') {
-              result += '\n';
-              i += 5;
-              continue;
-            }
-
-            // Regular character - add to result
-            result += str[i];
-            i++;
-          }
-
-          str = result;
-
-          // Handle divs and paragraphs - convert to line breaks
-          // Opening <div> and <p> tags create a new line (except the first one)
-          str = str.replace(/<div[^>]*>/gi, '\n');
-          str = str.replace(/<\/div>/gi, '');
-          str = str.replace(/<p[^>]*>/gi, '\n');
-          str = str.replace(/<\/p>/gi, '');
-
-          // Convert <br> tags to newlines
-          str = str.replace(/<br\s*\/?>/gi, '\n');
-
-          // Clean up double newlines that occur at list boundaries
-          str = str.replace(/\n\n+/g, '\n');
-
-          // Remove extra newline after sub-bullet lists (after closing nested ul)
-          // Pattern: newline + spaces (indentation) + bullet should have only one newline before
-          str = str.replace(/\n+(\s*[•\-])/g, '\n$1');
-
-          // Remove zero-width spaces used for formatting breaks
-          str = str.replace(/\u200B/g, '');
-
-          // Arrow symbols (→←↑↓⇒⇐↔⇔) are preserved in text and rendered as graphics
-          // They are detected during rendering and drawn using jsPDF's line/triangle functions
-          // This ensures arrows display correctly regardless of font support
-
-          // Handle superscript and subscript - mark them with special tags for later processing
-          str = str.replace(/<sup>(.*?)<\/sup>/gi, '{{SUP}}$1{{/SUP}}');
-          str = str.replace(/<sub>(.*?)<\/sub>/gi, '{{SUB}}$1{{/SUB}}');
-
-          // Handle underline - add indicator
-          str = str.replace(/<u>(.*?)<\/u>/gi, '$1');
-
-          // Handle italic
-          str = str.replace(/<i>(.*?)<\/i>/gi, '{{ITALIC}}$1{{/ITALIC}}');
-          str = str.replace(/<em>(.*?)<\/em>/gi, '{{ITALIC}}$1{{/ITALIC}}');
-
-          // Normalize bold markers
-          str = str.replace(/<b>/gi, '**').replace(/<\/b>/gi, '**');
-          str = str.replace(/<strong>/gi, '**').replace(/<\/strong>/gi, '**');
-          str = str.replace(/(?<![*\w])\*([^*]+)\*(?![*\w])/g, '**$1**');
-
-          // Remove any remaining HTML tags
-          str = str.replace(/<[^>]+>/g, '');
-
-          // Decode HTML entities (e.g., &nbsp;, &amp;, &lt;, &gt;, etc.)
-          const decodeHTMLEntities = (text) => {
+          // Decode HTML entities
+          const decodeEntities = (txt) => {
             const entities = {
-              '&nbsp;': ' ',
-              '&amp;': '&',
-              '&lt;': '<',
-              '&gt;': '>',
-              '&quot;': '"',
-              '&#39;': "'",
-              '&apos;': "'",
-              '&cent;': '¢',
-              '&pound;': '£',
-              '&yen;': '¥',
-              '&euro;': '€',
-              '&copy;': '©',
-              '&reg;': '®',
-              '&trade;': '™',
-              '&times;': '×',
-              '&divide;': '÷',
-              '&deg;': '°',
-              '&plusmn;': '±',
-              '&micro;': 'µ',
-              '&para;': '¶',
-              '&sect;': '§',
-              '&mdash;': '—',
-              '&ndash;': '–',
-              '&hellip;': '…',
-              '&lsquo;': '\u2018',
-              '&rsquo;': '\u2019',
-              '&ldquo;': '\u201C',
-              '&rdquo;': '\u201D',
-              '&bull;': '•',
-              '&rarr;': '→',
-              '&larr;': '←',
-              '&uarr;': '↑',
-              '&darr;': '↓',
-              '&harr;': '↔',
-              '&ne;': '≠',
-              '&le;': '≤',
-              '&ge;': '≥',
-              '&sum;': '∑',
-              '&prod;': '∏',
-              '&int;': '∫',
-              '&infin;': '∞',
-              '&radic;': '√',
-              '&alpha;': 'α',
-              '&beta;': 'β',
-              '&gamma;': 'γ',
-              '&delta;': 'δ',
-              '&epsilon;': 'ε',
-              '&theta;': 'θ',
-              '&lambda;': 'λ',
-              '&mu;': 'μ',
-              '&pi;': 'π',
-              '&sigma;': 'σ',
-              '&tau;': 'τ',
-              '&phi;': 'φ',
-              '&omega;': 'ω'
+              '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>',
+              '&quot;': '"', '&#39;': "'", '&apos;': "'",
+              '&alpha;': 'α', '&beta;': 'β', '&gamma;': 'γ', '&delta;': 'δ',
+              '&epsilon;': 'ε', '&theta;': 'θ', '&lambda;': 'λ', '&mu;': 'μ',
+              '&pi;': 'π', '&sigma;': 'σ', '&tau;': 'τ', '&phi;': 'φ', '&omega;': 'ω',
+              '&rarr;': '→', '&larr;': '←', '&uarr;': '↑', '&darr;': '↓',
+              '&le;': '≤', '&ge;': '≥', '&ne;': '≠',
+              '&deg;': '°', '&plusmn;': '±', '&times;': '×', '&divide;': '÷'
             };
-
-            // Replace named entities
-            let decoded = text;
+            let result = txt;
             for (const [entity, char] of Object.entries(entities)) {
-              decoded = decoded.split(entity).join(char);
+              result = result.split(entity).join(char);
             }
-
-            // Replace numeric entities (&#123; or &#xAB;)
-            decoded = decoded.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
-            decoded = decoded.replace(/&#x([0-9A-Fa-f]+);/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
-
-            return decoded;
-          };
-
-          str = decodeHTMLEntities(str);
-
-          // Handle Greek letters and special characters that don't render well in PDF
-          // Convert them to safe alternatives that won't cause rendering issues
-          const handleSpecialChars = (text) => {
-            // Convert Greek letters and problematic characters to readable alternatives
-            const replacements = {
-              // Greek lowercase
-              'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon',
-              'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'ι': 'iota', 'κ': 'kappa',
-              'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron',
-              'π': 'pi', 'ρ': 'rho', 'ς': 'sigma', 'σ': 'sigma', 'τ': 'tau',
-              'υ': 'upsilon', 'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
-              // Greek uppercase
-              'Α': 'Alpha', 'Β': 'Beta', 'Γ': 'Gamma', 'Δ': 'Delta', 'Ε': 'Epsilon',
-              'Ζ': 'Zeta', 'Η': 'Eta', 'Θ': 'Theta', 'Ι': 'Iota', 'Κ': 'Kappa',
-              'Λ': 'Lambda', 'Μ': 'Mu', 'Ν': 'Nu', 'Ξ': 'Xi', 'Ο': 'Omicron',
-              'Π': 'Pi', 'Ρ': 'Rho', 'Σ': 'Sigma', 'Τ': 'Tau', 'Υ': 'Upsilon',
-              'Φ': 'Phi', 'Χ': 'Chi', 'Ψ': 'Psi', 'Ω': 'Omega',
-              // Characters with macron/breve (these cause display issues)
-              'ā': 'a', 'ē': 'e', 'ī': 'i', 'ō': 'o', 'ū': 'u',
-              'Ā': 'A', 'Ē': 'E', 'Ī': 'I', 'Ō': 'O', 'Ū': 'U',
-              'ă': 'a', 'ĕ': 'e', 'ĭ': 'i', 'ŏ': 'o', 'ŭ': 'u'
-            };
-
-            let result = text;
-            for (const [char, replacement] of Object.entries(replacements)) {
-              result = result.split(char).join(replacement);
-            }
-
             return result;
           };
 
-          str = handleSpecialChars(str);
+          str = decodeEntities(str);
 
-          // Clean up excessive newlines - keep only single newlines
-          str = str.replace(/\n{2,}/g, '\n');
+          // Remove HTML tags but preserve their content
+          str = str.replace(/<[^>]+>/g, '');
 
-          // Parse formatting tags
-          const parts = [];
-          let currentPos = 0;
-          const regex = /(\*\*|\{\{ITALIC\}\}|\{\{\/ITALIC\}\}|\{\{SUP\}\}|\{\{\/SUP\}\}|\{\{SUB\}\}|\{\{\/SUB\}\})/g;
+          // Parse **bold** syntax into pdfmake text array
+          const textArray = [];
+          const boldRegex = /\*\*(.+?)\*\*/g;
+          let lastIndex = 0;
           let match;
-          let boldActive = false;
-          let italicActive = false;
-          let superscriptActive = false;
-          let subscriptActive = false;
-          let buffer = '';
 
-          const addPart = () => {
-            if (buffer) {
-              parts.push({
-                text: buffer,
-                bold: boldActive,
-                italic: italicActive,
-                superscript: superscriptActive,
-                subscript: subscriptActive
-              });
-              buffer = '';
+          while ((match = boldRegex.exec(str)) !== null) {
+            // Add text before the bold part
+            if (match.index > lastIndex) {
+              const normalText = str.substring(lastIndex, match.index);
+              if (normalText) textArray.push({ text: normalText });
             }
-          };
-
-          while ((match = regex.exec(str)) !== null) {
-            // Add text before the match
-            if (match.index > currentPos) {
-              buffer += str.substring(currentPos, match.index);
-            }
-
-            // Handle the tag
-            if (match[0] === '**') {
-              addPart();
-              boldActive = !boldActive;
-            } else if (match[0] === '{{ITALIC}}') {
-              addPart();
-              italicActive = true;
-            } else if (match[0] === '{{/ITALIC}}') {
-              addPart();
-              italicActive = false;
-            } else if (match[0] === '{{SUP}}') {
-              addPart();
-              superscriptActive = true;
-            } else if (match[0] === '{{/SUP}}') {
-              addPart();
-              superscriptActive = false;
-            } else if (match[0] === '{{SUB}}') {
-              addPart();
-              subscriptActive = true;
-            } else if (match[0] === '{{/SUB}}') {
-              addPart();
-              subscriptActive = false;
-            }
-
-            currentPos = match.index + match[0].length;
+            // Add the bold part
+            textArray.push({ text: match[1], bold: true });
+            lastIndex = match.index + match[0].length;
           }
 
-          // Add remaining text
-          if (currentPos < str.length) {
-            buffer += str.substring(currentPos);
+          // Add remaining text after last bold
+          if (lastIndex < str.length) {
+            const remainingText = str.substring(lastIndex);
+            if (remainingText) textArray.push({ text: remainingText });
           }
-          addPart();
 
-          console.log('[PDF PARSE] Output parts:', parts.map(p => ({
-            text: p.text.substring(0, 50) + (p.text.length > 50 ? '...' : ''),
-            bold: p.bold,
-            super: p.superscript,
-            sub: p.subscript
-          })));
-
-          return parts.length > 0 ? parts : [{ text: str, bold: false, italic: false, superscript: false, subscript: false }];
+          return textArray.length > 0 ? textArray : str;
         };
 
-        // Helper to draw arrow symbols as graphics
-        const drawArrow = (doc, arrowChar, x, y, fontSize) => {
-          const arrowWidth = fontSize * 0.35;  // Compact size to match Unicode arrows
-          const arrowHeight = fontSize * 0.35; // Same as width for consistent sizing
-          const lineWidth = fontSize * 0.03;   // Thin line for subtle appearance
-          const headSize = fontSize * 0.15;    // Small arrowhead for compact look
-
-          doc.setLineWidth(lineWidth);
-          doc.setDrawColor(0, 0, 0);
-          doc.setFillColor(0, 0, 0);
-
-          // Position arrows: SMALLER multiplier = LOWER on page (y increases downward in jsPDF)
-          // For reference: y = baseline, y - fontSize = top of font, y + 0 = baseline level
-          const isHorizontal = arrowChar === '→' || arrowChar === '←' || arrowChar === '⇒' || arrowChar === '⇐' || arrowChar === '↔' || arrowChar === '⇔';
-          const isVertical = arrowChar === '↑' || arrowChar === '↓' || arrowChar === '⇑' || arrowChar === '⇓';
-          // Horizontal arrows slightly lower, vertical arrows much lower to match text alignment
-          const centerY = isHorizontal ? y - fontSize * 0.15 : (isVertical ? y - fontSize * 0.15 : y - fontSize * 0.5);
-
-          // Helper to draw filled triangle using lines
-          const drawTriangle = (x1, y1, x2, y2, x3, y3) => {
-            doc.setFillColor(0, 0, 0);
-            // Draw filled triangle using lines method
-            doc.lines([[x2 - x1, y2 - y1], [x3 - x2, y3 - y2], [x1 - x3, y1 - y3]], x1, y1, [1, 1], 'F');
-          };
-
-          switch(arrowChar) {
-            case '→': // Right arrow
-              doc.line(x, centerY, x + arrowWidth, centerY);
-              drawTriangle(x + arrowWidth - headSize, centerY - headSize/2,
-                          x + arrowWidth - headSize, centerY + headSize/2,
-                          x + arrowWidth, centerY);
-              break;
-            case '←': // Left arrow
-              doc.line(x, centerY, x + arrowWidth, centerY);
-              drawTriangle(x + headSize, centerY - headSize/2,
-                          x + headSize, centerY + headSize/2,
-                          x, centerY);
-              break;
-            case '↑': // Up arrow
-              // Make vertical arrow same length as horizontal (arrowWidth, not 2*arrowHeight)
-              const upLength = arrowWidth / 2;
-              doc.line(x + arrowWidth/2, centerY - upLength, x + arrowWidth/2, centerY + upLength);
-              drawTriangle(x + arrowWidth/2 - headSize/2, centerY - upLength + headSize,
-                          x + arrowWidth/2 + headSize/2, centerY - upLength + headSize,
-                          x + arrowWidth/2, centerY - upLength);
-              break;
-            case '↓': // Down arrow
-              // Make vertical arrow same length as horizontal (arrowWidth, not 2*arrowHeight)
-              const downLength = arrowWidth / 2;
-              doc.line(x + arrowWidth/2, centerY - downLength, x + arrowWidth/2, centerY + downLength);
-              drawTriangle(x + arrowWidth/2 - headSize/2, centerY + downLength - headSize,
-                          x + arrowWidth/2 + headSize/2, centerY + downLength - headSize,
-                          x + arrowWidth/2, centerY + downLength);
-              break;
-            case '⇒': // Double right arrow
-              doc.line(x, centerY - lineWidth*3, x + arrowWidth, centerY - lineWidth*3);
-              doc.line(x, centerY + lineWidth*3, x + arrowWidth, centerY + lineWidth*3);
-              drawTriangle(x + arrowWidth - headSize, centerY - headSize/2,
-                          x + arrowWidth - headSize, centerY + headSize/2,
-                          x + arrowWidth, centerY);
-              break;
-            case '⇐': // Double left arrow
-              doc.line(x, centerY - lineWidth*3, x + arrowWidth, centerY - lineWidth*3);
-              doc.line(x, centerY + lineWidth*3, x + arrowWidth, centerY + lineWidth*3);
-              drawTriangle(x + headSize, centerY - headSize/2,
-                          x + headSize, centerY + headSize/2,
-                          x, centerY);
-              break;
-            case '↔': // Bidirectional arrow
-              doc.line(x, centerY, x + arrowWidth, centerY);
-              drawTriangle(x + arrowWidth - headSize, centerY - headSize/2,
-                          x + arrowWidth - headSize, centerY + headSize/2,
-                          x + arrowWidth, centerY);
-              drawTriangle(x + headSize, centerY - headSize/2,
-                          x + headSize, centerY + headSize/2,
-                          x, centerY);
-              break;
+        // Build pdfmake document definition
+        const docDefinition = {
+          pageSize: 'A4',
+          pageMargins: [40, 40, 40, 40],
+          defaultStyle: {
+            font: 'Roboto'
+          },
+          content: [],
+          styles: {
+            title: {
+              fontSize: 18,
+              bold: true,
+              color: '#365F91',
+              margin: [0, 0, 0, 12]
+            },
+            sectionHeader: {
+              fontSize: 13,
+              bold: true,
+              color: '#4F81BD',
+              margin: [0, 8, 0, 4]
+            },
+            objectivesHeader: {
+              fontSize: 13,
+              bold: true,
+              color: '#4F81BD',
+              margin: [0, 0, 0, 6]
+            },
+            bullet: {
+              fontSize: 11,
+              margin: [0, 2, 0, 2]
+            },
+            objectiveBullet: {
+              fontSize: 11,
+              margin: [0, 1, 0, 1]
+            }
           }
-
-          return arrowWidth;
         };
 
-        // Helper to sanitize text for PDF rendering - removes characters that cause issues
-        const sanitizeForPDF = (text) => {
-          if (!text) return text;
+        // Add title
+        docDefinition.content.push({
+          text: (notes.title || 'Lecture Notes') + ' (Concise Notes)',
+          style: 'title'
+        });
 
-          const originalText = text;
-          let sanitized = String(text);
+        // Add learning objectives section
+        if (notes.learningObjectives && notes.learningObjectives.length > 0) {
+          docDefinition.content.push({
+            text: 'Learning Objectives',
+            style: 'objectivesHeader'
+          });
 
-          // Convert Greek letters and problematic characters to readable alternatives
-          const charMap = {
-            // Greek lowercase
-            'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon',
-            'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'ι': 'iota', 'κ': 'kappa',
-            'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron',
-            'π': 'pi', 'ρ': 'rho', 'ς': 'sigma', 'σ': 'sigma', 'τ': 'tau',
-            'υ': 'upsilon', 'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
-            // Greek uppercase
-            'Α': 'Alpha', 'Β': 'Beta', 'Γ': 'Gamma', 'Δ': 'Delta', 'Ε': 'Epsilon',
-            'Ζ': 'Zeta', 'Η': 'Eta', 'Θ': 'Theta', 'Ι': 'Iota', 'Κ': 'Kappa',
-            'Λ': 'Lambda', 'Μ': 'Mu', 'Ν': 'Nu', 'Ξ': 'Xi', 'Ο': 'Omicron',
-            'Π': 'Pi', 'Ρ': 'Rho', 'Σ': 'Sigma', 'Τ': 'Tau', 'Υ': 'Upsilon',
-            'Φ': 'Phi', 'Χ': 'Chi', 'Ψ': 'Psi', 'Ω': 'Omega',
-            // Characters with macron (line over) - these cause display issues
-            'ā': 'a', 'ē': 'e', 'ī': 'i', 'ō': 'o', 'ū': 'u',
-            'Ā': 'A', 'Ē': 'E', 'Ī': 'I', 'Ō': 'O', 'Ū': 'U',
-            // Characters with breve - these cause display issues
-            'ă': 'a', 'ĕ': 'e', 'ĭ': 'i', 'ŏ': 'o', 'ŭ': 'u'
+          const objectivesList = {
+            ul: notes.learningObjectives.map(obj => ({
+              text: parseText(obj),
+              style: 'objectiveBullet'
+            })),
+            margin: [0, 0, 0, 8]
           };
+          docDefinition.content.push(objectivesList);
+        }
 
-          // Apply character replacements
-          for (const [char, replacement] of Object.entries(charMap)) {
-            if (sanitized.includes(char)) {
-              console.log('[PDF SANITIZE] Replacing', char, 'with', replacement);
-              sanitized = sanitized.split(char).join(replacement);
-            }
-          }
-
-          if (sanitized !== originalText) {
-            console.log('[PDF SANITIZE] Changed:', originalText.substring(0, 50), '-->', sanitized.substring(0, 50));
-          }
-
-          return sanitized;
-        };
-
-        // Helper to add text with mixed bold - returns new Y position
-        const addMixedText = (parts, startX, startY, fontSize, lineHeight, maxWidth, color = black, isHTMLSubBullets = false) => {
-          doc.setFontSize(fontSize);
-          doc.setTextColor(...color);
-
-          let currentX = startX;
-          let currentY = startY;
-          const wrapIndent = 8; // Indent wrapped lines by 8 units
-
-          parts.forEach((part, partIndex) => {
-            if (!part.text || part.text.length === 0) return;
-
-            // Sanitize the text first to ensure width calculations are accurate
-            part.text = sanitizeForPDF(part.text);
-
-            // Set font style based on formatting
-            if (part.bold && part.italic) {
-              doc.setFont('helvetica', 'bolditalic');
-            } else if (part.bold) {
-              doc.setFont('helvetica', 'bold');
-            } else if (part.italic) {
-              doc.setFont('helvetica', 'italic');
-            } else {
-              doc.setFont('helvetica', 'normal');
-            }
-
-            // Handle superscript/subscript with smaller font and vertical offset
-            const isScript = part.superscript || part.subscript;
-            const originalFontSize = fontSize;
-            if (isScript) {
-              doc.setFontSize(fontSize * 0.6); // 60% of normal size
-            }
-
-            // Split by newlines first to handle line breaks
-            const lines = part.text.split('\n');
-
-            lines.forEach((line, lineIndex) => {
-              // Check for leading spaces (indentation)
-              const leadingSpaces = line.match(/^ */)[0];
-              const leadingSpaceWidth = leadingSpaces.length > 0 ? doc.getTextWidth(leadingSpaces) : 0;
-
-              // Remove leading spaces for word splitting, we'll add them back with positioning
-              const trimmedLine = line.trimStart();
-
-              // Split by spaces but preserve them
-              const words = trimmedLine.split(' ').filter(w => w.length > 0);
-
-              if (words.length === 0 && lineIndex < lines.length - 1) {
-                // Empty line - just add a line break
-                currentX = startX;
-                const nextLine = lines[lineIndex + 1];
-                const bulletPattern = /^\s{3,}[-◦•▪]\s/;
-                const isSubBullet = bulletPattern.test(line) || bulletPattern.test(nextLine);
-                const spacingMultiplier = isSubBullet ? 1.1 : 1.5;
-                currentY += lineHeight * spacingMultiplier;
-                if (currentY > pageHeight - margin) {
-                  doc.addPage();
-                  currentY = margin;
-                }
-                return;
-              }
-
-              // Add leading space width to current X position for indentation
-              if (leadingSpaceWidth > 0 && currentX === startX) {
-                currentX += leadingSpaceWidth;
-              }
-
-              words.forEach((word, wordIndex) => {
-                // Determine if we need a space after this word
-                const isLastWordInLine = wordIndex === words.length - 1;
-                const isLastLine = lineIndex === lines.length - 1;
-                const isLastPart = partIndex === parts.length - 1;
-                // Don't add space after if next part is superscript/subscript, or this is last word
-                const nextPart = parts[partIndex + 1];
-                const nextIsScript = nextPart && (nextPart.superscript || nextPart.subscript);
-                const needsSpaceAfter = !isLastWordInLine || (!isLastLine || (!isLastPart && !nextIsScript));
-
-                const wordText = needsSpaceAfter ? word + ' ' : word;
-
-                // Check if word contains arrow characters - split and render separately
-                const arrowPattern = /[→←↑↓⇒⇐⇑⇓↔⇔]/;
-                const hasArrow = arrowPattern.test(wordText);
-
-                if (hasArrow) {
-                  // Split word into segments of text and arrows
-                  const segments = [];
-                  let currentSegment = '';
-                  for (let i = 0; i < wordText.length; i++) {
-                    const char = wordText[i];
-                    if (arrowPattern.test(char)) {
-                      if (currentSegment) {
-                        segments.push({ type: 'text', content: currentSegment });
-                        currentSegment = '';
-                      }
-                      segments.push({ type: 'arrow', content: char });
-                    } else {
-                      currentSegment += char;
-                    }
-                  }
-                  if (currentSegment) {
-                    segments.push({ type: 'text', content: currentSegment });
-                  }
-
-                  // Render each segment
-                  segments.forEach(segment => {
-                    if (segment.type === 'text') {
-                      const segmentWidth = doc.getTextWidth(segment.content);
-
-                      // Check if we need to wrap
-                      if (currentX + segmentWidth > startX + maxWidth) {
-                        currentX = startX + wrapIndent;
-                        const bulletPattern = /^\s{3,}[-◦•▪]\s/;
-                        const isSubBullet = bulletPattern.test(line);
-                        const spacingMultiplier = isSubBullet ? 1.0 : 1.1;
-                        currentY += lineHeight * spacingMultiplier;
-                        if (currentY > pageHeight - margin) {
-                          doc.addPage();
-                          currentY = margin;
-                        }
-                      }
-
-                      const yOffset = part.superscript ? -fontSize * 0.25 : (part.subscript ? fontSize * 0.15 : 0);
-                      doc.text(segment.content, currentX, currentY + yOffset);
-                      currentX += segmentWidth;
-                    } else if (segment.type === 'arrow') {
-                      const arrowWidth = fontSize * 0.35;
-
-                      // Check if we need to wrap
-                      if (currentX + arrowWidth > startX + maxWidth) {
-                        currentX = startX + wrapIndent;
-                        const bulletPattern = /^\s{3,}[-◦•▪]\s/;
-                        const isSubBullet = bulletPattern.test(line);
-                        const spacingMultiplier = isSubBullet ? 1.0 : 1.1;
-                        currentY += lineHeight * spacingMultiplier;
-                        if (currentY > pageHeight - margin) {
-                          doc.addPage();
-                          currentY = margin;
-                        }
-                      }
-
-                      const yOffset = part.superscript ? -fontSize * 0.25 : (part.subscript ? fontSize * 0.15 : 0);
-                      drawArrow(doc, segment.content, currentX, currentY + yOffset, fontSize);
-                      currentX += arrowWidth;
-                    }
-                  });
-                  return; // Skip the normal rendering below
-                }
-
-                const wordWidth = doc.getTextWidth(wordText);
-
-                // Check if we need to wrap to next line
-                if (currentX + wordWidth > startX + maxWidth && currentX > startX) {
-                  currentX = startX + wrapIndent; // Indent wrapped lines
-                  const bulletPattern = /^\s{3,}[-◦•▪]\s/;
-                  const isSubBullet = bulletPattern.test(line);
-                  const spacingMultiplier = isSubBullet ? 1.0 : 1.1; // Tighter spacing for wrapped lines
-                  currentY += lineHeight * spacingMultiplier;
-
-                  // Check for page break
-                  if (currentY > pageHeight - margin) {
-                    doc.addPage();
-                    currentY = margin;
-                  }
-                }
-
-                // Calculate vertical offset for superscript/subscript (reduced for closer positioning)
-                const yOffset = part.superscript ? -fontSize * 0.25 : (part.subscript ? fontSize * 0.15 : 0);
-                const renderY = currentY + yOffset;
-
-                // If single word is too long for the line, break it
-                if (wordWidth > maxWidth) {
-                  // Try without trailing space first
-                  const bareWord = word;
-                  const bareWidth = doc.getTextWidth(bareWord);
-
-                  if (bareWidth > maxWidth) {
-                    // Word is still too long, print what we can
-                    doc.text(bareWord, currentX, renderY);
-                  } else {
-                    doc.text(wordText, currentX, renderY);
-                  }
-
-                  currentX = startX + wrapIndent; // Indent wrapped lines
-                  const bulletPattern = /^\s{3,}[-◦•▪]\s/;
-                  const isSubBullet = bulletPattern.test(line);
-                  const spacingMultiplier = isSubBullet ? 1.0 : 1.1; // Tighter spacing for wrapped lines
-                  currentY += lineHeight * spacingMultiplier;
-                  if (currentY > pageHeight - margin) {
-                    doc.addPage();
-                    currentY = margin;
-                  }
-                } else {
-                  // Normal case: print word and advance cursor
-                  doc.text(wordText, currentX, renderY);
-                  currentX += wordWidth;
-                }
-              });
-
-              // Handle line break from newline character
-              if (lineIndex < lines.length - 1) {
-                currentX = startX;
-                // Check if current or next line is any nested bullet level
-                // Sub-bullets: "   - " (3+ spaces + bullet char)
-                // Sub-sub-bullets: "      - " (6+ spaces + bullet char)
-                // Triple-sub-bullets: "         - " (9+ spaces + bullet char)
-                // Supports: dash (-), circle (◦), dot (•), or square (▪)
-                const nextLine = lines[lineIndex + 1];
-                const bulletPattern = /^\s{3,}[-◦•▪]\s/;
-                const currentIsSubBullet = bulletPattern.test(line);
-                const nextIsSubBullet = bulletPattern.test(nextLine);
-
-                // Different spacing logic:
-                // - Leaving user-added sub-bullet/sub-sub-bullet: minimal spacing (0.15x)
-                // - Within sub-bullets: tight spacing (1.1x)
-                // - Regular text: normal spacing (1.5x)
-                // Note: AI-generated HTML sub-bullets use y+= spacing, not this internal spacing
-                let spacingMultiplier;
-                if (currentIsSubBullet && !nextIsSubBullet && !isHTMLSubBullets) {
-                  spacingMultiplier = 0.15; // Minimal spacing when leaving user-added sub-bullet
-                } else if (currentIsSubBullet || nextIsSubBullet) {
-                  spacingMultiplier = 1.1; // Tight spacing within sub-bullets
-                } else {
-                  spacingMultiplier = 1.5; // Normal spacing for main text
-                }
-                currentY += lineHeight * spacingMultiplier;
-
-                if (currentY > pageHeight - margin) {
-                  doc.addPage();
-                  currentY = margin;
-                }
-              }
+        // Add notes sections
+        if (notes.notes && notes.notes.length > 0) {
+          notes.notes.forEach((section, idx) => {
+            // Section header
+            docDefinition.content.push({
+              text: parseText(section.section || `Section ${idx + 1}`),
+              style: 'sectionHeader'
             });
 
-            // Reset font size after superscript/subscript
-            if (isScript) {
-              doc.setFontSize(originalFontSize);
+            // Section points as bullets
+            if (section.points && section.points.length > 0) {
+              const pointsList = {
+                ul: section.points.map(point => ({
+                  text: parseText(point),
+                  style: 'bullet'
+                })),
+                margin: [0, 0, 0, 6]
+              };
+              docDefinition.content.push(pointsList);
             }
           });
+        }
 
-          // Return Y position - if text was written on this line, return current Y
-          // The caller will add spacing to move to next element
-          return currentY;
-        };
-
-        // Helper to add wrapped text (simple, no bold parsing)
-        const addWrappedText = (text, x, startY, maxWidth, lineHeight) => {
-          const lines = doc.splitTextToSize(text, maxWidth);
-          let currentY = startY;
-          lines.forEach(line => {
-            if (currentY > pageHeight - margin) {
-              doc.addPage();
-              currentY = margin;
-            }
-            doc.text(sanitizeForPDF(line), x, currentY);
-            currentY += lineHeight;
-          });
-          return currentY;
-        };
-
-        // Title - larger blue text
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(16);
-        doc.setTextColor(...titleBlue);
-        const title = (notes.title || 'Lecture Notes') + ' (Concise Notes)';
-        y = addWrappedText(title, margin, y, contentWidth, 7);
-        y += 8;
-
-        // Learning Objectives Header
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(13);
-        doc.setTextColor(...headerBlue);
-        doc.text('Learning Objectives', margin, y);
-        y += 6;
-
-        // Learning Objectives bullets
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(11);
-        doc.setTextColor(...black);
-        notes.learningObjectives?.forEach(obj => {
-          if (y > pageHeight - margin) {
-            doc.addPage();
-            y = margin;
-          }
-          const bulletText = '•  ' + String(obj);
-          y = addWrappedText(bulletText, margin, y, contentWidth, 5);
-          y += 2;
-        });
-        y += 6;
-
-        // Notes sections
-        notes.notes?.forEach(section => {
-          // Check for page break before section header
-          if (y > pageHeight - 30) {
-            doc.addPage();
-            y = margin;
-          }
-
-          // Section header - blue bold
-          doc.setFont('helvetica', 'bold');
-          doc.setFontSize(13);
-          doc.setTextColor(...headerBlue);
-          const sectionLines = doc.splitTextToSize(section.section || 'Section', contentWidth);
-          sectionLines.forEach(line => {
-            doc.text(sanitizeForPDF(line), margin, y);
-            y += 6;
-          });
-          y += 2;
-
-          // Section points
-          doc.setFontSize(11);
-          section.points?.forEach((point, index) => {
-            if (y > pageHeight - margin) {
-              doc.addPage();
-              y = margin;
-            }
-
-            // Parse text for bold segments
-            const parts = parseTextForPDF(point);
-            const bulletParts = [{ text: '•  ', bold: false }, ...parts];
-
-            // Check if this point contains HTML sub-bullets (all sub-bullets are HTML)
-            const isHTMLSubBullets = /<\/li>\s*<\/ul>\s*$/.test(point);
-
-            doc.setTextColor(...black);
-            y = addMixedText(bulletParts, margin, y, 11, 6, contentWidth, black, isHTMLSubBullets);
-            // Spacing after point
-            const isLastPoint = index === section.points.length - 1;
-            if (isLastPoint) {
-              // Last point before next section: adjust based on type
-              // Sub-bullets need less space since they already have internal spacing
-              y += isHTMLSubBullets ? 4 : 11;
-            } else {
-              y += isHTMLSubBullets ? 1 : 7;
-            }
-          });
-        });
-
-        // Open PDF in new tab instead of downloading
-        const pdfBlob = doc.output('blob');
-        const pdfUrl = URL.createObjectURL(pdfBlob);
-        window.open(pdfUrl, '_blank');
+        // Generate and open PDF
+        try {
+          const pdfDocGenerator = pdfMake.createPdf(docDefinition);
+          pdfDocGenerator.open();
+          console.log('PDF opened successfully');
+        } catch (error) {
+          console.error('PDF generation failed:', error);
+          alert('Failed to generate PDF: ' + error.message);
+        }
       };
 
       const exportCSV = () => {
@@ -1339,6 +701,24 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         setNotes(updated);
         // Auto-start editing the new point
         setEditingNote({ type: 'point', sectionIndex, pointIndex: updated.notes[sectionIndex].points.length - 1, value: '' });
+      };
+
+      const deleteSection = (sectionIndex) => {
+        const updated = JSON.parse(JSON.stringify(notes));
+        updated.notes.splice(sectionIndex, 1);
+        setNotes(updated);
+      };
+
+      const addSection = () => {
+        const updated = JSON.parse(JSON.stringify(notes));
+        const newSectionNumber = updated.notes.length + 1;
+        updated.notes.push({
+          section: `${newSectionNumber}. New Section - click to edit`,
+          points: ['New point - click to edit']
+        });
+        setNotes(updated);
+        // Auto-start editing the new section title
+        setTimeout(() => startEditSection(updated.notes.length - 1), 50);
       };
 
       // Drag and drop handlers for reordering points
@@ -1825,9 +1205,14 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                             ) : (
                               <>
                                 <h3 className="font-semibold flex-1">{s?.section || `Section ${i + 1}`}</h3>
-                                <button onClick={() => startEditSection(i)} className="opacity-0 group-hover:opacity-100 px-1 py-0.5 bg-slate-600 hover:bg-slate-500 rounded text-xs transition-opacity">
-                                  <Icon name="edit-2" className="w-3 h-3" />
-                                </button>
+                                <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity">
+                                  <button onClick={() => startEditSection(i)} className="px-1 py-0.5 bg-slate-600 hover:bg-slate-500 rounded text-xs">
+                                    <Icon name="edit-2" className="w-3 h-3" />
+                                  </button>
+                                  <button onClick={() => deleteSection(i)} className="px-1 py-0.5 bg-red-600/50 hover:bg-red-600 rounded text-xs">
+                                    <Icon name="trash-2" className="w-3 h-3" />
+                                  </button>
+                                </div>
                               </>
                             )}
                           </div>
@@ -1929,7 +1314,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                                     <span className="opacity-0 group-hover:opacity-100 cursor-move text-slate-500">
                                       <Icon name="grip-vertical" className="w-3 h-3" />
                                     </span>
-                                    <span className="flex-1 notes-display" dangerouslySetInnerHTML={{ __html: '• ' + p }} />
+                                    <span className="flex-1 notes-display" dangerouslySetInnerHTML={{ __html: '• ' + markdownToHTML(p) }} />
                                     <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity">
                                       <button onClick={() => startEditPoint(i, j)} className="px-1 py-0.5 bg-slate-600 hover:bg-slate-500 rounded text-xs">
                                         <Icon name="edit-2" className="w-3 h-3" />
@@ -1948,6 +1333,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                           </button>
                         </div>
                       ))}
+                      <button onClick={addSection} className="mt-4 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-sm flex items-center gap-2 mx-auto">
+                        <Icon name="plus" className="w-4 h-4" />Add Section
+                      </button>
                     </div>
                   ) : <div className="h-full flex items-center justify-center text-slate-400">No notes yet. Upload a PDF and click "Generate Notes".</div>}
                 </div>
