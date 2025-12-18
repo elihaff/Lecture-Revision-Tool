@@ -470,8 +470,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           if (!text) return '';
           let str = String(text);
 
-          // Remove <br> tags, convert to spaces
-          str = str.replace(/<br\s*\/?>/gi, ' ');
+          // Convert <br> tags to newlines to preserve line breaks
+          str = str.replace(/<br\s*\/?>/gi, '\n');
 
           // Decode HTML entities
           const decodeEntities = (txt) => {
