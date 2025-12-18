@@ -494,6 +494,33 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
           str = decodeEntities(str);
 
+          // Replace Unicode symbols that don't render well in Roboto font
+          const replaceUnsupportedChars = (txt) => {
+            const replacements = {
+              // Arrows - convert to ASCII equivalents
+              '→': '->',
+              '←': '<-',
+              '↑': '^',
+              '↓': 'v',
+              '⇒': '=>',
+              '⇐': '<=',
+              '↔': '<->',
+              '⇔': '<=>',
+              // Keep comparison symbols that might not render
+              '≥': '>=',
+              '≤': '<=',
+              '≠': '!=',
+              '≈': '~='
+            };
+            let result = txt;
+            for (const [char, replacement] of Object.entries(replacements)) {
+              result = result.split(char).join(replacement);
+            }
+            return result;
+          };
+
+          str = replaceUnsupportedChars(str);
+
           // Remove HTML tags but preserve their content
           str = str.replace(/<[^>]+>/g, '');
 
