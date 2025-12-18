@@ -15,7 +15,8 @@
   <script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pdfmake@0.1.72/build/pdfmake.min.js"></script>
-  <script src="https://unpkg.com/pdfmake-unicode@0.0.1/dist/pdfmake-unicode.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pdfmake@0.1.72/build/vfs_fonts.min.js"></script>
+  <script src="custom-fonts.js"></script>
   <style>
     body { margin: 0; height: 100vh; }
     #root { height: 100%; }
@@ -528,7 +529,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           pageSize: 'A4',
           pageMargins: [40, 40, 40, 40],
           defaultStyle: {
-            font: 'ArialGEO'
+            font: 'ArialGEO',
+            fontSize: 11
           },
           content: [],
           styles: {
@@ -607,11 +609,12 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           });
         }
 
-        // Generate and open PDF
+        // Generate and download PDF
         try {
           const pdfDocGenerator = pdfMake.createPdf(docDefinition);
-          pdfDocGenerator.open();
-          console.log('PDF opened successfully');
+          const filename = `${lectureTag || 'lecture_notes'}_notes.pdf`;
+          pdfDocGenerator.download(filename);
+          console.log('PDF downloaded successfully:', filename);
         } catch (error) {
           console.error('PDF generation failed:', error);
           alert('Failed to generate PDF: ' + error.message);
