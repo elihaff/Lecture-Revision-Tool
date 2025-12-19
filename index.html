@@ -601,10 +601,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
             // Section points as bullets
             if (section.points && section.points.length > 0) {
-              // Flatten points: split any points containing HTML block elements into separate bullets
-              const flattenedPoints = [];
+              // Process points: create main bullets with indented sub-bullets for newlines
+              const processedPoints = [];
               section.points.forEach((point, idx) => {
-                // Check if point contains div, blockquote, or br tags - split into separate bullets
+                // Check if point contains div, blockquote, or br tags - create sub-bullets
                 if (typeof point === 'string' && (point.includes('<div') || point.includes('<blockquote') || point.includes('<br>') || point.includes('<br/>') || point.includes('<br />'))) {
                   // Split on div and blockquote tags by converting them to a delimiter
                   let normalized = point;
@@ -617,24 +617,45 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   // Also handle br tags
                   normalized = normalized.replace(/<br\s*\/?>/gi, '\n');
 
-                  // Split on newlines and create separate bullets
-                  const lines = normalized.split('\n');
-                  lines.forEach(line => {
-                    const trimmed = line.trim();
-                    if (trimmed) {
-                      flattenedPoints.push(parseText(trimmed));
-                    }
-                  });
+                  // Split on newlines
+                  const lines = normalized.split('\n').map(l => l.trim()).filter(l => l);
+
+                  if (lines.length > 1) {
+                    // First line is main bullet, rest are sub-bullets
+                    const mainBullet = {
+                      text: parseText(lines[0]),
+                      style: 'bullet'
+                    };
+
+                    // Create sub-bullets for remaining lines
+                    const subBullets = lines.slice(1).map(line => ({
+                      text: parseText(line),
+                      style: 'bullet'
+                    }));
+
+                    // Add main bullet with nested sub-bullets
+                    processedPoints.push([
+                      mainBullet,
+                      { ul: subBullets, margin: [15, 2, 0, 0] }
+                    ]);
+                  } else if (lines.length === 1) {
+                    // Only one line, treat as regular bullet
+                    processedPoints.push({
+                      text: parseText(lines[0]),
+                      style: 'bullet'
+                    });
+                  }
                 } else {
-                  flattenedPoints.push(parseText(point));
+                  // No newlines, treat as regular bullet
+                  processedPoints.push({
+                    text: parseText(point),
+                    style: 'bullet'
+                  });
                 }
               });
 
               const pointsList = {
-                ul: flattenedPoints.map(parsedPoint => ({
-                  text: parsedPoint,
-                  style: 'bullet'
-                })),
+                ul: processedPoints,
                 margin: [0, 0, 0, 6]
               };
               docDefinition.content.push(pointsList);
