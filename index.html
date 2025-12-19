@@ -603,18 +603,31 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             if (section.points && section.points.length > 0) {
               // Flatten points: split any points containing <br> tags or newlines into separate bullets
               const flattenedPoints = [];
-              section.points.forEach(point => {
+              section.points.forEach((point, idx) => {
+                console.log(`Point ${idx}:`, point);
+                console.log(`Contains <br>:`, point.includes('<br>'));
+                console.log(`Type:`, typeof point);
+
                 // Check if point contains <br> tags or newlines - split into separate bullets
                 if (typeof point === 'string' && (point.includes('<br>') || point.includes('<br/>') || point.includes('<br />') || point.includes('\n'))) {
+                  console.log('Splitting point on newlines');
                   // First convert <br> tags to newlines, then split
                   const normalized = point.replace(/<br\s*\/?>/gi, '\n');
-                  normalized.split('\n').forEach(line => {
-                    if (line.trim()) flattenedPoints.push(parseText(line));
+                  console.log('Normalized:', normalized);
+                  const lines = normalized.split('\n');
+                  console.log('Split into', lines.length, 'lines');
+                  lines.forEach(line => {
+                    if (line.trim()) {
+                      console.log('Adding line:', line);
+                      flattenedPoints.push(parseText(line));
+                    }
                   });
                 } else {
                   flattenedPoints.push(parseText(point));
                 }
               });
+
+              console.log('Total flattened points:', flattenedPoints.length);
 
               const pointsList = {
                 ul: flattenedPoints.map(parsedPoint => ({
