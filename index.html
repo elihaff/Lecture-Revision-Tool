@@ -622,55 +622,72 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
                   // Helper function to recursively parse nested HTML lists
                   const parseNestedList = (html, depth = 0) => {
-                    console.log(`parseNestedList called at depth ${depth}`);
-                    console.log('HTML:', html);
-
                     const items = [];
                     const tempDiv = document.createElement('div');
                     tempDiv.innerHTML = html;
 
-                    const listItems = tempDiv.querySelectorAll(':scope > ul > li, :scope > ol > li');
-                    console.log(`Found ${listItems.length} list items at depth ${depth}`);
+                    // Get the top-level ul/ol
+                    const topList = tempDiv.querySelector('ul, ol');
+                    if (!topList) return items;
 
-                    listItems.forEach((li, idx) => {
-                      console.log(`Processing item ${idx} at depth ${depth}`);
-                      // Get text content excluding nested lists
-                      let textContent = '';
-                      for (let node of li.childNodes) {
-                        if (node.nodeType === Node.TEXT_NODE) {
-                          textContent += node.textContent;
-                        } else if (node.nodeName !== 'UL' && node.nodeName !== 'OL') {
-                          textContent += node.textContent;
+                    // Process direct children of the list
+                    const children = Array.from(topList.childNodes);
+                    let i = 0;
+
+                    while (i < children.length) {
+                      const child = children[i];
+
+                      if (child.nodeName === 'LI') {
+                        // Get text content of this li
+                        let textContent = '';
+                        for (let node of child.childNodes) {
+                          if (node.nodeType === Node.TEXT_NODE) {
+                            textContent += node.textContent;
+                          } else if (node.nodeName !== 'UL' && node.nodeName !== 'OL') {
+                            textContent += node.textContent;
+                          }
+                        }
+                        textContent = textContent.trim();
+
+                        // Check for nested list INSIDE this li
+                        const nestedListInside = child.querySelector('ul, ol');
+
+                        // Check for nested list as NEXT SIBLING (malformed HTML case)
+                        let nestedListSibling = null;
+                        if (i + 1 < children.length) {
+                          const nextChild = children[i + 1];
+                          if (nextChild.nodeName === 'UL' || nextChild.nodeName === 'OL') {
+                            nestedListSibling = nextChild;
+                          }
+                        }
+
+                        const nestedList = nestedListInside || nestedListSibling;
+
+                        if (nestedList) {
+                          // Has nested list
+                          const nestedItems = parseNestedList(nestedList.outerHTML, depth + 1);
+                          items.push({
+                            stack: [
+                              { text: parseText(textContent), style: 'bullet' },
+                              { ul: nestedItems, margin: [15, 2, 0, 0] }
+                            ]
+                          });
+
+                          // Skip the sibling nested list if we used it
+                          if (nestedListSibling && !nestedListInside) {
+                            i++; // Skip next element since we already processed it
+                          }
+                        } else if (textContent) {
+                          // Regular item
+                          items.push({
+                            text: parseText(textContent),
+                            style: 'bullet'
+                          });
                         }
                       }
 
-                      textContent = textContent.trim();
-                      console.log(`Text content: "${textContent}"`);
-
-                      // Check for nested lists within this item
-                      const nestedList = li.querySelector('ul, ol');
-                      console.log(`Has nested list: ${!!nestedList}`);
-
-                      if (nestedList) {
-                        // Item has nested list
-                        console.log('Recursing into nested list...');
-                        const nestedItems = parseNestedList(nestedList.outerHTML, depth + 1);
-                        console.log(`Nested items returned: ${nestedItems.length}`);
-                        items.push({
-                          stack: [
-                            { text: parseText(textContent), style: 'bullet' },
-                            { ul: nestedItems, margin: [15, 2, 0, 0] }
-                          ]
-                        });
-                      } else if (textContent) {
-                        // Regular item without nesting
-                        console.log('Adding as regular item');
-                        items.push({
-                          text: parseText(textContent),
-                          style: 'bullet'
-                        });
-                      }
-                    });
+                      i++;
+                    }
 
                     return items;
                   };
