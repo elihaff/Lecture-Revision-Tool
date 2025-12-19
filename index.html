@@ -622,23 +622,40 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
                   if (lines.length > 1) {
                     // First line is main bullet, rest are sub-bullets
-                    console.log('Processing point with multiple lines:', lines.length);
-                    console.log('Lines:', lines);
+                    const allSubBullets = [];
 
-                    // Create sub-bullets for remaining lines
-                    const subBullets = lines.slice(1).map(line => ({
-                      text: parseText(line),
-                      style: 'bullet'
-                    }));
-
-                    console.log('Sub-bullets created:', subBullets.length);
-                    console.log('Sub-bullets:', JSON.stringify(subBullets, null, 2));
+                    // Process each line after the first
+                    lines.slice(1).forEach(line => {
+                      // Check if line contains HTML list items
+                      if (line.includes('<li>')) {
+                        // Extract all <li> content
+                        const liMatches = line.match(/<li>(.*?)<\/li>/gi);
+                        if (liMatches) {
+                          liMatches.forEach(liItem => {
+                            // Remove <li> tags and parse content
+                            const content = liItem.replace(/<\/?li>/gi, '');
+                            if (content.trim()) {
+                              allSubBullets.push({
+                                text: parseText(content),
+                                style: 'bullet'
+                              });
+                            }
+                          });
+                        }
+                      } else {
+                        // Regular line, treat as sub-bullet
+                        allSubBullets.push({
+                          text: parseText(line),
+                          style: 'bullet'
+                        });
+                      }
+                    });
 
                     // Add main bullet with nested sub-bullets as a stack
                     processedPoints.push({
                       stack: [
                         { text: parseText(lines[0]), style: 'bullet' },
-                        { ul: subBullets, margin: [15, 2, 0, 0] }
+                        { ul: allSubBullets, margin: [15, 2, 0, 0] }
                       ]
                     });
                   } else if (lines.length === 1) {
