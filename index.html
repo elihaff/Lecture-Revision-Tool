@@ -470,9 +470,6 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         console.log('===== PDF EXPORT STARTED (pdfmake) =====');
         if (!notes) return;
 
-        console.log('Notes structure:', JSON.stringify(notes, null, 2));
-        console.log('Number of sections:', notes.notes?.length);
-
         // Helper function to parse HTML/markdown text into pdfmake text array
         const parseText = (text) => {
           if (!text) return '';
@@ -604,33 +601,34 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
             // Section points as bullets
             if (section.points && section.points.length > 0) {
-              // Flatten points: split any points containing <br> tags or newlines into separate bullets
+              // Flatten points: split any points containing HTML block elements into separate bullets
               const flattenedPoints = [];
               section.points.forEach((point, idx) => {
-                console.log(`Point ${idx}:`, point);
-                console.log(`Contains <br>:`, point.includes('<br>'));
-                console.log(`Type:`, typeof point);
+                // Check if point contains div, blockquote, or br tags - split into separate bullets
+                if (typeof point === 'string' && (point.includes('<div') || point.includes('<blockquote') || point.includes('<br>') || point.includes('<br/>') || point.includes('<br />'))) {
+                  // Split on div and blockquote tags by converting them to a delimiter
+                  let normalized = point;
+                  // Convert opening div/blockquote tags to newlines
+                  normalized = normalized.replace(/<div[^>]*>/gi, '\n');
+                  normalized = normalized.replace(/<blockquote[^>]*>/gi, '\n');
+                  // Remove closing tags
+                  normalized = normalized.replace(/<\/div>/gi, '');
+                  normalized = normalized.replace(/<\/blockquote>/gi, '');
+                  // Also handle br tags
+                  normalized = normalized.replace(/<br\s*\/?>/gi, '\n');
 
-                // Check if point contains <br> tags or newlines - split into separate bullets
-                if (typeof point === 'string' && (point.includes('<br>') || point.includes('<br/>') || point.includes('<br />') || point.includes('\n'))) {
-                  console.log('Splitting point on newlines');
-                  // First convert <br> tags to newlines, then split
-                  const normalized = point.replace(/<br\s*\/?>/gi, '\n');
-                  console.log('Normalized:', normalized);
+                  // Split on newlines and create separate bullets
                   const lines = normalized.split('\n');
-                  console.log('Split into', lines.length, 'lines');
                   lines.forEach(line => {
-                    if (line.trim()) {
-                      console.log('Adding line:', line);
-                      flattenedPoints.push(parseText(line));
+                    const trimmed = line.trim();
+                    if (trimmed) {
+                      flattenedPoints.push(parseText(trimmed));
                     }
                   });
                 } else {
                   flattenedPoints.push(parseText(point));
                 }
               });
-
-              console.log('Total flattened points:', flattenedPoints.length);
 
               const pointsList = {
                 ul: flattenedPoints.map(parsedPoint => ({
