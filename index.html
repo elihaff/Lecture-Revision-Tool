@@ -609,12 +609,12 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           });
         }
 
-        // Generate and download PDF
+        // Generate and open PDF in new tab
         try {
           const pdfDocGenerator = pdfMake.createPdf(docDefinition);
           const filename = `${lectureTag || 'lecture_notes'}_notes.pdf`;
-          pdfDocGenerator.download(filename);
-          console.log('PDF downloaded successfully:', filename);
+          pdfDocGenerator.open();
+          console.log('PDF opened in new tab:', filename);
         } catch (error) {
           console.error('PDF generation failed:', error);
           alert('Failed to generate PDF: ' + error.message);
