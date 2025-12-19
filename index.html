@@ -140,6 +140,7 @@
       const [modifyRequest, setModifyRequest] = useState('');
       const [modifying, setModifying] = useState(false);
       const [userLearningObjectives, setUserLearningObjectives] = useState('');
+      const [customInstructions, setCustomInstructions] = useState('');
       const [editingCard, setEditingCard] = useState(null); // {index, front, back}
       const [showAddCard, setShowAddCard] = useState(false);
       const [newCard, setNewCard] = useState({ front: '', back: '' });
@@ -213,7 +214,10 @@
           const loSection = userLearningObjectives.trim()
             ? `\n\nIMPORTANT: The user has provided these learning objectives for this lecture. Use these EXACTLY as the learningObjectives in your response:\n${userLearningObjectives}\n\nStructure your notes to address these learning objectives.`
             : '';
-          const notesPrompt = `You are a medical education assistant. Return ONLY valid JSON:\n{"title": "Lecture Title", "learningObjectives": ["LO1"], "notes": [{"section": "1. Section", "points": ["**Term**: explanation"]}]}\n\nUse **asterisks** for key terms. Be concise. UK English.${loSection}`;
+          const customInstructionsSection = customInstructions.trim()
+            ? `\n\nADDITIONAL INSTRUCTIONS FROM USER:\n${customInstructions}\n\nPlease follow these instructions when generating the notes.`
+            : '';
+          const notesPrompt = `You are a medical education assistant. Return ONLY valid JSON:\n{"title": "Lecture Title", "learningObjectives": ["LO1"], "notes": [{"section": "1. Section", "points": ["**Term**: explanation"]}]}\n\nUse **asterisks** for key terms. Be concise. UK English.${loSection}${customInstructionsSection}`;
 
           const notesResponse = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
@@ -1131,6 +1135,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                         rows={3}
                       />
                       <p className="text-xs text-slate-400">Learning objectives will be used to structure your notes</p>
+                    </div>
+                  )}
+                  {file && (
+                    <div className="space-y-2">
+                      <textarea
+                        value={customInstructions}
+                        onChange={(e) => setCustomInstructions(e.target.value)}
+                        placeholder="Custom instructions for note generation (optional)&#10;e.g. Focus on clinical applications, include diagrams descriptions, emphasise pharmacology..."
+                        className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 min-h-[60px] resize-y"
+                        rows={2}
+                      />
+                      <p className="text-xs text-slate-400">Add any specific instructions or preferences for how notes should be generated</p>
                     </div>
                   )}
                   <div className="flex gap-2 flex-wrap">
