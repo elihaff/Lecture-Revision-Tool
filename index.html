@@ -470,6 +470,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         console.log('===== PDF EXPORT STARTED (pdfmake) =====');
         if (!notes) return;
 
+        console.log('Notes structure:', JSON.stringify(notes, null, 2));
+        console.log('Number of sections:', notes.notes?.length);
+
         // Helper function to parse HTML/markdown text into pdfmake text array
         const parseText = (text) => {
           if (!text) return '';
