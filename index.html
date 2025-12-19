@@ -622,13 +622,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
                   // Helper function to recursively parse nested HTML lists
                   const parseNestedList = (html, depth = 0) => {
+                    console.log(`parseNestedList called at depth ${depth}`);
+                    console.log('HTML:', html);
+
                     const items = [];
                     const tempDiv = document.createElement('div');
                     tempDiv.innerHTML = html;
 
                     const listItems = tempDiv.querySelectorAll(':scope > ul > li, :scope > ol > li');
+                    console.log(`Found ${listItems.length} list items at depth ${depth}`);
 
-                    listItems.forEach(li => {
+                    listItems.forEach((li, idx) => {
+                      console.log(`Processing item ${idx} at depth ${depth}`);
                       // Get text content excluding nested lists
                       let textContent = '';
                       for (let node of li.childNodes) {
@@ -640,13 +645,17 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                       }
 
                       textContent = textContent.trim();
+                      console.log(`Text content: "${textContent}"`);
 
                       // Check for nested lists within this item
                       const nestedList = li.querySelector('ul, ol');
+                      console.log(`Has nested list: ${!!nestedList}`);
 
                       if (nestedList) {
                         // Item has nested list
+                        console.log('Recursing into nested list...');
                         const nestedItems = parseNestedList(nestedList.outerHTML, depth + 1);
+                        console.log(`Nested items returned: ${nestedItems.length}`);
                         items.push({
                           stack: [
                             { text: parseText(textContent), style: 'bullet' },
@@ -655,6 +664,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                         });
                       } else if (textContent) {
                         // Regular item without nesting
+                        console.log('Adding as regular item');
                         items.push({
                           text: parseText(textContent),
                           style: 'bullet'
