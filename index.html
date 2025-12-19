@@ -601,17 +601,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
             // Section points as bullets
             if (section.points && section.points.length > 0) {
-              // Flatten points: split any points containing newlines into separate bullets
+              // Flatten points: split any points containing <br> tags or newlines into separate bullets
               const flattenedPoints = [];
               section.points.forEach(point => {
-                const parsedText = parseText(point);
-                // Check if point contains newlines - split into separate bullets
-                if (typeof point === 'string' && point.includes('\n')) {
-                  point.split('\n').forEach(line => {
+                // Check if point contains <br> tags or newlines - split into separate bullets
+                if (typeof point === 'string' && (point.includes('<br>') || point.includes('<br/>') || point.includes('<br />') || point.includes('\n'))) {
+                  // First convert <br> tags to newlines, then split
+                  const normalized = point.replace(/<br\s*\/?>/gi, '\n');
+                  normalized.split('\n').forEach(line => {
                     if (line.trim()) flattenedPoints.push(parseText(line));
                   });
                 } else {
-                  flattenedPoints.push(parsedText);
+                  flattenedPoints.push(parseText(point));
                 }
               });
 
