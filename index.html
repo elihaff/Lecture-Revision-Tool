@@ -622,22 +622,19 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
                   if (lines.length > 1) {
                     // First line is main bullet, rest are sub-bullets
-                    const mainBullet = {
-                      text: parseText(lines[0]),
-                      style: 'bullet'
-                    };
-
                     // Create sub-bullets for remaining lines
                     const subBullets = lines.slice(1).map(line => ({
                       text: parseText(line),
                       style: 'bullet'
                     }));
 
-                    // Add main bullet with nested sub-bullets
-                    processedPoints.push([
-                      mainBullet,
-                      { ul: subBullets, margin: [15, 2, 0, 0] }
-                    ]);
+                    // Add main bullet with nested sub-bullets as a stack
+                    processedPoints.push({
+                      stack: [
+                        { text: parseText(lines[0]), style: 'bullet' },
+                        { ul: subBullets, margin: [15, 2, 0, 0] }
+                      ]
+                    });
                   } else if (lines.length === 1) {
                     // Only one line, treat as regular bullet
                     processedPoints.push({
