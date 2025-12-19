@@ -620,6 +620,51 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   // Split on newlines
                   const lines = normalized.split('\n').map(l => l.trim()).filter(l => l);
 
+                  // Helper function to recursively parse nested HTML lists
+                  const parseNestedList = (html, depth = 0) => {
+                    const items = [];
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = html;
+
+                    const listItems = tempDiv.querySelectorAll(':scope > ul > li, :scope > ol > li');
+
+                    listItems.forEach(li => {
+                      // Get text content excluding nested lists
+                      let textContent = '';
+                      for (let node of li.childNodes) {
+                        if (node.nodeType === Node.TEXT_NODE) {
+                          textContent += node.textContent;
+                        } else if (node.nodeName !== 'UL' && node.nodeName !== 'OL') {
+                          textContent += node.textContent;
+                        }
+                      }
+
+                      textContent = textContent.trim();
+
+                      // Check for nested lists within this item
+                      const nestedList = li.querySelector('ul, ol');
+
+                      if (nestedList) {
+                        // Item has nested list
+                        const nestedItems = parseNestedList(nestedList.outerHTML, depth + 1);
+                        items.push({
+                          stack: [
+                            { text: parseText(textContent), style: 'bullet' },
+                            { ul: nestedItems, margin: [15, 2, 0, 0] }
+                          ]
+                        });
+                      } else if (textContent) {
+                        // Regular item without nesting
+                        items.push({
+                          text: parseText(textContent),
+                          style: 'bullet'
+                        });
+                      }
+                    });
+
+                    return items;
+                  };
+
                   if (lines.length > 1) {
                     // First line is main bullet, rest are sub-bullets
                     const allSubBullets = [];
@@ -628,20 +673,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                     lines.slice(1).forEach(line => {
                       // Check if line contains HTML list items
                       if (line.includes('<li>')) {
-                        // Extract all <li> content
-                        const liMatches = line.match(/<li>(.*?)<\/li>/gi);
-                        if (liMatches) {
-                          liMatches.forEach(liItem => {
-                            // Remove <li> tags and parse content
-                            const content = liItem.replace(/<\/?li>/gi, '');
-                            if (content.trim()) {
-                              allSubBullets.push({
-                                text: parseText(content),
-                                style: 'bullet'
-                              });
-                            }
-                          });
-                        }
+                        // Parse nested list structure
+                        const nestedItems = parseNestedList(line);
+                        allSubBullets.push(...nestedItems);
                       } else {
                         // Regular line, treat as sub-bullet
                         allSubBullets.push({
