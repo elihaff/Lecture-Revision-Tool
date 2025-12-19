@@ -622,11 +622,17 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
                   if (lines.length > 1) {
                     // First line is main bullet, rest are sub-bullets
+                    console.log('Processing point with multiple lines:', lines.length);
+                    console.log('Lines:', lines);
+
                     // Create sub-bullets for remaining lines
                     const subBullets = lines.slice(1).map(line => ({
                       text: parseText(line),
                       style: 'bullet'
                     }));
+
+                    console.log('Sub-bullets created:', subBullets.length);
+                    console.log('Sub-bullets:', JSON.stringify(subBullets, null, 2));
 
                     // Add main bullet with nested sub-bullets as a stack
                     processedPoints.push({
