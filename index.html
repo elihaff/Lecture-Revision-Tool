@@ -502,7 +502,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Remove HTML tags but preserve their content
           str = str.replace(/<[^>]+>/g, '');
 
-          // Parse **bold** syntax into pdfmake text array
+          // Parse **bold** syntax into pdfmake text array while preserving newlines
           const textArray = [];
           const boldRegex = /\*\*(.+?)\*\*/g;
           let lastIndex = 0;
@@ -512,9 +512,16 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             // Add text before the bold part
             if (match.index > lastIndex) {
               const normalText = str.substring(lastIndex, match.index);
-              if (normalText) textArray.push({ text: normalText });
+              if (normalText) {
+                // Split on newlines and add each segment
+                const lines = normalText.split('\n');
+                lines.forEach((line, i) => {
+                  if (line) textArray.push({ text: line });
+                  if (i < lines.length - 1) textArray.push({ text: '\n' });
+                });
+              }
             }
-            // Add the bold part
+            // Add the bold part (bold text shouldn't contain newlines in our format)
             textArray.push({ text: match[1], bold: true });
             lastIndex = match.index + match[0].length;
           }
@@ -522,7 +529,14 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Add remaining text after last bold
           if (lastIndex < str.length) {
             const remainingText = str.substring(lastIndex);
-            if (remainingText) textArray.push({ text: remainingText });
+            if (remainingText) {
+              // Split on newlines and add each segment
+              const lines = remainingText.split('\n');
+              lines.forEach((line, i) => {
+                if (line) textArray.push({ text: line });
+                if (i < lines.length - 1) textArray.push({ text: '\n' });
+              });
+            }
           }
 
           return textArray.length > 0 ? textArray : str;
