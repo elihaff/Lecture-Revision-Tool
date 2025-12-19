@@ -509,34 +509,20 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           let match;
 
           while ((match = boldRegex.exec(str)) !== null) {
-            // Add text before the bold part
+            // Add text before the bold part (preserve newlines in the text itself)
             if (match.index > lastIndex) {
               const normalText = str.substring(lastIndex, match.index);
-              if (normalText) {
-                // Split on newlines and add each segment
-                const lines = normalText.split('\n');
-                lines.forEach((line, i) => {
-                  if (line) textArray.push({ text: line });
-                  if (i < lines.length - 1) textArray.push({ text: '\n' });
-                });
-              }
+              if (normalText) textArray.push({ text: normalText });
             }
-            // Add the bold part (bold text shouldn't contain newlines in our format)
+            // Add the bold part
             textArray.push({ text: match[1], bold: true });
             lastIndex = match.index + match[0].length;
           }
 
-          // Add remaining text after last bold
+          // Add remaining text after last bold (preserve newlines in the text itself)
           if (lastIndex < str.length) {
             const remainingText = str.substring(lastIndex);
-            if (remainingText) {
-              // Split on newlines and add each segment
-              const lines = remainingText.split('\n');
-              lines.forEach((line, i) => {
-                if (line) textArray.push({ text: line });
-                if (i < lines.length - 1) textArray.push({ text: '\n' });
-              });
-            }
+            if (remainingText) textArray.push({ text: remainingText });
           }
 
           return textArray.length > 0 ? textArray : str;
@@ -615,9 +601,23 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
             // Section points as bullets
             if (section.points && section.points.length > 0) {
+              // Flatten points: split any points containing newlines into separate bullets
+              const flattenedPoints = [];
+              section.points.forEach(point => {
+                const parsedText = parseText(point);
+                // Check if point contains newlines - split into separate bullets
+                if (typeof point === 'string' && point.includes('\n')) {
+                  point.split('\n').forEach(line => {
+                    if (line.trim()) flattenedPoints.push(parseText(line));
+                  });
+                } else {
+                  flattenedPoints.push(parsedText);
+                }
+              });
+
               const pointsList = {
-                ul: section.points.map(point => ({
-                  text: parseText(point),
+                ul: flattenedPoints.map(parsedPoint => ({
+                  text: parsedPoint,
                   style: 'bullet'
                 })),
                 margin: [0, 0, 0, 6]
