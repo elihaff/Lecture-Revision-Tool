@@ -670,10 +670,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   }
                   console.log('[parseNonListContent] Found blockquote with margin:', leftMargin, 'accumulated:', accumulatedMargin, 'total:', accumulatedMargin + leftMargin);
 
-                  // Check if blockquote contains nested blockquotes or just text
-                  const hasNestedBlockquote = Array.from(child.childNodes).some(
-                    c => c.nodeName === 'BLOCKQUOTE'
-                  );
+                  // Check if blockquote contains nested blockquotes (at any depth)
+                  const hasNestedBlockquote = child.querySelector('blockquote') !== null;
 
                   if (hasNestedBlockquote) {
                     // Process nested blockquotes with accumulated margin
@@ -725,11 +723,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               if (marginMatch) {
                 leftMargin = parseInt(marginMatch[1]);
               }
+              console.log('[parseNonListContent] Found top-level blockquote with margin:', leftMargin, 'accumulated:', accumulatedMargin, 'total:', accumulatedMargin + leftMargin);
 
-              // Check if blockquote contains nested blockquotes
-              const hasNestedBlockquote = Array.from(node.childNodes).some(
-                c => c.nodeName === 'BLOCKQUOTE'
-              );
+              // Check if blockquote contains nested blockquotes (at any depth)
+              const hasNestedBlockquote = node.querySelector('blockquote') !== null;
 
               if (hasNestedBlockquote) {
                 // Process nested blockquotes with accumulated margin
