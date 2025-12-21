@@ -643,29 +643,33 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           console.log(`  [${idx}] x:${line.x} size:${line.fontSize} bold:${line.isBold} text:"${line.text}"`);
         });
 
-        // Extract title (first line, 18pt, bold)
+        // Extract title (combine all size-18 lines at start)
         let title = 'Imported Notes';
-        if (lines.length > 0 && lines[0].fontSize >= 17 && lines[0].isBold) {
-          title = lines[0].text.replace(' (Concise Notes)', '').trim();
+        const titleLines = [];
+        for (let i = 0; i < lines.length && lines[i].fontSize >= 17; i++) {
+          titleLines.push(lines[i].text);
+        }
+        if (titleLines.length > 0) {
+          title = titleLines.join(' ').replace(' (Concise Notes)', '').trim();
         }
         console.log('Title extracted:', title);
 
-        // Find "Learning Objectives" header
+        // Find "Learning Objectives" header (by text content)
         const loHeaderIdx = lines.findIndex(line =>
-          line.text.trim() === 'Learning Objectives' && line.isBold
+          line.text.includes('Learning Objectives')
         );
         console.log('Learning Objectives header index:', loHeaderIdx);
 
-        // Extract learning objectives (detected by x-position, not bullet character)
+        // Extract learning objectives (size 11, x around 54, after LO header)
         const learningObjectives = [];
         if (loHeaderIdx >= 0) {
           let i = loHeaderIdx + 1;
           console.log('Extracting LOs starting from line', i);
-          // Learning objectives are indented (x > 50)
-          while (i < lines.length && lines[i].x > 50 && lines[i].x < 70 && !lines[i].isBold) {
+          // Learning objectives are size 11 at x=54
+          while (i < lines.length && lines[i].fontSize === 11 && lines[i].x > 50 && lines[i].x < 60) {
             console.log(`  Checking line ${i}: x=${lines[i].x} text="${lines[i].text}"`);
             const text = lines[i].text.replace(/^•\s*/, '').trim();
-            if (text) {
+            if (text && !text.includes('Peritoneal') && !text.includes('Bony Pelvis')) {
               learningObjectives.push(text);
             }
             i++;
@@ -676,18 +680,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         // Extract sections and points
         const notes = [];
         let currentSection = null;
-        const loEndIdx = loHeaderIdx >= 0 ? loHeaderIdx + 1 + learningObjectives.length : 1;
+        const loEndIdx = loHeaderIdx >= 0 ? loHeaderIdx + 1 + learningObjectives.length : (titleLines.length || 1);
         console.log('Starting section extraction from line', loEndIdx);
 
         for (let i = loEndIdx; i < lines.length; i++) {
           const line = lines[i];
           const prevLine = i > 0 ? lines[i - 1] : null;
 
-          // Detect section header: bold, 13pt, y-gap from previous
+          // Detect section header: size 13, x around 40, y-gap > 15
           const isYGap = !prevLine || (prevLine.y - line.y > 15);
           const yGapValue = prevLine ? (prevLine.y - line.y) : 0;
 
-          if (line.isBold && line.fontSize >= 12 && isYGap) {
+          if (line.fontSize === 13 && line.x < 45 && isYGap) {
             // New section
             console.log(`Section detected at line ${i}: "${line.text}" (yGap: ${yGapValue})`);
             if (currentSection) {
@@ -695,31 +699,21 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               notes.push(currentSection);
             }
             currentSection = {
-              section: convertBoldInline(line.items),
+              section: line.text,
               points: []
             };
-          } else if (currentSection && line.x > 50 && line.x < 100 && !line.isBold) {
-            // Bullet point detected by position (x between 50-100 = base bullet)
-            const indentLevel = getIndentLevel(line.x);
-            const pointText = convertBoldInline(line.items).replace(/^•\s*/, '').trim();
+          } else if (currentSection && line.fontSize === 11 && line.x > 50 && line.x < 60) {
+            // Bullet point detected by size and position
+            const pointText = line.text.replace(/^•\s*/, '').trim();
 
-            console.log(`Point detected at line ${i}: x=${line.x} indent=${indentLevel} text="${pointText.substring(0, 50)}..."`);
+            console.log(`Point detected at line ${i}: x=${line.x} text="${pointText.substring(0, 50)}..."`);
 
             if (!pointText) continue; // Skip empty lines
 
-            if (indentLevel === 0) {
-              // Top-level point
-              currentSection.points.push(pointText);
-            } else {
-              // Nested point - append to last point as <ul><li>
-              if (currentSection.points.length > 0) {
-                const lastIdx = currentSection.points.length - 1;
-                currentSection.points[lastIdx] += `<ul><li>${pointText}</li></ul>`;
-              }
-            }
+            currentSection.points.push(pointText);
           } else if (i < loEndIdx + 20) {
             // Log why line was skipped (only for first 20 lines after LOs)
-            console.log(`Line ${i} skipped: x=${line.x} bold=${line.isBold} yGap=${yGapValue} size=${line.fontSize} text="${line.text.substring(0, 30)}..."`);
+            console.log(`Line ${i} skipped: x=${line.x} yGap=${yGapValue} size=${line.fontSize} text="${line.text.substring(0, 30)}..."`);
           }
         }
 
