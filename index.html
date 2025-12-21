@@ -117,7 +117,32 @@
       const [fileData, setFileData] = useState(null);
       const [processing, setProcessing] = useState(false);
       const [processingType, setProcessingType] = useState('');
-      const [notes, setNotes] = useState(null);
+      const [notes, setNotes] = useState({
+        title: "Sample Lecture: Human Anatomy",
+        learningObjectives: [
+          "Describe the structure and function of the cardiovascular system",
+          "Explain the process of cellular respiration",
+          "Identify key anatomical landmarks"
+        ],
+        notes: [
+          {
+            section: "1. Cardiovascular System",
+            points: [
+              "**Heart**: four-chambered muscular organ<ul><li>Right atrium receives deoxygenated blood</li><li>Left ventricle pumps oxygenated blood</li></ul>",
+              "**Blood vessels**: arteries, veins, and capillaries",
+              "**Circulation**: pulmonary and systemic circuits"
+            ]
+          },
+          {
+            section: "2. Respiratory System",
+            points: [
+              "**Lungs**: paired organs for gas exchange",
+              "**Alveoli**: tiny air sacs where O₂ and CO₂ are exchanged<ul><li>Surrounded by capillaries</li><li>Surface area approximately 70 m²</li></ul>",
+              "**Diaphragm**: primary muscle of respiration"
+            ]
+          }
+        ]
+      });
       const [cards, setCards] = useState([]);
       const [activeTab, setActiveTab] = useState('upload');
       const [chatMessages, setChatMessages] = useState([{ role: 'assistant', content: "Hi! I'm your lecture study assistant. Upload your lecture slides (PDF) and I'll help you create:\n\n• Concise, exam-ready notes\n• Anki flashcards\n\n⚙️ First, add your Anthropic API key in Settings (click the gear icon)." }]);
@@ -697,21 +722,31 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                     // First line is main bullet, rest are sub-bullets
                     const allSubBullets = [];
 
+                    console.log('Processing multi-line point. Total lines:', lines.length);
+
                     // Process each line after the first
-                    lines.slice(1).forEach(line => {
+                    lines.slice(1).forEach((line, idx) => {
+                      console.log(`Line ${idx + 1}:`, line);
+                      console.log(`Contains <li>:`, line.includes('<li>'));
+
                       // Check if line contains HTML list items
                       if (line.includes('<li>')) {
                         // Parse nested list structure
+                        console.log('Parsing as nested list');
                         const nestedItems = parseNestedList(line);
+                        console.log('Nested items result:', nestedItems);
                         allSubBullets.push(...nestedItems);
                       } else {
                         // Regular line, treat as sub-bullet
+                        console.log('Adding as regular sub-bullet');
                         allSubBullets.push({
                           text: parseText(line),
                           style: 'bullet'
                         });
                       }
                     });
+
+                    console.log('Total sub-bullets created:', allSubBullets.length);
 
                     // Add main bullet with nested sub-bullets as a stack
                     processedPoints.push({
