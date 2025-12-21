@@ -630,8 +630,15 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               // Process points: create main bullets with indented sub-bullets for newlines
               const processedPoints = [];
               section.points.forEach((point, idx) => {
-                // Check if point contains div, blockquote, or br tags - create sub-bullets
-                if (typeof point === 'string' && (point.includes('<div') || point.includes('<blockquote') || point.includes('<br>') || point.includes('<br/>') || point.includes('<br />'))) {
+                console.log(`\n=== Processing point ${idx} ===`);
+                console.log('Point content:', point);
+                console.log('Contains div:', point.includes('<div'));
+                console.log('Contains blockquote:', point.includes('<blockquote'));
+                console.log('Contains br:', point.includes('<br>'));
+                console.log('Contains ul/li:', point.includes('<ul>') || point.includes('<li>'));
+
+                // Check if point contains div, blockquote, br, or list tags - create sub-bullets
+                if (typeof point === 'string' && (point.includes('<div') || point.includes('<blockquote') || point.includes('<br>') || point.includes('<br/>') || point.includes('<br />') || point.includes('<ul>') || point.includes('<li>'))) {
                   // Split on div and blockquote tags by converting them to a delimiter
                   let normalized = point;
                   // Convert opening div/blockquote tags to newlines
