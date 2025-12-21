@@ -1733,8 +1733,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                                           if (sel && sel.rangeCount > 0) {
                                             const range = sel.getRangeAt(0);
 
-                                            // Check if cursor is at the start of the content (no text selected, offset is 0)
-                                            if (range.collapsed && range.startOffset === 0) {
+                                            // Only proceed if nothing is selected (collapsed range)
+                                            if (range.collapsed) {
                                               // Check if we're inside a blockquote (indented content)
                                               let node = range.startContainer;
                                               let blockquote = null;
@@ -1749,9 +1749,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                                               }
 
                                               if (blockquote) {
-                                                // We're at the start of an indented line, outdent it
-                                                e.preventDefault();
-                                                document.execCommand('outdent');
+                                                // Check if cursor is at the start of visible content
+                                                // by checking if there's any non-whitespace text before the cursor
+                                                let textBeforeCursor = '';
+                                                if (range.startContainer.nodeType === Node.TEXT_NODE) {
+                                                  textBeforeCursor = range.startContainer.textContent.substring(0, range.startOffset);
+                                                }
+
+                                                // If no visible text before cursor, outdent
+                                                if (textBeforeCursor.trim() === '') {
+                                                  e.preventDefault();
+                                                  document.execCommand('outdent');
+                                                }
                                               }
                                             }
                                           }
@@ -1938,8 +1947,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                                         if (sel && sel.rangeCount > 0) {
                                           const range = sel.getRangeAt(0);
 
-                                          // Check if cursor is at the start of the content (no text selected, offset is 0)
-                                          if (range.collapsed && range.startOffset === 0) {
+                                          // Only proceed if nothing is selected (collapsed range)
+                                          if (range.collapsed) {
                                             // Check if we're inside a blockquote (indented content)
                                             let node = range.startContainer;
                                             let blockquote = null;
@@ -1954,9 +1963,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                                             }
 
                                             if (blockquote) {
-                                              // We're at the start of an indented line, outdent it
-                                              e.preventDefault();
-                                              document.execCommand('outdent');
+                                              // Check if cursor is at the start of visible content
+                                              // by checking if there's any non-whitespace text before the cursor
+                                              let textBeforeCursor = '';
+                                              if (range.startContainer.nodeType === Node.TEXT_NODE) {
+                                                textBeforeCursor = range.startContainer.textContent.substring(0, range.startOffset);
+                                              }
+
+                                              // If no visible text before cursor, outdent
+                                              if (textBeforeCursor.trim() === '') {
+                                                e.preventDefault();
+                                                document.execCommand('outdent');
+                                              }
                                             }
                                           }
                                         }
