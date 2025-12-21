@@ -501,8 +501,12 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           if (!text) return '';
           let str = String(text);
 
-          // Convert <br> tags to newlines to preserve line breaks
+          // Convert <br>, <div>, and <blockquote> tags to newlines to preserve line breaks
           str = str.replace(/<br\s*\/?>/gi, '\n');
+          str = str.replace(/<div[^>]*>/gi, '\n');
+          str = str.replace(/<\/div>/gi, '');
+          str = str.replace(/<blockquote[^>]*>/gi, '\n');
+          str = str.replace(/<\/blockquote>/gi, '');
 
           // Convert <b> and <strong> tags to markdown bold syntax BEFORE removing HTML tags
           str = str.replace(/<(b|strong)>(.*?)<\/(b|strong)>/gi, '**$2**');
