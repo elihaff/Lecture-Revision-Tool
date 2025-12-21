@@ -664,9 +664,17 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   // Extract indentation from blockquote style
                   const style = child.getAttribute('style') || '';
                   let leftMargin = 0;
-                  const marginMatch = style.match(/margin:\s*[^;]*?(\d+)px/);
+
+                  // Try margin-left first (e.g., "margin-left: 40px")
+                  let marginMatch = style.match(/margin-left:\s*(\d+)px/);
                   if (marginMatch) {
                     leftMargin = parseInt(marginMatch[1]);
+                  } else {
+                    // Try shorthand margin (e.g., "margin: 0 0 0 40px")
+                    marginMatch = style.match(/margin:\s*[^;]*?(\d+)px/);
+                    if (marginMatch) {
+                      leftMargin = parseInt(marginMatch[1]);
+                    }
                   }
                   console.log('[parseNonListContent] Found blockquote with margin:', leftMargin, 'accumulated:', accumulatedMargin, 'total:', accumulatedMargin + leftMargin);
 
@@ -719,9 +727,17 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               // Blockquote node
               const style = node.getAttribute('style') || '';
               let leftMargin = 0;
-              const marginMatch = style.match(/margin:\s*[^;]*?(\d+)px/);
+
+              // Try margin-left first (e.g., "margin-left: 40px")
+              let marginMatch = style.match(/margin-left:\s*(\d+)px/);
               if (marginMatch) {
                 leftMargin = parseInt(marginMatch[1]);
+              } else {
+                // Try shorthand margin (e.g., "margin: 0 0 0 40px")
+                marginMatch = style.match(/margin:\s*[^;]*?(\d+)px/);
+                if (marginMatch) {
+                  leftMargin = parseInt(marginMatch[1]);
+                }
               }
               console.log('[parseNonListContent] Found top-level blockquote with margin:', leftMargin, 'accumulated:', accumulatedMargin, 'total:', accumulatedMargin + leftMargin);
 
