@@ -655,8 +655,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           const tempDiv = document.createElement('div');
           tempDiv.innerHTML = html;
 
-          // Process all child nodes (including text nodes)
-          const processNode = (node) => {
+          // Process all child nodes with accumulated margin for nested blockquotes
+          const processNode = (node, accumulatedMargin = 0) => {
             if (node.nodeName === 'DIV') {
               // Process all children of the div
               Array.from(node.childNodes).forEach(child => {
@@ -669,24 +669,37 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                     leftMargin = parseInt(marginMatch[1]);
                   }
 
-                  const text = parseText(child.textContent.trim());
-                  if (text) {
-                    items.push({
-                      text: text,
-                      margin: [leftMargin, 2, 0, 2],
-                      fontSize: 11
+                  // Check if blockquote contains nested blockquotes or just text
+                  const hasNestedBlockquote = Array.from(child.childNodes).some(
+                    c => c.nodeName === 'BLOCKQUOTE'
+                  );
+
+                  if (hasNestedBlockquote) {
+                    // Process nested blockquotes with accumulated margin
+                    Array.from(child.childNodes).forEach(nestedChild => {
+                      processNode(nestedChild, accumulatedMargin + leftMargin);
                     });
+                  } else {
+                    // No nested blockquotes, extract text with total margin
+                    const text = parseText(child.textContent.trim());
+                    if (text) {
+                      items.push({
+                        text: text,
+                        margin: [accumulatedMargin + leftMargin, 2, 0, 2],
+                        fontSize: 11
+                      });
+                    }
                   }
                 } else if (child.nodeName === 'DIV') {
-                  // Nested div - process recursively
-                  processNode(child);
+                  // Nested div - process recursively with same margin
+                  processNode(child, accumulatedMargin);
                 } else if (child.nodeType === Node.TEXT_NODE) {
                   // Text node
                   const text = parseText(child.textContent.trim());
                   if (text) {
                     items.push({
                       text: text,
-                      margin: [0, 2, 0, 2],
+                      margin: [accumulatedMargin, 2, 0, 2],
                       fontSize: 11
                     });
                   }
@@ -696,14 +709,14 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   if (text) {
                     items.push({
                       text: text,
-                      margin: [0, 2, 0, 2],
+                      margin: [accumulatedMargin, 2, 0, 2],
                       fontSize: 11
                     });
                   }
                 }
               });
             } else if (node.nodeName === 'BLOCKQUOTE') {
-              // Top-level blockquote
+              // Blockquote node
               const style = node.getAttribute('style') || '';
               let leftMargin = 0;
               const marginMatch = style.match(/margin:\s*[^;]*?(\d+)px/);
@@ -711,13 +724,26 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 leftMargin = parseInt(marginMatch[1]);
               }
 
-              const text = parseText(node.textContent.trim());
-              if (text) {
-                items.push({
-                  text: text,
-                  margin: [leftMargin, 2, 0, 2],
-                  fontSize: 11
+              // Check if blockquote contains nested blockquotes
+              const hasNestedBlockquote = Array.from(node.childNodes).some(
+                c => c.nodeName === 'BLOCKQUOTE'
+              );
+
+              if (hasNestedBlockquote) {
+                // Process nested blockquotes with accumulated margin
+                Array.from(node.childNodes).forEach(child => {
+                  processNode(child, accumulatedMargin + leftMargin);
                 });
+              } else {
+                // No nested blockquotes, extract text with total margin
+                const text = parseText(node.textContent.trim());
+                if (text) {
+                  items.push({
+                    text: text,
+                    margin: [accumulatedMargin + leftMargin, 2, 0, 2],
+                    fontSize: 11
+                  });
+                }
               }
             } else if (node.nodeType === Node.TEXT_NODE) {
               // Plain text node
@@ -725,7 +751,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               if (text) {
                 items.push({
                   text: text,
-                  margin: [0, 2, 0, 2],
+                  margin: [accumulatedMargin, 2, 0, 2],
                   fontSize: 11
                 });
               }
@@ -733,7 +759,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           };
 
           // Process all top-level children
-          Array.from(tempDiv.childNodes).forEach(processNode);
+          Array.from(tempDiv.childNodes).forEach(node => processNode(node, 0));
 
           return items;
         };
