@@ -668,6 +668,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   if (marginMatch) {
                     leftMargin = parseInt(marginMatch[1]);
                   }
+                  console.log('[parseNonListContent] Found blockquote with margin:', leftMargin, 'accumulated:', accumulatedMargin, 'total:', accumulatedMargin + leftMargin);
 
                   // Check if blockquote contains nested blockquotes or just text
                   const hasNestedBlockquote = Array.from(child.childNodes).some(
@@ -683,6 +684,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                     // No nested blockquotes, extract text with total margin
                     const text = parseText(child.textContent.trim());
                     if (text) {
+                      console.log('[parseNonListContent] Creating text item with margin:', accumulatedMargin + leftMargin, 'text:', text.substring ? text.substring(0, 50) : text);
                       items.push({
                         text: text,
                         margin: [accumulatedMargin + leftMargin, 2, 0, 2],
