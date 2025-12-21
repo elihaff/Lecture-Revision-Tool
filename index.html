@@ -504,6 +504,9 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           // Convert <br> tags to newlines to preserve line breaks
           str = str.replace(/<br\s*\/?>/gi, '\n');
 
+          // Convert <b> and <strong> tags to markdown bold syntax BEFORE removing HTML tags
+          str = str.replace(/<(b|strong)>(.*?)<\/(b|strong)>/gi, '**$2**');
+
           // Decode HTML entities
           const decodeEntities = (txt) => {
             const entities = {
