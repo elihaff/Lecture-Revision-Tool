@@ -892,7 +892,12 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
                     // Check if main text contains indentation (div/blockquote tags)
                     const mainTextHasIndentation = mainText && (mainText.includes('<div') || mainText.includes('<blockquote'));
+                    console.log('Main text has indentation:', mainTextHasIndentation);
+
                     const mainTextItems = mainTextHasIndentation ? parseNonListContent(mainText) : null;
+                    if (mainTextHasIndentation) {
+                      console.log('Main text items parsed:', mainTextItems.length, mainTextItems);
+                    }
 
                     // Build the output structure
                     if (mainText && nestedItems.length > 0) {
@@ -901,17 +906,20 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
                       if (mainTextHasIndentation) {
                         // Main text has indentation, use parsed items
+                        console.log('Using mainTextItems for indented content');
                         stackContent = [
                           ...mainTextItems,
                           { ul: nestedItems, margin: [15, 2, 0, 0] }
                         ];
                       } else {
                         // Simple main text, use parseText
+                        console.log('Using parseText for simple main text');
                         stackContent = [
                           { text: parseText(mainText), style: 'bullet' },
                           { ul: nestedItems, margin: [15, 2, 0, 0] }
                         ];
                       }
+                      console.log('Stack content:', stackContent);
 
                       // Add remaining content items (plain text, no bullets)
                       if (remainingItems.length > 0) {
