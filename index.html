@@ -588,8 +588,12 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         if (allItems.length > 0) {
           console.log('Sample items (first 10):');
           allItems.slice(0, 10).forEach(item => {
-            console.log(`  x:${item.x} y:${item.y} size:${item.fontSize} bold:${item.isBold} text:"${item.text}"`);
+            console.log(`  x:${item.x} y:${item.y} size:${item.fontSize} font:"${item.fontName}" bold:${item.isBold} text:"${item.text}"`);
           });
+
+          // Show unique font names
+          const uniqueFonts = [...new Set(allItems.map(i => i.fontName))];
+          console.log('Unique font names in PDF:', uniqueFonts);
         }
 
         if (allItems.length === 0) {
