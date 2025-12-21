@@ -737,42 +737,81 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                   if (point.includes('<ul>') || point.includes('<li>')) {
                     console.log('Point contains HTML lists, parsing directly');
 
-                    // Extract main text before the list
+                    // Use DOM to properly extract list and remaining content
+                    const tempDiv = document.createElement('div');
                     const ulIndex = point.indexOf('<ul');
+
                     let mainText = '';
-                    let listHtml = '';
+                    let remainingContent = '';
 
                     if (ulIndex > 0) {
                       mainText = point.substring(0, ulIndex).trim();
-                      listHtml = point.substring(ulIndex);
+                      tempDiv.innerHTML = point.substring(ulIndex);
                     } else {
-                      listHtml = point;
+                      tempDiv.innerHTML = point;
+                    }
+
+                    // Extract the UL element
+                    const ulElement = tempDiv.querySelector('ul');
+                    let actualListHtml = '';
+
+                    if (ulElement) {
+                      actualListHtml = ulElement.outerHTML;
+                      // Remove UL and get remaining HTML
+                      ulElement.remove();
+                      remainingContent = tempDiv.innerHTML.trim();
                     }
 
                     console.log('Main text:', mainText);
-                    console.log('List HTML:', listHtml);
+                    console.log('List HTML:', actualListHtml);
+                    console.log('Remaining content:', remainingContent);
 
                     // Parse the list
-                    const nestedItems = parseNestedList(listHtml);
+                    const nestedItems = parseNestedList(actualListHtml);
                     console.log('Nested items parsed:', nestedItems.length);
 
+                    // Parse remaining content as additional text
+                    let remainingText = '';
+                    if (remainingContent) {
+                      remainingText = parseText(remainingContent);
+                    }
+
+                    // Build the output structure
                     if (mainText && nestedItems.length > 0) {
                       // Main text with sub-bullets
-                      processedPoints.push({
-                        stack: [
-                          { text: parseText(mainText), style: 'bullet' },
-                          { ul: nestedItems, margin: [15, 2, 0, 0] }
-                        ]
-                      });
+                      const stackContent = [
+                        { text: parseText(mainText), style: 'bullet' },
+                        { ul: nestedItems, margin: [15, 2, 0, 0] }
+                      ];
+
+                      // Add remaining content if exists
+                      if (remainingText) {
+                        stackContent.push({ text: remainingText, style: 'bullet', margin: [0, 4, 0, 0] });
+                      }
+
+                      processedPoints.push({ stack: stackContent });
                     } else if (nestedItems.length > 0) {
                       // Only sub-bullets, no main text
                       processedPoints.push(...nestedItems);
+
+                      // Add remaining content if exists
+                      if (remainingText) {
+                        processedPoints.push({ text: remainingText, style: 'bullet' });
+                      }
                     } else if (mainText) {
                       // Only main text, no sub-bullets parsed
                       processedPoints.push({
                         text: parseText(mainText),
                         style: 'bullet'
                       });
+
+                      // Add remaining content if exists
+                      if (remainingText) {
+                        processedPoints.push({ text: remainingText, style: 'bullet' });
+                      }
+                    } else if (remainingText) {
+                      // Only remaining text
+                      processedPoints.push({ text: remainingText, style: 'bullet' });
                     }
 
                     return; // Skip the rest of the processing for this point
