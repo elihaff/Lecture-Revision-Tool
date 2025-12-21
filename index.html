@@ -581,7 +581,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
       // Main PDF parsing function
       const parsePDFToNotes = async (file) => {
-        console.log('===== PDF IMPORT STARTED [VERSION 2.5 - FIX SPLIT LO DETECTION] =====');
+        console.log('===== PDF IMPORT STARTED [VERSION 3.0 - LOSSLESS JSON METADATA] =====');
 
         // Read file as ArrayBuffer
         const arrayBuffer = await file.arrayBuffer();
@@ -901,7 +901,32 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           setProcessing(true);
           setProcessingType('import');
 
-          const importedNotes = await parsePDFToNotes(file);
+          // Try to extract embedded JSON metadata first (lossless)
+          let importedNotes = null;
+          let importMethod = 'parsed';
+
+          try {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            const metadata = await pdf.getMetadata();
+
+            console.log('PDF metadata:', metadata);
+
+            // Check for embedded notesJSON in metadata
+            if (metadata.info && metadata.info.notesJSON) {
+              console.log('✅ Found embedded JSON in PDF metadata - using lossless import');
+              importedNotes = JSON.parse(metadata.info.notesJSON);
+              importMethod = 'metadata';
+            }
+          } catch (metadataError) {
+            console.log('No embedded JSON found, falling back to PDF parsing');
+          }
+
+          // Fall back to PDF parsing if no embedded JSON
+          if (!importedNotes) {
+            console.log('Using PDF parsing method (best-effort)');
+            importedNotes = await parsePDFToNotes(file);
+          }
 
           // Validate structure
           if (!importedNotes.title || !importedNotes.notes) {
@@ -910,9 +935,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
           // Update state
           console.log('\n===== UPDATING REACT STATE =====');
+          console.log('Import method:', importMethod);
           console.log('State being set:');
           console.log('  Title:', importedNotes.title);
-          console.log('  LOs:', importedNotes.learningObjectives.length);
+          console.log('  LOs:', importedNotes.learningObjectives?.length || 0);
           console.log('  Sections:', importedNotes.notes.length);
           setNotes(importedNotes);
 
@@ -922,9 +948,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           }
 
           // Success message
+          const methodLabel = importMethod === 'metadata' ? '(lossless)' : '(parsed)';
           setChatMessages(prev => [...prev, {
             role: 'assistant',
-            content: `✅ PDF imported successfully!\n• ${importedNotes.notes.length} section(s)\n• ${importedNotes.learningObjectives.length} learning objective(s)${importModuleAbbrev ? `\n• Module: ${importModuleAbbrev}` : ''}`
+            content: `✅ PDF imported successfully ${methodLabel}!\n• ${importedNotes.notes.length} section(s)\n• ${importedNotes.learningObjectives?.length || 0} learning objective(s)${importModuleAbbrev ? `\n• Module: ${importModuleAbbrev}` : ''}`
           }]);
 
           console.log('===== STATE UPDATE COMPLETE =====\n');
@@ -1298,6 +1325,15 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               fontSize: 11,
               margin: [0, 1, 0, 1]
             }
+          },
+          // Embed original notes JSON in PDF metadata for lossless import
+          info: {
+            title: notes.title || 'Lecture Notes',
+            author: 'Lecture Revision Tool',
+            subject: 'Concise Lecture Notes',
+            // Embed the full notes structure as a custom metadata field
+            // This allows perfect round-trip import/export
+            notesJSON: JSON.stringify(notes)
           }
         };
 
