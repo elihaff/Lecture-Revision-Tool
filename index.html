@@ -581,7 +581,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
       // Main PDF parsing function
       const parsePDFToNotes = async (file) => {
-        console.log('===== PDF IMPORT STARTED [VERSION 2.0 - NEW LINE GROUPING] =====');
+        console.log('===== PDF IMPORT STARTED [VERSION 2.1 - IMPROVED SPACING] =====');
 
         // Read file as ArrayBuffer
         const arrayBuffer = await file.arrayBuffer();
@@ -646,7 +646,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
           // Check for column jumps: large X movement (backward OR forward) indicates different column/section
           const xJumpBackward = lastX !== null && item.x < lastX - 10;
-          const xJumpForward = lastX !== null && item.x > lastX + 80; // Text shouldn't jump more than 80px forward
+          const xJumpForward = lastX !== null && item.x > lastX + 200; // Allow larger gaps for justified text, but catch true column jumps (300-400px)
 
           if (shouldGroup && !xJumpBackward && !xJumpForward) {
             currentLine.push(item);
@@ -654,8 +654,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             sameLineJoins++;
           } else {
             if (currentLine.length > 0) {
-              // Join text with proper spacing
-              const text = currentLine.map(i => i.text).join('').replace(/\s+/g, ' ').trim();
+              // Join text with proper spacing - add space between items if not already present
+              let text = '';
+              for (let i = 0; i < currentLine.length; i++) {
+                const itemText = currentLine[i].text;
+                if (i > 0 && itemText.trim() && !itemText.startsWith(' ') && !text.endsWith(' ')) {
+                  // Add space if both items have non-space content and no space between them
+                  text += ' ';
+                }
+                text += itemText;
+              }
+              text = text.replace(/\s+/g, ' ').trim();
+
               lines.push({
                 items: currentLine,
                 y: lastY,
@@ -674,7 +684,18 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
         console.log(`Line grouping stats: ${sameLineJoins} items grouped, ${lineBreaks} line breaks`);
         if (currentLine.length > 0) {
-          const text = currentLine.map(i => i.text).join('').replace(/\s+/g, ' ').trim();
+          // Join text with proper spacing - add space between items if not already present
+          let text = '';
+          for (let i = 0; i < currentLine.length; i++) {
+            const itemText = currentLine[i].text;
+            if (i > 0 && itemText.trim() && !itemText.startsWith(' ') && !text.endsWith(' ')) {
+              // Add space if both items have non-space content and no space between them
+              text += ' ';
+            }
+            text += itemText;
+          }
+          text = text.replace(/\s+/g, ' ').trim();
+
           lines.push({
             items: currentLine,
             y: lastY,
