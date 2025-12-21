@@ -658,8 +658,22 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
                     // Process direct children of the list
                     const children = Array.from(topList.childNodes);
-                    let i = 0;
 
+                    // Check if there are any LI elements at this level
+                    const hasListItems = children.some(child => child.nodeName === 'LI');
+
+                    // If no LI elements but there are nested UL/OL, parse those directly
+                    if (!hasListItems) {
+                      children.forEach(child => {
+                        if (child.nodeName === 'UL' || child.nodeName === 'OL') {
+                          const nestedItems = parseNestedList(child.outerHTML, depth);
+                          items.push(...nestedItems);
+                        }
+                      });
+                      return items;
+                    }
+
+                    let i = 0;
                     while (i < children.length) {
                       const child = children[i];
 
