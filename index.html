@@ -1689,6 +1689,35 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                                             document.execCommand('indent');
                                           }
                                         }
+                                        // Backspace to remove indentation at start of line
+                                        if (e.key === 'Backspace') {
+                                          const sel = window.getSelection();
+                                          if (sel && sel.rangeCount > 0) {
+                                            const range = sel.getRangeAt(0);
+
+                                            // Check if cursor is at the start of the content (no text selected, offset is 0)
+                                            if (range.collapsed && range.startOffset === 0) {
+                                              // Check if we're inside a blockquote (indented content)
+                                              let node = range.startContainer;
+                                              let blockquote = null;
+
+                                              // Traverse up the DOM to find a blockquote
+                                              while (node && node !== e.currentTarget) {
+                                                if (node.nodeName === 'BLOCKQUOTE') {
+                                                  blockquote = node;
+                                                  break;
+                                                }
+                                                node = node.parentNode;
+                                              }
+
+                                              if (blockquote) {
+                                                // We're at the start of an indented line, outdent it
+                                                e.preventDefault();
+                                                document.execCommand('outdent');
+                                              }
+                                            }
+                                          }
+                                        }
                                       }}
                                       className="w-full bg-slate-700/50 border border-slate-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 min-h-[80px] max-h-[300px] overflow-y-auto"
                                       style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
@@ -1863,6 +1892,35 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                                           document.execCommand('outdent');
                                         } else {
                                           document.execCommand('indent');
+                                        }
+                                      }
+                                      // Backspace to remove indentation at start of line
+                                      if (e.key === 'Backspace') {
+                                        const sel = window.getSelection();
+                                        if (sel && sel.rangeCount > 0) {
+                                          const range = sel.getRangeAt(0);
+
+                                          // Check if cursor is at the start of the content (no text selected, offset is 0)
+                                          if (range.collapsed && range.startOffset === 0) {
+                                            // Check if we're inside a blockquote (indented content)
+                                            let node = range.startContainer;
+                                            let blockquote = null;
+
+                                            // Traverse up the DOM to find a blockquote
+                                            while (node && node !== e.currentTarget) {
+                                              if (node.nodeName === 'BLOCKQUOTE') {
+                                                blockquote = node;
+                                                break;
+                                              }
+                                              node = node.parentNode;
+                                            }
+
+                                            if (blockquote) {
+                                              // We're at the start of an indented line, outdent it
+                                              e.preventDefault();
+                                              document.execCommand('outdent');
+                                            }
+                                          }
                                         }
                                       }
                                     }}
