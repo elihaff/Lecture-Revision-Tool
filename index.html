@@ -684,7 +684,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           if (xJumpForward) {
             xJumpForwardCount++;
             if (xJumpForwardCount <= 10) {
-              console.log(`  Forward X-jump: ${lastX} → ${item.x} (${item.x - lastX}px > ${forwardThreshold}px threshold for size ${item.fontSize}) text:"${item.text.substring(0, 20)}"`);
+              console.log(`  Forward X-jump: line starts at ${lineStartX}, item at ${item.x} (span: ${item.x - lineStartX}px > ${columnWidth}px) text:"${item.text.substring(0, 20)}"`);
             }
           }
           if (xJumpBackward) {
@@ -698,7 +698,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             currentLine.push(item);
             // Debug: Log when items with X >= 200 are added to a line
             if (item.x >= 200 && currentLine.length <= 3) {
-              console.log(`  Item at X=${item.x} added to line starting at X=${currentLine[0].x} (${currentLine.length} items, yDiff=${yDiff}, threshold=${forwardThreshold})`);
+              console.log(`  Item at X=${item.x} added to line starting at X=${currentLine[0].x} (${currentLine.length} items, yDiff=${yDiff}, maxSpan=${columnWidth}px)`);
             }
             lastX = item.x;
             sameLineJoins++;
