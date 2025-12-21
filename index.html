@@ -672,13 +672,15 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           const xJumpBackward = lastX !== null && item.x < lastX - 10;
 
           // Determine threshold based on font size
+          // CRITICAL: These thresholds must be small enough to detect column boundaries
+          // Two-column PDFs typically have 30-50px word spacing, but 150-250px column gaps
           let forwardThreshold;
           if (item.fontSize >= 17) {
-            forwardThreshold = 200; // Title text: allow large justified gaps
+            forwardThreshold = 80; // Title text: detect column gaps (was 200, too loose)
           } else if (item.fontSize === 13) {
-            forwardThreshold = 60; // Section headers: strict to prevent column merging
+            forwardThreshold = 25; // Section headers: strict (was 60, too loose)
           } else {
-            forwardThreshold = 120; // Bullet points: moderate to allow some justification
+            forwardThreshold = 40; // Bullet points: detect column gaps (was 120, too loose)
           }
 
           const xJumpForward = lastX !== null && item.x > lastX + forwardThreshold;
