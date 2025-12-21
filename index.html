@@ -581,7 +581,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
       // Main PDF parsing function
       const parsePDFToNotes = async (file) => {
-        console.log('===== PDF IMPORT STARTED [VERSION 2.4 - FONT-AWARE THRESHOLDS] =====');
+        console.log('===== PDF IMPORT STARTED [VERSION 2.5 - FIX SPLIT LO DETECTION] =====');
 
         // Read file as ArrayBuffer
         const arrayBuffer = await file.arrayBuffer();
@@ -770,16 +770,34 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         console.log('Title extracted:', title, `(from ${titleLines.length} lines)`);
         console.log('Title lines:', titleLines);
 
-        // Find "Learning Objectives" header (by text content)
-        const loHeaderIdx = cleanLines.findIndex(line =>
+        // Find "Learning Objectives" header (by text content, handle split lines)
+        let loHeaderIdx = cleanLines.findIndex(line =>
           line.text.includes('Learning Objectives')
         );
+
+        // If not found as one line, look for consecutive "Learning" and "Objectives" lines
+        if (loHeaderIdx === -1) {
+          for (let i = 0; i < cleanLines.length - 1; i++) {
+            if (cleanLines[i].text.trim() === 'Learning' &&
+                cleanLines[i + 1].text.trim() === 'Objectives' &&
+                cleanLines[i].fontSize === 13 && cleanLines[i + 1].fontSize === 13) {
+              loHeaderIdx = i;
+              console.log('Learning Objectives found split across lines', i, 'and', i + 1);
+              break;
+            }
+          }
+        }
         console.log('Learning Objectives header index:', loHeaderIdx);
 
         // Extract learning objectives (size 11, x around 54, after LO header)
         const learningObjectives = [];
         if (loHeaderIdx >= 0) {
+          // Skip past both "Learning" and "Objectives" if split
           let i = loHeaderIdx + 1;
+          if (cleanLines[loHeaderIdx].text.trim() === 'Learning' &&
+              cleanLines[i] && cleanLines[i].text.trim() === 'Objectives') {
+            i++; // Skip the "Objectives" line
+          }
           console.log('Extracting LOs starting from line', i);
           // Learning objectives are size 11 at x=54
           while (i < cleanLines.length && cleanLines[i].fontSize === 11 && cleanLines[i].x > 50 && cleanLines[i].x < 60) {
