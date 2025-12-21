@@ -557,6 +557,92 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           return textArray.length > 0 ? textArray : str;
         };
 
+        // Helper function to recursively parse nested HTML lists
+        const parseNestedList = (html, depth = 0) => {
+          const items = [];
+          const tempDiv = document.createElement('div');
+          tempDiv.innerHTML = html;
+
+          // Get the top-level ul/ol
+          const topList = tempDiv.querySelector('ul, ol');
+          if (!topList) return items;
+
+          // Process direct children of the list
+          const children = Array.from(topList.childNodes);
+
+          // Check if there are any LI elements at this level
+          const hasListItems = children.some(child => child.nodeName === 'LI');
+
+          // If no LI elements but there are nested UL/OL, parse those directly
+          if (!hasListItems) {
+            children.forEach(child => {
+              if (child.nodeName === 'UL' || child.nodeName === 'OL') {
+                const nestedItems = parseNestedList(child.outerHTML, depth);
+                items.push(...nestedItems);
+              }
+            });
+            return items;
+          }
+
+          let i = 0;
+          while (i < children.length) {
+            const child = children[i];
+
+            if (child.nodeName === 'LI') {
+              // Get text content of this li
+              let textContent = '';
+              for (let node of child.childNodes) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                  textContent += node.textContent;
+                } else if (node.nodeName !== 'UL' && node.nodeName !== 'OL') {
+                  textContent += node.textContent;
+                }
+              }
+              textContent = textContent.trim();
+
+              // Check for nested list INSIDE this li
+              const nestedListInside = child.querySelector('ul, ol');
+
+              // Check for nested list as NEXT SIBLING (malformed HTML case)
+              let nestedListSibling = null;
+              if (i + 1 < children.length) {
+                const nextChild = children[i + 1];
+                if (nextChild.nodeName === 'UL' || nextChild.nodeName === 'OL') {
+                  nestedListSibling = nextChild;
+                }
+              }
+
+              const nestedList = nestedListInside || nestedListSibling;
+
+              if (nestedList) {
+                // Has nested list
+                const nestedItems = parseNestedList(nestedList.outerHTML, depth + 1);
+                items.push({
+                  stack: [
+                    { text: parseText(textContent), style: 'bullet' },
+                    { ul: nestedItems, margin: [15, 2, 0, 0] }
+                  ]
+                });
+
+                // Skip the sibling nested list if we used it
+                if (nestedListSibling && !nestedListInside) {
+                  i++; // Skip next element since we already processed it
+                }
+              } else if (textContent) {
+                // Regular item
+                items.push({
+                  text: parseText(textContent),
+                  style: 'bullet'
+                });
+              }
+            }
+
+            i++;
+          }
+
+          return items;
+        };
+
         // Build pdfmake document definition
         const docDefinition = {
           pageSize: 'A4',
@@ -701,92 +787,6 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
                   // Split on newlines
                   const lines = normalized.split('\n').map(l => l.trim()).filter(l => l);
-
-                  // Helper function to recursively parse nested HTML lists
-                  const parseNestedList = (html, depth = 0) => {
-                    const items = [];
-                    const tempDiv = document.createElement('div');
-                    tempDiv.innerHTML = html;
-
-                    // Get the top-level ul/ol
-                    const topList = tempDiv.querySelector('ul, ol');
-                    if (!topList) return items;
-
-                    // Process direct children of the list
-                    const children = Array.from(topList.childNodes);
-
-                    // Check if there are any LI elements at this level
-                    const hasListItems = children.some(child => child.nodeName === 'LI');
-
-                    // If no LI elements but there are nested UL/OL, parse those directly
-                    if (!hasListItems) {
-                      children.forEach(child => {
-                        if (child.nodeName === 'UL' || child.nodeName === 'OL') {
-                          const nestedItems = parseNestedList(child.outerHTML, depth);
-                          items.push(...nestedItems);
-                        }
-                      });
-                      return items;
-                    }
-
-                    let i = 0;
-                    while (i < children.length) {
-                      const child = children[i];
-
-                      if (child.nodeName === 'LI') {
-                        // Get text content of this li
-                        let textContent = '';
-                        for (let node of child.childNodes) {
-                          if (node.nodeType === Node.TEXT_NODE) {
-                            textContent += node.textContent;
-                          } else if (node.nodeName !== 'UL' && node.nodeName !== 'OL') {
-                            textContent += node.textContent;
-                          }
-                        }
-                        textContent = textContent.trim();
-
-                        // Check for nested list INSIDE this li
-                        const nestedListInside = child.querySelector('ul, ol');
-
-                        // Check for nested list as NEXT SIBLING (malformed HTML case)
-                        let nestedListSibling = null;
-                        if (i + 1 < children.length) {
-                          const nextChild = children[i + 1];
-                          if (nextChild.nodeName === 'UL' || nextChild.nodeName === 'OL') {
-                            nestedListSibling = nextChild;
-                          }
-                        }
-
-                        const nestedList = nestedListInside || nestedListSibling;
-
-                        if (nestedList) {
-                          // Has nested list
-                          const nestedItems = parseNestedList(nestedList.outerHTML, depth + 1);
-                          items.push({
-                            stack: [
-                              { text: parseText(textContent), style: 'bullet' },
-                              { ul: nestedItems, margin: [15, 2, 0, 0] }
-                            ]
-                          });
-
-                          // Skip the sibling nested list if we used it
-                          if (nestedListSibling && !nestedListInside) {
-                            i++; // Skip next element since we already processed it
-                          }
-                        } else if (textContent) {
-                          // Regular item
-                          items.push({
-                            text: parseText(textContent),
-                            style: 'bullet'
-                          });
-                        }
-                      }
-
-                      i++;
-                    }
-
-                    return items;
-                  };
 
                   if (lines.length > 1) {
                     // First line is main bullet, rest are sub-bullets
