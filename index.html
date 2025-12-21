@@ -672,15 +672,15 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           const xJumpBackward = lastX !== null && item.x < lastX - 10;
 
           // Determine threshold based on font size
-          // CRITICAL: These thresholds must be small enough to detect column boundaries
-          // Two-column PDFs typically have 30-50px word spacing, but 150-250px column gaps
+          // CRITICAL: Balance between allowing justified text (50-100px gaps) and detecting column boundaries (150-250px gaps)
+          // Thresholds should be ~110-140px: high enough for justified spacing, low enough for column detection
           let forwardThreshold;
           if (item.fontSize >= 17) {
-            forwardThreshold = 80; // Title text: detect column gaps (was 200, too loose)
+            forwardThreshold = 140; // Title text: allow justified spacing up to 140px
           } else if (item.fontSize === 13) {
-            forwardThreshold = 25; // Section headers: strict (was 60, too loose)
+            forwardThreshold = 100; // Section headers: moderate (less justification than bullets)
           } else {
-            forwardThreshold = 40; // Bullet points: detect column gaps (was 120, too loose)
+            forwardThreshold = 110; // Bullet points: balance justified text vs column gaps
           }
 
           const xJumpForward = lastX !== null && item.x > lastX + forwardThreshold;
