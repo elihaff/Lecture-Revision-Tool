@@ -639,6 +639,52 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
                 // Check if point contains div, blockquote, br, or list tags - create sub-bullets
                 if (typeof point === 'string' && (point.includes('<div') || point.includes('<blockquote') || point.includes('<br>') || point.includes('<br/>') || point.includes('<br />') || point.includes('<ul>') || point.includes('<li>'))) {
+
+                  // Check if point contains UL/LI tags - parse as HTML list directly
+                  if (point.includes('<ul>') || point.includes('<li>')) {
+                    console.log('Point contains HTML lists, parsing directly');
+
+                    // Extract main text before the list
+                    const ulIndex = point.indexOf('<ul');
+                    let mainText = '';
+                    let listHtml = '';
+
+                    if (ulIndex > 0) {
+                      mainText = point.substring(0, ulIndex).trim();
+                      listHtml = point.substring(ulIndex);
+                    } else {
+                      listHtml = point;
+                    }
+
+                    console.log('Main text:', mainText);
+                    console.log('List HTML:', listHtml);
+
+                    // Parse the list
+                    const nestedItems = parseNestedList(listHtml);
+                    console.log('Nested items parsed:', nestedItems.length);
+
+                    if (mainText && nestedItems.length > 0) {
+                      // Main text with sub-bullets
+                      processedPoints.push({
+                        stack: [
+                          { text: parseText(mainText), style: 'bullet' },
+                          { ul: nestedItems, margin: [15, 2, 0, 0] }
+                        ]
+                      });
+                    } else if (nestedItems.length > 0) {
+                      // Only sub-bullets, no main text
+                      processedPoints.push(...nestedItems);
+                    } else if (mainText) {
+                      // Only main text, no sub-bullets parsed
+                      processedPoints.push({
+                        text: parseText(mainText),
+                        style: 'bullet'
+                      });
+                    }
+
+                    return; // Skip the rest of the processing for this point
+                  }
+
                   // Split on div and blockquote tags by converting them to a delimiter
                   let normalized = point;
                   // Convert opening div/blockquote tags to newlines
