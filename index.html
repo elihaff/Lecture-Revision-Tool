@@ -624,6 +624,27 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           throw new Error('PDF contains no text');
         }
 
+        // COLUMN DETECTION: Detect if PDF has multi-column layout
+        // Group items by X-position to find columns
+        const xPositions = allItems.map(item => item.x);
+        const minX = Math.min(...xPositions);
+        const maxX = Math.max(...xPositions);
+
+        // Detect columns by clustering X positions of content starts
+        const contentStarts = allItems
+          .filter(item => item.fontSize >= 11) // Only content, not footnotes
+          .map(item => item.x);
+
+        // Common left margins in PDFs: ~40-60px (left column), ~300-350px (right column)
+        const leftColumnItems = contentStarts.filter(x => x < 200);
+        const rightColumnItems = contentStarts.filter(x => x >= 200);
+
+        const hasMultipleColumns = rightColumnItems.length > 20; // At least 20 items in right column
+
+        if (hasMultipleColumns) {
+          console.log('Multi-column layout detected. Processing columns separately...');
+        }
+
         // Sort by Y (descending, top to bottom), then X (ascending, left to right)
         allItems.sort((a, b) => b.y - a.y || a.x - b.x);
 
@@ -733,6 +754,37 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             isBold: currentLine.some(i => i.isBold)
           });
         }
+
+        // CRITICAL: Handle multi-column layouts correctly
+        // For newspaper-style columns, read entire left column, then entire right column
+        let sortedLines;
+        if (hasMultipleColumns) {
+          console.log('Applying newspaper-style column reading order...');
+
+          // Detect column boundary - typically around X=200-250 for two-column A4 PDFs
+          const columnBoundary = 200;
+
+          // Separate into columns
+          const leftColumn = lines.filter(line => line.x < columnBoundary);
+          const rightColumn = lines.filter(line => line.x >= columnBoundary);
+
+          // Sort each column by Y-coordinate (descending = top to bottom)
+          leftColumn.sort((a, b) => b.y - a.y);
+          rightColumn.sort((a, b) => b.y - a.y);
+
+          // Concatenate: left column first, then right column
+          sortedLines = [...leftColumn, ...rightColumn];
+
+          console.log(`Column separation: ${leftColumn.length} lines in left column, ${rightColumn.length} lines in right column`);
+        } else {
+          // Single column - just sort by Y
+          sortedLines = lines.sort((a, b) => b.y - a.y);
+          console.log('Single column layout - sorted by Y-coordinate');
+        }
+
+        // Replace lines array with sorted version
+        lines.length = 0;
+        lines.push(...sortedLines);
 
         // Filter out malformed lines (those with clearly concatenated unrelated content)
         const cleanLines = lines.filter((line, idx) => {
