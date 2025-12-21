@@ -699,6 +699,10 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
           if (shouldGroup && !xJumpBackward && !xJumpForward) {
             currentLine.push(item);
+            // Debug: Log when items with X >= 200 are added to a line
+            if (item.x >= 200 && currentLine.length <= 3) {
+              console.log(`  Item at X=${item.x} added to line starting at X=${currentLine[0].x} (${currentLine.length} items, yDiff=${yDiff}, threshold=${forwardThreshold})`);
+            }
             lastX = item.x;
             sameLineJoins++;
           } else {
@@ -715,14 +719,21 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               }
               text = text.replace(/\s+/g, ' ').trim();
 
+              const lineX = currentLine[0].x;
               lines.push({
                 items: currentLine,
                 y: lastY,
                 text: text,
-                x: currentLine[0].x,
+                x: lineX,
                 fontSize: currentLine[0].fontSize,
                 isBold: currentLine.some(i => i.isBold)
               });
+
+              // Debug: Log lines that start with X >= 200
+              if (lineX >= 200) {
+                console.log(`  ✓ Created line with X=${lineX}: "${text.substring(0, 50)}"`);
+              }
+
               lineBreaks++;
             }
             currentLine = [item];
