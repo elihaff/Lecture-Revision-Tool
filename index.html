@@ -655,47 +655,85 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           const tempDiv = document.createElement('div');
           tempDiv.innerHTML = html;
 
-          // Process all top-level children
-          const children = Array.from(tempDiv.children);
+          // Process all child nodes (including text nodes)
+          const processNode = (node) => {
+            if (node.nodeName === 'DIV') {
+              // Process all children of the div
+              Array.from(node.childNodes).forEach(child => {
+                if (child.nodeName === 'BLOCKQUOTE') {
+                  // Extract indentation from blockquote style
+                  const style = child.getAttribute('style') || '';
+                  let leftMargin = 0;
+                  const marginMatch = style.match(/margin:\s*[^;]*?(\d+)px/);
+                  if (marginMatch) {
+                    leftMargin = parseInt(marginMatch[1]);
+                  }
 
-          children.forEach(child => {
-            if (child.nodeName === 'DIV') {
-              // Check if it contains a blockquote (indented content)
-              const blockquote = child.querySelector('blockquote');
-
-              if (blockquote) {
-                // Extract indentation from style
-                const style = blockquote.getAttribute('style') || '';
-                let leftMargin = 0;
-
-                // Try to extract left margin from style
-                const marginMatch = style.match(/margin:\s*[^;]*?(\d+)px/);
-                if (marginMatch) {
-                  leftMargin = parseInt(marginMatch[1]);
+                  const text = parseText(child.textContent.trim());
+                  if (text) {
+                    items.push({
+                      text: text,
+                      margin: [leftMargin, 2, 0, 2],
+                      fontSize: 11
+                    });
+                  }
+                } else if (child.nodeName === 'DIV') {
+                  // Nested div - process recursively
+                  processNode(child);
+                } else if (child.nodeType === Node.TEXT_NODE) {
+                  // Text node
+                  const text = parseText(child.textContent.trim());
+                  if (text) {
+                    items.push({
+                      text: text,
+                      margin: [0, 2, 0, 2],
+                      fontSize: 11
+                    });
+                  }
+                } else if (child.nodeType === Node.ELEMENT_NODE) {
+                  // Other element - get text content
+                  const text = parseText(child.textContent.trim());
+                  if (text) {
+                    items.push({
+                      text: text,
+                      margin: [0, 2, 0, 2],
+                      fontSize: 11
+                    });
+                  }
                 }
+              });
+            } else if (node.nodeName === 'BLOCKQUOTE') {
+              // Top-level blockquote
+              const style = node.getAttribute('style') || '';
+              let leftMargin = 0;
+              const marginMatch = style.match(/margin:\s*[^;]*?(\d+)px/);
+              if (marginMatch) {
+                leftMargin = parseInt(marginMatch[1]);
+              }
 
-                // Get text content
-                const text = parseText(blockquote.textContent.trim());
-                if (text) {
-                  items.push({
-                    text: text,
-                    margin: [leftMargin, 2, 0, 2],
-                    fontSize: 11
-                  });
-                }
-              } else {
-                // Plain text (no blockquote)
-                const text = parseText(child.textContent.trim());
-                if (text) {
-                  items.push({
-                    text: text,
-                    margin: [0, 2, 0, 2],
-                    fontSize: 11
-                  });
-                }
+              const text = parseText(node.textContent.trim());
+              if (text) {
+                items.push({
+                  text: text,
+                  margin: [leftMargin, 2, 0, 2],
+                  fontSize: 11
+                });
+              }
+            } else if (node.nodeType === Node.TEXT_NODE) {
+              // Plain text node
+              const text = parseText(node.textContent.trim());
+              if (text) {
+                items.push({
+                  text: text,
+                  margin: [0, 2, 0, 2],
+                  fontSize: 11
+                });
               }
             }
-          });
+          };
+
+          // Process all top-level children
+          Array.from(tempDiv.childNodes).forEach(processNode);
 
           return items;
         };
