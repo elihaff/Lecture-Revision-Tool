@@ -16,6 +16,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pdfmake@0.1.72/build/pdfmake.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pdfmake@0.1.72/build/vfs_fonts.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="custom-fonts.js"></script>
   <style>
     body { margin: 0; height: 100vh; }
@@ -173,10 +174,16 @@
       const [draggedPoint, setDraggedPoint] = useState(null); // {sectionIndex, pointIndex}
       const [draggedSection, setDraggedSection] = useState(null); // sectionIndex
       const fileInputRef = useRef(null);
+      const pdfImportInputRef = useRef(null);
       const textareaRef = useRef(null);
       const cardTextareaRef = useRef(null);
       const isFormattingRef = useRef(false); // Flag to prevent ref callback interference during formatting
       const [activeFormatting, setActiveFormatting] = useState({ superscript: false, subscript: false }); // Track active formatting modes
+
+      // Initialize PDF.js worker
+      if (typeof pdfjsLib !== 'undefined') {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      }
 
       useEffect(() => {
         const saved = localStorage.getItem('anthropic_api_key');
@@ -492,6 +499,271 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         setCopied(true); setTimeout(() => setCopied(false), 2000);
       };
 
+      // ===== PDF IMPORT FUNCTIONALITY =====
+
+      // Helper: Detect indentation level from x-coordinate
+      const getIndentLevel = (x) => {
+        if (x < 70) return 0;      // x ≈ 55 (base)
+        if (x < 110) return 1;     // x ≈ 95 (40px indent)
+        if (x < 150) return 2;     // x ≈ 135 (80px indent)
+        if (x < 190) return 3;     // x ≈ 175 (120px indent)
+        return Math.floor((x - 55) / 40);
+      };
+
+      // Helper: Convert bold text items to **markdown**
+      const convertBoldInline = (items) => {
+        let result = '';
+        let inBold = false;
+
+        for (const item of items) {
+          if (item.isBold && !inBold) {
+            result += '**';
+            inBold = true;
+          } else if (!item.isBold && inBold) {
+            result += '**';
+            inBold = false;
+          }
+          result += item.text;
+        }
+
+        if (inBold) {
+          result += '**';
+        }
+
+        return result;
+      };
+
+      // Helper: Reconstruct nested bullet HTML from hierarchical bullet lines
+      const reconstructNestedBullets = (bulletLines) => {
+        if (!bulletLines || bulletLines.length === 0) return [];
+
+        const points = [];
+        let currentPoint = null;
+        let pendingNested = [];
+
+        for (const line of bulletLines) {
+          const level = getIndentLevel(line.x);
+          const text = convertBoldInline(line.items);
+
+          if (level === 0) {
+            // Save previous point
+            if (currentPoint) {
+              if (pendingNested.length > 0) {
+                currentPoint += '<ul>' + pendingNested.map(n => `<li>${n}</li>`).join('') + '</ul>';
+                pendingNested = [];
+              }
+              points.push(currentPoint);
+            }
+            // Start new point
+            currentPoint = text;
+          } else if (level === 1) {
+            // First-level nesting
+            pendingNested.push(text);
+          } else {
+            // Deeper nesting - append to last nested item
+            if (pendingNested.length > 0) {
+              const lastIdx = pendingNested.length - 1;
+              pendingNested[lastIdx] += `<ul><li>${text}</li></ul>`;
+            }
+          }
+        }
+
+        // Save final point
+        if (currentPoint) {
+          if (pendingNested.length > 0) {
+            currentPoint += '<ul>' + pendingNested.map(n => `<li>${n}</li>`).join('') + '</ul>';
+          }
+          points.push(currentPoint);
+        }
+
+        return points;
+      };
+
+      // Main PDF parsing function
+      const parsePDFToNotes = async (file) => {
+        // Read file as ArrayBuffer
+        const arrayBuffer = await file.arrayBuffer();
+
+        // Load PDF
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+        // Extract text items from all pages
+        const allItems = [];
+        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+          const page = await pdf.getPage(pageNum);
+          const textContent = await page.getTextContent();
+
+          for (const item of textContent.items) {
+            allItems.push({
+              text: item.str,
+              x: Math.round(item.transform[4]),
+              y: Math.round(item.transform[5]),
+              fontSize: Math.round(item.transform[0]),
+              fontName: item.fontName || '',
+              isBold: (item.fontName || '').includes('Bold')
+            });
+          }
+        }
+
+        if (allItems.length === 0) {
+          throw new Error('PDF contains no text');
+        }
+
+        // Sort by Y (descending, top to bottom), then X (ascending, left to right)
+        allItems.sort((a, b) => b.y - a.y || a.x - b.x);
+
+        // Group into lines (items with similar Y coordinates)
+        const lines = [];
+        let currentLine = [];
+        let lastY = null;
+
+        for (const item of allItems) {
+          if (lastY === null || Math.abs(item.y - lastY) <= 2) {
+            currentLine.push(item);
+          } else {
+            if (currentLine.length > 0) {
+              lines.push({
+                items: currentLine,
+                y: lastY,
+                text: currentLine.map(i => i.text).join(''),
+                x: currentLine[0].x,
+                fontSize: currentLine[0].fontSize,
+                isBold: currentLine.some(i => i.isBold)
+              });
+            }
+            currentLine = [item];
+          }
+          lastY = item.y;
+        }
+        if (currentLine.length > 0) {
+          lines.push({
+            items: currentLine,
+            y: lastY,
+            text: currentLine.map(i => i.text).join(''),
+            x: currentLine[0].x,
+            fontSize: currentLine[0].fontSize,
+            isBold: currentLine.some(i => i.isBold)
+          });
+        }
+
+        // Extract title (first line, 18pt, bold)
+        let title = 'Imported Notes';
+        if (lines.length > 0 && lines[0].fontSize >= 17 && lines[0].isBold) {
+          title = lines[0].text.replace(' (Concise Notes)', '').trim();
+        }
+
+        // Find "Learning Objectives" header
+        const loHeaderIdx = lines.findIndex(line =>
+          line.text.trim() === 'Learning Objectives' && line.isBold
+        );
+
+        // Extract learning objectives
+        const learningObjectives = [];
+        if (loHeaderIdx >= 0) {
+          let i = loHeaderIdx + 1;
+          while (i < lines.length && lines[i].text.startsWith('•')) {
+            learningObjectives.push(lines[i].text.replace(/^•\s*/, '').trim());
+            i++;
+          }
+        }
+
+        // Extract sections and points
+        const notes = [];
+        let currentSection = null;
+        const loEndIdx = loHeaderIdx >= 0 ? loHeaderIdx + 1 + learningObjectives.length : 1;
+
+        for (let i = loEndIdx; i < lines.length; i++) {
+          const line = lines[i];
+          const prevLine = i > 0 ? lines[i - 1] : null;
+
+          // Detect section header: bold, 13pt, y-gap from previous
+          const isYGap = !prevLine || (prevLine.y - line.y > 15);
+          if (line.isBold && line.fontSize >= 12 && isYGap) {
+            // New section
+            if (currentSection) {
+              notes.push(currentSection);
+            }
+            currentSection = {
+              section: convertBoldInline(line.items),
+              points: []
+            };
+          } else if (currentSection && line.text.startsWith('•')) {
+            // Bullet point - need to build hierarchical structure
+            const indentLevel = getIndentLevel(line.x);
+            const pointText = convertBoldInline(line.items.map(item => ({
+              ...item,
+              text: item.text.replace(/^•\s*/, '')
+            })));
+
+            if (indentLevel === 0) {
+              // Top-level point
+              currentSection.points.push(pointText);
+            } else {
+              // Nested point - append to last point as <ul><li>
+              if (currentSection.points.length > 0) {
+                const lastIdx = currentSection.points.length - 1;
+                currentSection.points[lastIdx] += `<ul><li>${pointText}</li></ul>`;
+              }
+            }
+          }
+        }
+
+        if (currentSection) {
+          notes.push(currentSection);
+        }
+
+        return { title, learningObjectives, notes };
+      };
+
+      // PDF Import Handler
+      const handleImportPDF = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        // Confirm replacement
+        if (notes?.notes?.length > 0) {
+          const confirmed = window.confirm(
+            'Import will replace all existing notes. Continue?'
+          );
+          if (!confirmed) {
+            e.target.value = ''; // Reset file input
+            return;
+          }
+        }
+
+        try {
+          setProcessing(true);
+          setProcessingType('import');
+
+          const importedNotes = await parsePDFToNotes(file);
+
+          // Validate structure
+          if (!importedNotes.title || !importedNotes.notes) {
+            throw new Error('Invalid PDF structure');
+          }
+
+          // Update state
+          setNotes(importedNotes);
+
+          // Success message
+          setChatMessages(prev => [...prev, {
+            role: 'assistant',
+            content: `✅ PDF imported successfully!\n• ${importedNotes.notes.length} section(s)\n• ${importedNotes.learningObjectives.length} learning objective(s)`
+          }]);
+
+        } catch (error) {
+          console.error('PDF import error:', error);
+          setChatMessages(prev => [...prev, {
+            role: 'assistant',
+            content: `❌ Import failed: ${error.message}\n\nPlease ensure you're uploading a PDF that was previously exported from this tool.`
+          }]);
+        } finally {
+          setProcessing(false);
+          setProcessingType('');
+          e.target.value = ''; // Reset file input
+        }
+      };
+
       const exportPDF = () => {
         console.log('===== PDF EXPORT STARTED (pdfmake) =====');
         if (!notes) return;
@@ -698,6 +970,24 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                       });
                     }
                   }
+                } else if (child.nodeName === 'UL' || child.nodeName === 'OL') {
+                  // List element - parse as bullets
+                  console.log('[parseNonListContent] Found list element, parsing with parseNestedList');
+                  const listItems = parseNestedList(child.outerHTML);
+                  console.log('[parseNonListContent] List items parsed:', listItems.length);
+                  // Add list items with accumulated margin
+                  if (listItems.length > 0) {
+                    if (accumulatedMargin > 0) {
+                      // Wrap in structure with margin
+                      items.push({
+                        ul: listItems,
+                        margin: [accumulatedMargin, 2, 0, 2]
+                      });
+                    } else {
+                      // Add directly
+                      items.push({ ul: listItems });
+                    }
+                  }
                 } else if (child.nodeName === 'DIV') {
                   // Nested div - process recursively with same margin
                   processNode(child, accumulatedMargin);
@@ -758,6 +1048,21 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                     margin: [accumulatedMargin + leftMargin, 2, 0, 2],
                     fontSize: 11
                   });
+                }
+              }
+            } else if (node.nodeName === 'UL' || node.nodeName === 'OL') {
+              // Top-level list element - parse as bullets
+              console.log('[parseNonListContent] Found top-level list element');
+              const listItems = parseNestedList(node.outerHTML);
+              console.log('[parseNonListContent] Top-level list items parsed:', listItems.length);
+              if (listItems.length > 0) {
+                if (accumulatedMargin > 0) {
+                  items.push({
+                    ul: listItems,
+                    margin: [accumulatedMargin, 2, 0, 2]
+                  });
+                } else {
+                  items.push({ ul: listItems });
                 }
               }
             } else if (node.nodeType === Node.TEXT_NODE) {
@@ -1657,7 +1962,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 <div className="flex-1 overflow-y-auto p-4">
                   {notes ? (
                     <div className="space-y-6">
-                      <div className="flex justify-between items-center"><h2 className="text-xl font-bold">{notes.title || 'Untitled'}</h2><div className="flex gap-2"><button onClick={() => setNotes({ ...notes })} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm flex items-center gap-1"><Icon name="refresh-cw" className="w-4 h-4" />Reload</button><button onClick={copyNotes} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm">{copied ? '✓ Copied' : 'Copy'}</button><button onClick={exportPDF} className="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded-lg text-sm flex items-center gap-1"><Icon name="download" className="w-4 h-4" />PDF</button></div></div>
+                      <div className="flex justify-between items-center"><h2 className="text-xl font-bold">{notes.title || 'Untitled'}</h2><div className="flex gap-2"><button onClick={() => setNotes({ ...notes })} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm flex items-center gap-1"><Icon name="refresh-cw" className="w-4 h-4" />Reload</button><button onClick={copyNotes} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm">{copied ? '✓ Copied' : 'Copy'}</button><input type="file" ref={pdfImportInputRef} onChange={handleImportPDF} accept=".pdf" className="hidden" /><button onClick={() => pdfImportInputRef.current?.click()} disabled={processing} className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-slate-600 disabled:opacity-50 rounded-lg text-sm flex items-center gap-1">{processing && processingType === 'import' ? (<><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>Importing...</>) : (<><Icon name="upload" className="w-4 h-4" />Import PDF</>)}</button><button onClick={exportPDF} className="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded-lg text-sm flex items-center gap-1"><Icon name="download" className="w-4 h-4" />PDF</button></div></div>
                       <div className="bg-indigo-900/30 border border-indigo-700/50 rounded-xl p-4">
                         <h3 className="text-sm font-semibold text-indigo-400 mb-2">Learning Objectives</h3>
                         <ul className="space-y-1">
