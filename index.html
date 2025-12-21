@@ -632,12 +632,16 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           line.text.trim() === 'Learning Objectives' && line.isBold
         );
 
-        // Extract learning objectives
+        // Extract learning objectives (detected by x-position, not bullet character)
         const learningObjectives = [];
         if (loHeaderIdx >= 0) {
           let i = loHeaderIdx + 1;
-          while (i < lines.length && lines[i].text.startsWith('•')) {
-            learningObjectives.push(lines[i].text.replace(/^•\s*/, '').trim());
+          // Learning objectives are indented (x > 50)
+          while (i < lines.length && lines[i].x > 50 && lines[i].x < 70 && !lines[i].isBold) {
+            const text = lines[i].text.replace(/^•\s*/, '').trim();
+            if (text) {
+              learningObjectives.push(text);
+            }
             i++;
           }
         }
@@ -662,13 +666,12 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
               section: convertBoldInline(line.items),
               points: []
             };
-          } else if (currentSection && line.text.startsWith('•')) {
-            // Bullet point - need to build hierarchical structure
+          } else if (currentSection && line.x > 50 && line.x < 100 && !line.isBold) {
+            // Bullet point detected by position (x between 50-100 = base bullet)
             const indentLevel = getIndentLevel(line.x);
-            const pointText = convertBoldInline(line.items.map(item => ({
-              ...item,
-              text: item.text.replace(/^•\s*/, '')
-            })));
+            const pointText = convertBoldInline(line.items).replace(/^•\s*/, '').trim();
+
+            if (!pointText) continue; // Skip empty lines
 
             if (indentLevel === 0) {
               // Top-level point
