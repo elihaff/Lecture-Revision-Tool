@@ -603,51 +603,68 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         // Sort by Y (descending, top to bottom), then X (ascending, left to right)
         allItems.sort((a, b) => b.y - a.y || a.x - b.x);
 
-        // Group into lines (items with similar Y coordinates)
+        // Group into lines (items with similar Y coordinates AND similar X positions to avoid merging columns)
         const lines = [];
         let currentLine = [];
         let lastY = null;
+        let lastX = null;
 
         for (const item of allItems) {
-          if (lastY === null || Math.abs(item.y - lastY) <= 2) {
+          const yDiff = lastY !== null ? Math.abs(item.y - lastY) : 0;
+          const xDiff = lastX !== null ? Math.abs(item.x - lastX) : 0;
+
+          // Only group if very close in Y (within 1px) or if close in Y and X is progressing normally (not jumping > 200px)
+          if (lastY === null || (yDiff <= 1) || (yDiff <= 2 && xDiff < 200)) {
             currentLine.push(item);
+            lastX = item.x;
           } else {
             if (currentLine.length > 0) {
+              // Join text with proper spacing
+              const text = currentLine.map(i => i.text).join('').replace(/\s+/g, ' ').trim();
               lines.push({
                 items: currentLine,
                 y: lastY,
-                text: currentLine.map(i => i.text).join(''),
+                text: text,
                 x: currentLine[0].x,
                 fontSize: currentLine[0].fontSize,
                 isBold: currentLine.some(i => i.isBold)
               });
             }
             currentLine = [item];
+            lastX = item.x;
           }
           lastY = item.y;
         }
         if (currentLine.length > 0) {
+          const text = currentLine.map(i => i.text).join('').replace(/\s+/g, ' ').trim();
           lines.push({
             items: currentLine,
             y: lastY,
-            text: currentLine.map(i => i.text).join(''),
+            text: text,
             x: currentLine[0].x,
             fontSize: currentLine[0].fontSize,
             isBold: currentLine.some(i => i.isBold)
           });
         }
 
-        console.log('Total lines created:', lines.length);
-        console.log('First 15 lines:');
-        lines.slice(0, 15).forEach((line, idx) => {
-          console.log(`  [${idx}] x:${line.x} size:${line.fontSize} bold:${line.isBold} text:"${line.text}"`);
+        // Filter out malformed lines (those with mixed unrelated content)
+        const cleanLines = lines.filter(line => {
+          // Skip lines that have numbers followed by unrelated text (like "13. DermatomesLearning Objectives")
+          const hasMultipleSections = (line.text.match(/[A-Z][a-z]+/g) || []).length > 5;
+          return !hasMultipleSections;
+        });
+
+        console.log('Total lines created:', cleanLines.length, '(filtered from', lines.length, ')');
+        console.log('First 15 clean lines:');
+        cleanLines.slice(0, 15).forEach((line, idx) => {
+          console.log(`  [${idx}] x:${line.x} size:${line.fontSize} text:"${line.text}"`);
         });
 
         // Extract title (combine all size-18 lines at start)
         let title = 'Imported Notes';
         const titleLines = [];
-        for (let i = 0; i < lines.length && lines[i].fontSize >= 17; i++) {
-          titleLines.push(lines[i].text);
+        for (let i = 0; i < cleanLines.length && cleanLines[i].fontSize >= 17; i++) {
+          titleLines.push(cleanLines[i].text);
         }
         if (titleLines.length > 0) {
           title = titleLines.join(' ').replace(' (Concise Notes)', '').trim();
@@ -655,7 +672,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         console.log('Title extracted:', title);
 
         // Find "Learning Objectives" header (by text content)
-        const loHeaderIdx = lines.findIndex(line =>
+        const loHeaderIdx = cleanLines.findIndex(line =>
           line.text.includes('Learning Objectives')
         );
         console.log('Learning Objectives header index:', loHeaderIdx);
@@ -666,10 +683,11 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           let i = loHeaderIdx + 1;
           console.log('Extracting LOs starting from line', i);
           // Learning objectives are size 11 at x=54
-          while (i < lines.length && lines[i].fontSize === 11 && lines[i].x > 50 && lines[i].x < 60) {
-            console.log(`  Checking line ${i}: x=${lines[i].x} text="${lines[i].text}"`);
-            const text = lines[i].text.replace(/^•\s*/, '').trim();
-            if (text && !text.includes('Peritoneal') && !text.includes('Bony Pelvis')) {
+          while (i < cleanLines.length && cleanLines[i].fontSize === 11 && cleanLines[i].x > 50 && cleanLines[i].x < 60) {
+            console.log(`  Checking line ${i}: x=${cleanLines[i].x} text="${cleanLines[i].text}"`);
+            const text = cleanLines[i].text.replace(/^•\s*/, '').trim();
+            // Only include if it looks like a learning objective (starts with verb or describes anatomy)
+            if (text && text.length > 10 && !text.match(/^\d+\./)) {
               learningObjectives.push(text);
             }
             i++;
@@ -683,23 +701,24 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         const loEndIdx = loHeaderIdx >= 0 ? loHeaderIdx + 1 + learningObjectives.length : (titleLines.length || 1);
         console.log('Starting section extraction from line', loEndIdx);
 
-        for (let i = loEndIdx; i < lines.length; i++) {
-          const line = lines[i];
-          const prevLine = i > 0 ? lines[i - 1] : null;
+        for (let i = loEndIdx; i < cleanLines.length; i++) {
+          const line = cleanLines[i];
+          const prevLine = i > 0 ? cleanLines[i - 1] : null;
 
           // Detect section header: size 13, x around 40, y-gap > 15
           const isYGap = !prevLine || (prevLine.y - line.y > 15);
           const yGapValue = prevLine ? (prevLine.y - line.y) : 0;
 
           if (line.fontSize === 13 && line.x < 45 && isYGap) {
-            // New section
-            console.log(`Section detected at line ${i}: "${line.text}" (yGap: ${yGapValue})`);
+            // New section - clean up the section name
+            let sectionName = line.text.trim();
+            console.log(`Section detected at line ${i}: "${sectionName}" (yGap: ${yGapValue})`);
             if (currentSection) {
               console.log(`  Closing previous section with ${currentSection.points.length} points`);
               notes.push(currentSection);
             }
             currentSection = {
-              section: line.text,
+              section: sectionName,
               points: []
             };
           } else if (currentSection && line.fontSize === 11 && line.x > 50 && line.x < 60) {
@@ -708,7 +727,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
             console.log(`Point detected at line ${i}: x=${line.x} text="${pointText.substring(0, 50)}..."`);
 
-            if (!pointText) continue; // Skip empty lines
+            if (!pointText || pointText.length < 5) continue; // Skip empty or very short lines
 
             currentSection.points.push(pointText);
           } else if (i < loEndIdx + 20) {
