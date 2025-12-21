@@ -581,7 +581,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
       // Main PDF parsing function
       const parsePDFToNotes = async (file) => {
-        console.log('===== PDF IMPORT STARTED =====');
+        console.log('===== PDF IMPORT STARTED [VERSION 2.0 - NEW LINE GROUPING] =====');
 
         // Read file as ArrayBuffer
         const arrayBuffer = await file.arrayBuffer();
@@ -633,14 +633,25 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         let lastY = null;
         let lastX = null;
 
+        // Track line splits for debugging
+        let lineBreaks = 0;
+        let sameLineJoins = 0;
+
         for (const item of allItems) {
           const yDiff = lastY !== null ? Math.abs(item.y - lastY) : 0;
-          const xDiff = lastX !== null ? Math.abs(item.x - lastX) : 0;
 
-          // Only group if very close in Y (within 1px) or if close in Y and X is progressing normally (not jumping > 200px)
-          if (lastY === null || (yDiff <= 1) || (yDiff <= 2 && xDiff < 200)) {
+          // STRICT: Only group items with EXACTLY the same Y coordinate (allow 1px tolerance for rounding)
+          // AND only if X is progressing naturally (not jumping to a different column)
+          const shouldGroup = lastY === null || (yDiff <= 1);
+
+          // Check for column jumps: large X movement (backward OR forward) indicates different column/section
+          const xJumpBackward = lastX !== null && item.x < lastX - 10;
+          const xJumpForward = lastX !== null && item.x > lastX + 80; // Text shouldn't jump more than 80px forward
+
+          if (shouldGroup && !xJumpBackward && !xJumpForward) {
             currentLine.push(item);
             lastX = item.x;
+            sameLineJoins++;
           } else {
             if (currentLine.length > 0) {
               // Join text with proper spacing
@@ -653,12 +664,15 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                 fontSize: currentLine[0].fontSize,
                 isBold: currentLine.some(i => i.isBold)
               });
+              lineBreaks++;
             }
             currentLine = [item];
             lastX = item.x;
           }
           lastY = item.y;
         }
+
+        console.log(`Line grouping stats: ${sameLineJoins} items grouped, ${lineBreaks} line breaks`);
         if (currentLine.length > 0) {
           const text = currentLine.map(i => i.text).join('').replace(/\s+/g, ' ').trim();
           lines.push({
@@ -671,12 +685,23 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           });
         }
 
-        // Filter out malformed lines (those with mixed unrelated content)
-        const cleanLines = lines.filter(line => {
-          // Skip lines that have numbers followed by unrelated text (like "13. DermatomesLearning Objectives")
-          const hasMultipleSections = (line.text.match(/[A-Z][a-z]+/g) || []).length > 5;
-          return !hasMultipleSections;
+        // Filter out malformed lines (those with clearly concatenated unrelated content)
+        const cleanLines = lines.filter((line, idx) => {
+          // Skip lines that have capital letters immediately following lowercase (indicates concatenation)
+          // Example: "dermatomesLearning" or "nervePelvic"
+          const hasConcatenation = /[a-z][A-Z]/.test(line.text);
+          if (hasConcatenation) {
+            console.log(`  [FILTERED] Line ${idx}: "${line.text.substring(0, 60)}..." (detected lowercase→uppercase pattern)`);
+          }
+          // Also detect if text has section numbering followed immediately by unrelated text
+          const hasNumberMerge = /\d+\.\s*[A-Z][a-z]+[A-Z]/.test(line.text);
+          if (hasNumberMerge) {
+            console.log(`  [FILTERED] Line ${idx}: "${line.text.substring(0, 60)}..." (detected number + concatenation)`);
+          }
+          return !hasConcatenation && !hasNumberMerge;
         });
+
+        console.log(`Filter removed ${lines.length - cleanLines.length} malformed lines`);
 
         console.log('Total lines created:', cleanLines.length, '(filtered from', lines.length, ')');
         console.log('First 15 clean lines:');
