@@ -146,6 +146,7 @@
       const [newCard, setNewCard] = useState({ front: '', back: '' });
       const [editingNote, setEditingNote] = useState(null); // {sectionIndex, pointIndex, value} or {type: 'section', sectionIndex, value} or {type: 'lo', index, value}
       const [draggedPoint, setDraggedPoint] = useState(null); // {sectionIndex, pointIndex}
+      const [draggedSection, setDraggedSection] = useState(null); // sectionIndex
       const fileInputRef = useRef(null);
       const textareaRef = useRef(null);
       const cardTextareaRef = useRef(null);
@@ -860,6 +861,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
       };
 
       // Drag and drop handlers for reordering points
+      // Drag and drop for points
       const handleDragStart = (sectionIndex, pointIndex) => {
         setDraggedPoint({ sectionIndex, pointIndex });
       };
@@ -879,6 +881,22 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         section.points.splice(targetPointIndex, 0, movedPoint);
         setNotes(updated);
         setDraggedPoint(null);
+      };
+
+      // Drag and drop for sections
+      const handleSectionDragStart = (sectionIndex) => {
+        setDraggedSection(sectionIndex);
+      };
+
+      const handleSectionDrop = (targetSectionIndex) => {
+        if (draggedSection === null) return;
+        if (draggedSection === targetSectionIndex) return; // Same position
+
+        const updated = JSON.parse(JSON.stringify(notes));
+        const [movedSection] = updated.notes.splice(draggedSection, 1);
+        updated.notes.splice(targetSectionIndex, 0, movedSection);
+        setNotes(updated);
+        setDraggedSection(null);
       };
 
       // Formatting functions for contentEditable
@@ -1337,8 +1355,15 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                         </ul>
                       </div>
                       {Array.isArray(notes.notes) && notes.notes.map((s, i) => (
-                        <div key={i} className="bg-slate-800/50 rounded-xl p-4">
-                          <div className="flex items-center gap-2 mb-3 group">
+                        <div
+                          key={i}
+                          className="bg-slate-800/50 rounded-xl p-4"
+                          draggable={!editingNote}
+                          onDragStart={() => handleSectionDragStart(i)}
+                          onDragOver={handleDragOver}
+                          onDrop={() => handleSectionDrop(i)}
+                        >
+                          <div className="flex items-center gap-2 mb-3 group cursor-move">
                             {editingNote?.type === 'section' && editingNote.sectionIndex === i ? (
                               <div className="flex-1 flex gap-2">
                                 <input
