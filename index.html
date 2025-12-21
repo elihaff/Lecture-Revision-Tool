@@ -882,63 +882,51 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
                     return; // Skip the rest of the processing for this point
                   }
 
-                  // Split on div and blockquote tags by converting them to a delimiter
-                  let normalized = point;
-                  // Convert opening div/blockquote tags to newlines
-                  normalized = normalized.replace(/<div[^>]*>/gi, '\n');
-                  normalized = normalized.replace(/<blockquote[^>]*>/gi, '\n');
-                  // Remove closing tags
-                  normalized = normalized.replace(/<\/div>/gi, '');
-                  normalized = normalized.replace(/<\/blockquote>/gi, '');
-                  // Also handle br tags
-                  normalized = normalized.replace(/<br\s*\/?>/gi, '\n');
+                  // Point contains div/blockquote but no ul/li - treat as plain text without bullets
+                  console.log('Processing point with div/blockquote (no ul/li)');
 
-                  // Split on newlines
-                  const lines = normalized.split('\n').map(l => l.trim()).filter(l => l);
+                  // Find the first div or blockquote tag to split main text from additional content
+                  const divIndex = point.search(/<(div|blockquote)/i);
 
-                  if (lines.length > 1) {
-                    // First line is main bullet, rest are sub-bullets
-                    const allSubBullets = [];
+                  if (divIndex > 0) {
+                    // Has main text before div/blockquote
+                    const mainText = point.substring(0, divIndex).trim();
+                    const additionalContent = point.substring(divIndex);
 
-                    console.log('Processing multi-line point. Total lines:', lines.length);
+                    console.log('Main text:', mainText);
+                    console.log('Additional content:', additionalContent);
 
-                    // Process each line after the first
-                    lines.slice(1).forEach((line, idx) => {
-                      console.log(`Line ${idx + 1}:`, line);
-                      console.log(`Contains <li>:`, line.includes('<li>'));
+                    // Parse additional content as plain text (no bullets, preserve indentation)
+                    const plainTextItems = parseNonListContent(additionalContent);
+                    console.log('Plain text items parsed:', plainTextItems.length);
 
-                      // Check if line contains HTML list items
-                      if (line.includes('<li>')) {
-                        // Parse nested list structure
-                        console.log('Parsing as nested list');
-                        const nestedItems = parseNestedList(line);
-                        console.log('Nested items result:', nestedItems);
-                        allSubBullets.push(...nestedItems);
+                    if (plainTextItems.length > 0) {
+                      // Create stack with main text and plain text items
+                      processedPoints.push({
+                        stack: [
+                          { text: parseText(mainText), style: 'bullet' },
+                          ...plainTextItems
+                        ]
+                      });
+                    } else {
+                      // Only main text
+                      processedPoints.push({
+                        text: parseText(mainText),
+                        style: 'bullet'
+                      });
+                    }
+                  } else {
+                    // No main text before div/blockquote, all content is plain text
+                    const plainTextItems = parseNonListContent(point);
+                    console.log('All plain text items parsed:', plainTextItems.length);
+
+                    if (plainTextItems.length > 0) {
+                      if (plainTextItems.length === 1) {
+                        processedPoints.push(plainTextItems[0]);
                       } else {
-                        // Regular line, treat as sub-bullet
-                        console.log('Adding as regular sub-bullet');
-                        allSubBullets.push({
-                          text: parseText(line),
-                          style: 'bullet'
-                        });
+                        processedPoints.push({ stack: plainTextItems });
                       }
-                    });
-
-                    console.log('Total sub-bullets created:', allSubBullets.length);
-
-                    // Add main bullet with nested sub-bullets as a stack
-                    processedPoints.push({
-                      stack: [
-                        { text: parseText(lines[0]), style: 'bullet' },
-                        { ul: allSubBullets, margin: [15, 2, 0, 0] }
-                      ]
-                    });
-                  } else if (lines.length === 1) {
-                    // Only one line, treat as regular bullet
-                    processedPoints.push({
-                      text: parseText(lines[0]),
-                      style: 'bullet'
-                    });
+                    }
                   }
                 } else {
                   // No newlines, treat as regular bullet
