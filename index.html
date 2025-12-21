@@ -581,7 +581,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
       // Main PDF parsing function
       const parsePDFToNotes = async (file) => {
-        console.log('===== PDF IMPORT STARTED [VERSION 2.2 - FIX TITLE EXTRACTION] =====');
+        console.log('===== PDF IMPORT STARTED [VERSION 2.3 - DEBUG X-JUMPS] =====');
 
         // Read file as ArrayBuffer
         const arrayBuffer = await file.arrayBuffer();
@@ -636,6 +636,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         // Track line splits for debugging
         let lineBreaks = 0;
         let sameLineJoins = 0;
+        let xJumpForwardCount = 0;
+        let xJumpBackwardCount = 0;
 
         for (const item of allItems) {
           const yDiff = lastY !== null ? Math.abs(item.y - lastY) : 0;
@@ -646,7 +648,21 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
           // Check for column jumps: large X movement (backward OR forward) indicates different column/section
           const xJumpBackward = lastX !== null && item.x < lastX - 10;
-          const xJumpForward = lastX !== null && item.x > lastX + 200; // Allow larger gaps for justified text, but catch true column jumps (300-400px)
+          const xJumpForward = lastX !== null && item.x > lastX + 150; // Reduced from 200px to catch more column jumps
+
+          // Log significant jumps for debugging
+          if (xJumpForward) {
+            xJumpForwardCount++;
+            if (xJumpForwardCount <= 5) {
+              console.log(`  Forward X-jump: ${lastX} → ${item.x} (${item.x - lastX}px) text:"${item.text.substring(0, 20)}"`);
+            }
+          }
+          if (xJumpBackward) {
+            xJumpBackwardCount++;
+            if (xJumpBackwardCount <= 5) {
+              console.log(`  Backward X-jump: ${lastX} → ${item.x} text:"${item.text.substring(0, 20)}"`);
+            }
+          }
 
           if (shouldGroup && !xJumpBackward && !xJumpForward) {
             currentLine.push(item);
@@ -682,7 +698,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           lastY = item.y;
         }
 
-        console.log(`Line grouping stats: ${sameLineJoins} items grouped, ${lineBreaks} line breaks`);
+        console.log(`Line grouping stats: ${sameLineJoins} items grouped, ${lineBreaks} line breaks, ${xJumpForwardCount} forward jumps, ${xJumpBackwardCount} backward jumps`);
         if (currentLine.length > 0) {
           // Join text with proper spacing - add space between items if not already present
           let text = '';
