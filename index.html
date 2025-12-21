@@ -581,7 +581,7 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
 
       // Main PDF parsing function
       const parsePDFToNotes = async (file) => {
-        console.log('===== PDF IMPORT STARTED [VERSION 2.1 - IMPROVED SPACING] =====');
+        console.log('===== PDF IMPORT STARTED [VERSION 2.2 - FIX TITLE EXTRACTION] =====');
 
         // Read file as ArrayBuffer
         const arrayBuffer = await file.arrayBuffer();
@@ -730,16 +730,17 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           console.log(`  [${idx}] x:${line.x} size:${line.fontSize} text:"${line.text}"`);
         });
 
-        // Extract title (combine all size-18 lines at start)
+        // Extract title (find and combine all size-18 lines, wherever they appear)
         let title = 'Imported Notes';
-        const titleLines = [];
-        for (let i = 0; i < cleanLines.length && cleanLines[i].fontSize >= 17; i++) {
-          titleLines.push(cleanLines[i].text);
-        }
+        const titleLines = cleanLines
+          .filter(line => line.fontSize >= 17)
+          .map(line => line.text);
+
         if (titleLines.length > 0) {
-          title = titleLines.join(' ').replace(' (Concise Notes)', '').trim();
+          title = titleLines.join(' ').replace(' (Concise Notes)', '').replace('(Concise Notes)', '').trim();
         }
-        console.log('Title extracted:', title);
+        console.log('Title extracted:', title, `(from ${titleLines.length} lines)`);
+        console.log('Title lines:', titleLines);
 
         // Find "Learning Objectives" header (by text content)
         const loHeaderIdx = cleanLines.findIndex(line =>
