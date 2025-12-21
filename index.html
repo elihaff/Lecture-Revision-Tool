@@ -862,8 +862,21 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
         if (!editingNote || !notes) return;
         const updated = JSON.parse(JSON.stringify(notes)); // deep clone
 
-        // Convert newlines to <br> tags for proper rendering
-        const processedValue = editingNote.value.replace(/\n/g, '<br>');
+        console.log('Saving note edit. Original value:', editingNote.value);
+
+        // Don't convert newlines to <br> if the content already has HTML structure
+        let processedValue;
+        if (editingNote.value.includes('<ul>') || editingNote.value.includes('<ol>') || editingNote.value.includes('<li>')) {
+          // Keep HTML as-is for lists
+          processedValue = editingNote.value;
+          console.log('Content has HTML lists, keeping as-is');
+        } else {
+          // Convert newlines to <br> tags for plain text
+          processedValue = editingNote.value.replace(/\n/g, '<br>');
+          console.log('Plain text, converting newlines to <br>');
+        }
+
+        console.log('Processed value:', processedValue);
 
         if (editingNote.type === 'point') {
           updated.notes[editingNote.sectionIndex].points[editingNote.pointIndex] = processedValue;
