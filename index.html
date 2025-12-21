@@ -969,21 +969,38 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           setProcessing(true);
           setProcessingType('import');
 
-          // Try to extract embedded JSON metadata (REQUIRED for import)
+          // Extract embedded JSON from PDF content (REQUIRED for import)
           let importedNotes = null;
 
           const arrayBuffer = await file.arrayBuffer();
           const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-          const metadata = await pdf.getMetadata();
 
-          console.log('PDF metadata:', metadata);
+          console.log('PDF loaded, pages:', pdf.numPages);
 
-          // Check for embedded notesJSON in metadata
-          if (metadata.info && metadata.info.notesJSON) {
-            console.log('✅ Found embedded JSON in PDF metadata - using lossless import');
-            importedNotes = JSON.parse(metadata.info.notesJSON);
+          // Extract all text from all pages to find embedded JSON
+          let allText = '';
+          for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+            const page = await pdf.getPage(pageNum);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items.map(item => item.str).join('');
+            allText += pageText;
+          }
+
+          console.log('Total text length:', allText.length);
+
+          // Look for embedded JSON delimiters
+          const startDelimiter = '[EMBEDDED_NOTES_DATA_START]';
+          const endDelimiter = '[EMBEDDED_NOTES_DATA_END]';
+          const startIndex = allText.indexOf(startDelimiter);
+          const endIndex = allText.indexOf(endDelimiter);
+
+          if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+            console.log('✅ Found embedded JSON in PDF content - using lossless import');
+            const jsonStr = allText.substring(startIndex + startDelimiter.length, endIndex).trim();
+            importedNotes = JSON.parse(jsonStr);
           } else {
-            // No metadata found - cannot import
+            // No embedded data found - cannot import
+            console.log('No embedded JSON found in PDF content');
             throw new Error('NO_METADATA');
           }
 
@@ -1648,6 +1665,20 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             }
           });
         }
+
+        // CRITICAL: Embed JSON data in PDF content for lossless import
+        // Add invisible/tiny text block at the end containing the full notes JSON
+        docDefinition.content.push({
+          text: [
+            { text: '\n\n', fontSize: 1 },
+            { text: '[EMBEDDED_NOTES_DATA_START]\n', fontSize: 1, color: 'white' },
+            { text: JSON.stringify(notes), fontSize: 1, color: 'white' },
+            { text: '\n[EMBEDDED_NOTES_DATA_END]', fontSize: 1, color: 'white' }
+          ],
+          margin: [0, 0, 0, 0]
+        });
+
+        console.log('Embedded notes JSON in PDF content (invisible text block)');
 
         // Generate and open PDF in new tab
         try {
