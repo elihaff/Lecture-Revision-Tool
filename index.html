@@ -166,6 +166,30 @@
         if (saved) setApiKey(saved);
       }, []);
 
+      // Debug: Log notes state changes
+      useEffect(() => {
+        if (notes) {
+          console.log('\n===== NOTES STATE IN REACT =====');
+          console.log('Title:', notes.title);
+          console.log('Learning Objectives:', notes.learningObjectives?.length || 0);
+          console.log('Sections:', notes.notes?.length || 0);
+          if (notes.notes) {
+            notes.notes.forEach((section, i) => {
+              console.log(`  Section ${i + 1}: "${section.section}" (${section.points?.length || 0} points)`);
+              if (section.points) {
+                section.points.slice(0, 3).forEach((point, j) => {
+                  console.log(`    Point ${j + 1}: "${point.substring(0, 80)}..."`);
+                });
+                if (section.points.length > 3) {
+                  console.log(`    ... and ${section.points.length - 3} more points`);
+                }
+              }
+            });
+          }
+          console.log('===== END NOTES STATE =====\n');
+        }
+      }, [notes]);
+
       const saveApiKey = (key) => { setApiKey(key); if (key) localStorage.setItem('anthropic_api_key', key); else localStorage.removeItem('anthropic_api_key'); };
 
       const readFile = async (file) => {
@@ -741,8 +765,26 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           notes.push(currentSection);
         }
 
+        console.log('===== EXTRACTION COMPLETE =====');
         console.log('Total sections extracted:', notes.length);
-        console.log('===== PDF IMPORT COMPLETED =====');
+
+        // Log complete structure
+        console.log('\n===== FINAL STRUCTURE BEING RETURNED =====');
+        console.log('Title:', title);
+        console.log('Learning Objectives (' + learningObjectives.length + '):');
+        learningObjectives.forEach((lo, i) => {
+          console.log(`  LO ${i + 1}: "${lo}"`);
+        });
+        console.log('\nSections (' + notes.length + '):');
+        notes.forEach((section, i) => {
+          console.log(`\nSection ${i + 1}: "${section.section}"`);
+          console.log(`  Points (${section.points.length}):`);
+          section.points.forEach((point, j) => {
+            console.log(`    Point ${j + 1}: "${point.substring(0, 100)}${point.length > 100 ? '...' : ''}"`);
+          });
+        });
+        console.log('===== PDF IMPORT COMPLETED =====\n');
+
         return { title, learningObjectives, notes };
       };
 
@@ -774,6 +816,11 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
           }
 
           // Update state
+          console.log('\n===== UPDATING REACT STATE =====');
+          console.log('State being set:');
+          console.log('  Title:', importedNotes.title);
+          console.log('  LOs:', importedNotes.learningObjectives.length);
+          console.log('  Sections:', importedNotes.notes.length);
           setNotes(importedNotes);
 
           // Set module abbreviation if selected
@@ -786,6 +833,8 @@ Use **asterisks** for key terms. Be concise. UK English. Preserve all existing c
             role: 'assistant',
             content: `✅ PDF imported successfully!\n• ${importedNotes.notes.length} section(s)\n• ${importedNotes.learningObjectives.length} learning objective(s)${importModuleAbbrev ? `\n• Module: ${importModuleAbbrev}` : ''}`
           }]);
+
+          console.log('===== STATE UPDATE COMPLETE =====\n');
 
         } catch (error) {
           console.error('PDF import error:', error);
