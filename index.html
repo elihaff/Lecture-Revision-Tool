@@ -291,25 +291,87 @@
 
         try {
           const notesText = notes.notes?.map(s => `## ${s.section}\n${s.points?.map(p => `- ${p}`).join('\n')}`).join('\n\n') || '';
-          const cardsPrompt = `Create 25-45 Anki flashcards from these medical lecture notes.
+          const cardsPrompt = `You are to generate high-quality Anki flashcards from my medical lecture notes using a strict recall-optimised technique.
 
-Target the most important concepts, definitions, mechanisms, and clinical points. Ensure no major concepts are missed.
+Follow all rules exactly.
+
+⸻
+
+Each flashcard must have:
+
+Front (Question)
+• A single, precise question
+• Tests one concept only
+• Answerable in ≤10 seconds
+• No vague verbs (describe, discuss, outline)
+• No MCQs
+• No case vignettes
+• No multi-part questions
+
+Back (Answer)
+• Must contain only the answer
+• Must NOT repeat or paraphrase the question
+• No filler words
+• Prefer short noun phrases over sentences
+
+Example (required style):
+Front: How many brains does a human have?
+Back: One
+
+⸻
+
+Answer formatting rules (mandatory):
+1. Minimal phrasing
+   • Use the shortest precise wording possible
+
+2. Lists
+   • If multiple items are required, each item must be on a new line using <br> tags
+   • Do not separate items with commas
+
+3. Cause → effect
+   • Use arrows (→) to show causal chains
+
+4. Directional changes
+   • Use ↑ for increase
+   • Use ↓ for decrease
+
+5. Length limit
+   • Maximum 5 lines per answer
+   • If more information is needed, split into multiple cards
+
+⸻
+
+Question categories to use (balanced mix where applicable):
+• Definition / Identity
+• Location / Source / Cell type
+• Mechanism (single-step or stepwise)
+• Cause → Effect
+• Regulation / Feedback
+• Comparison (one axis only)
+• Thresholds / Diagnostic values
+• Limited lists (3–5 items maximum)
+• Clinical associations (no cases)
+
+Each question must clearly fit one category only.
+
+⸻
+
+Final rule:
+
+If a flashcard:
+• Repeats the question in the answer
+• Uses unnecessary full sentences
+• Contains multiple concepts
+• Is visually dense or cluttered
+
+Rewrite it until it is maximally minimal, visually clean, and forces precise recall.
+
+⸻
 
 IMPORTANT: Return ONLY a JSON array, nothing else. No markdown, no explanation, just the array:
 [{"front":"Question?","back":"Answer"}]
 
-Rules:
-- Create between 25-45 cards (not fewer, not more)
-- ATOMIC CARDS: Each card should test ONE small piece of information. If a concept has multiple parts, split it into separate cards.
-- front = question to test knowledge
-- back = VERY CONCISE answer (maximum 1-2 short sentences OR a brief list)
-- BREVITY IS KEY: Remove all unnecessary words. Use fragments, not full sentences where possible.
-- NEVER REPEAT THE QUESTION in the answer. Go straight to the answer. BAD: "Complications of chlamydia include: PID, infertility" GOOD: "PID<br>Infertility<br>Ectopic pregnancy"
-- FOR LISTS: Put each item on its own line using <br> tags. Example: "PID<br>Infertility<br>Ectopic pregnancy"
-- Use <b>term</b> for key terms in answers
-- UK English spelling
-- Prioritise key concepts, clinical relevance, and exam-likely material
-- Avoid wordy explanations - just the essential facts
+Create 25-45 cards. Use UK English spelling.
 
 LECTURE NOTES:
 ${notesText}`;
