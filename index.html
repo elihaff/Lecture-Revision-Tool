@@ -395,9 +395,6 @@ ${notesText}`;
           const rawText = cardsData.content?.[0]?.text || '';
           console.log('Raw flashcard text:', rawText);
 
-          // Show first 500 chars of response for debugging
-          setChatMessages(prev => [...prev, { role: 'assistant', content: `API Response (first 500 chars):\n${rawText.substring(0, 500)}...` }]);
-
           // Parse JSON array from response
           let parsedCards = [];
           let parseError = null;
@@ -442,7 +439,8 @@ ${notesText}`;
           setActiveTab('cards');
 
           if (parsedCards.length === 0) {
-            setChatMessages(prev => [...prev, { role: 'assistant', content: `⚠️ No cards parsed.\n\nError: ${parseError || 'Unknown'}\n\nRaw text length: ${rawText.length}` }]);
+            const preview = rawText.substring(0, 200);
+            setChatMessages(prev => [...prev, { role: 'assistant', content: `⚠️ No flashcards generated.\n\nError: ${parseError || 'Unknown'}\n\nResponse preview (first 200 chars):\n${preview}...\n\nPlease try again or check your notes.` }]);
           } else {
             setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Flashcards generated!\n• ${parsedCards.length} cards created\n\nGo to the Cards tab to review and export.` }]);
           }
