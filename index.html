@@ -372,11 +372,11 @@ IMPORTANT: Return ONLY a JSON array, nothing else. No markdown, no explanation, 
 [{"front":"Question?","back":"Answer"}]
 
 JSON FORMATTING RULES (CRITICAL):
-- Replace ALL double quotes (") inside content with single quotes (')
+- Escape ALL double quotes (") inside content using backslash (\")
 - Replace ALL newlines inside content with <br> tags
 - Ensure every string is properly closed
 - Do not include line breaks within JSON strings
-- The array must be valid, parseable JSON
+- The array must be valid, parseable JSON with double quotes only
 
 Create 25-45 cards that cover ALL content from the notes below. Every important concept, mechanism, definition, and clinical point must be represented. If needed, prioritize the most exam-relevant material to stay within the card limit. Use UK English spelling.
 
