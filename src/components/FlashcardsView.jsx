@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Save, Plus, Upload, Download, Trash2, Edit2, Check, X } from 'lucide-react'
+import { ArrowLeft, Save, Plus, Upload, Download, Trash2, Edit2, Check, X, Loader2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 function parseCsvLine(line) {
@@ -45,6 +45,8 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
   const [newCard, setNewCard] = useState({ front: '', back: '', tags: '' })
   const [expandedCards, setExpandedCards] = useState({})
   const [editingCard, setEditingCard] = useState(null) // {index, front, back, tags}
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const csvImportInputRef = useRef(null)
   const editCardBackRef = useRef(null)
   const newCardBackRef = useRef(null)
@@ -53,6 +55,20 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
     { symbol: 'α' }, { symbol: 'β' }, { symbol: 'Δ' }, { symbol: 'μ' },
     { symbol: '→' }, { symbol: '←' }, { symbol: '↑' }, { symbol: '↓' },
   ]
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'Unknown'
+    const date = new Date(dateString)
+    const now = new Date()
+    const diffMs = now - date
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+
+    if (diffDays === 0) return 'Today'
+    if (diffDays === 1) return 'Yesterday'
+    if (diffDays < 7) return `${diffDays} days ago`
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`
+    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  }
 
   useEffect(() => {
     setFlashcards(Array.isArray(lecture.notes?._flashcards) ? lecture.notes._flashcards : [])
@@ -89,6 +105,36 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
       alert(`Failed to save flashcards: ${error.message}`)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleDeleteAllFlashcards = async () => {
+    setDeleting(true)
+    try {
+      const baseNotes = lecture.notes || { title: lecture.title, notes: [] }
+      const updatedNotes = {
+        ...baseNotes,
+        _flashcards: undefined,
+      }
+
+      const { error } = await supabase
+        .from('lectures')
+        .update({ notes: updatedNotes })
+        .eq('id', lecture.id)
+
+      if (error) {
+        throw new Error(error.message)
+      }
+
+      setFlashcards([])
+      setHasChanges(false)
+      setShowDeleteConfirm(false)
+      if (onSaved) onSaved()
+    } catch (error) {
+      console.error('Delete flashcards failed:', error)
+      alert(`Failed to delete flashcards: ${error.message}`)
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -210,45 +256,88 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
             </button>
 
             <div className="flex items-center gap-2">
-              {hasChanges && (
-                <button
-                  onClick={saveFlashcards}
-                  disabled={saving}
-                  className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white rounded-lg text-sm font-medium transition-colors"
-                >
-                  <Save className="w-4 h-4" />
-                  {saving ? 'Saving...' : 'Save Changes'}
-                </button>
+              {flashcards.length > 0 ? (
+                <>
+                  {/* Status tile - Generated */}
+                  <div className="flex items-center gap-3 bg-surface border border-divider rounded-lg px-4 py-2">
+                    <div>
+                      <p className="text-lg font-medium text-success">Generated</p>
+                      {lecture.processed_at && (
+                        <p className="text-xs text-secondary">Processed {formatDate(lecture.processed_at)}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {hasChanges && (
+                    <button
+                      onClick={saveFlashcards}
+                      disabled={saving}
+                      className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white rounded-lg text-sm font-medium transition-colors"
+                    >
+                      <Save className="w-4 h-4" />
+                      {saving ? 'Saving...' : 'Save Changes'}
+                    </button>
+                  )}
+
+                  <button
+                    onClick={exportCsv}
+                    className="flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-sm font-medium transition-colors"
+                  >
+                    <Download className="w-4 h-4" />
+                    Export CSV
+                  </button>
+
+                  <button
+                    onClick={() => setShowDeleteConfirm(true)}
+                    className="flex items-center justify-center gap-2 px-3 py-2 bg-gray-100 hover:bg-red-50 hover:text-red-600 rounded-lg text-secondary text-sm transition-colors"
+                    title="Delete all flashcards"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </>
+              ) : (
+                <>
+                  {hasChanges && (
+                    <button
+                      onClick={saveFlashcards}
+                      disabled={saving}
+                      className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white rounded-lg text-sm font-medium transition-colors"
+                    >
+                      <Save className="w-4 h-4" />
+                      {saving ? 'Saving...' : 'Save Changes'}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowAddCard((prev) => !prev)}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add Card
+                  </button>
+                  <button
+                    onClick={() => csvImportInputRef.current?.click()}
+                    className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium transition-colors"
+                  >
+                    <Upload className="w-4 h-4" />
+                    Import CSV
+                  </button>
+                  <input
+                    type="file"
+                    ref={csvImportInputRef}
+                    onChange={importCsv}
+                    accept=".csv,text/csv"
+                    className="hidden"
+                  />
+                  <button
+                    onClick={exportCsv}
+                    disabled={!flashcards.length}
+                    className="flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-300 text-white rounded-lg text-sm font-medium transition-colors"
+                  >
+                    <Download className="w-4 h-4" />
+                    Export CSV
+                  </button>
+                </>
               )}
-              <button
-                onClick={() => setShowAddCard((prev) => !prev)}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Add Card
-              </button>
-              <button
-                onClick={() => csvImportInputRef.current?.click()}
-                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium transition-colors"
-              >
-                <Upload className="w-4 h-4" />
-                Import CSV
-              </button>
-              <input
-                type="file"
-                ref={csvImportInputRef}
-                onChange={importCsv}
-                accept=".csv,text/csv"
-                className="hidden"
-              />
-              <button
-                onClick={exportCsv}
-                disabled={!flashcards.length}
-                className="flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-300 text-white rounded-lg text-sm font-medium transition-colors"
-              >
-                <Download className="w-4 h-4" />
-                Export CSV
-              </button>
             </div>
           </div>
         </div>
@@ -658,6 +747,44 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
           )}
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-surface rounded-xl border border-divider p-6 max-w-md w-full">
+            <h3 className="text-lg font-semibold text-primary mb-2">Delete All Flashcards?</h3>
+            <p className="text-sm text-secondary mb-6">
+              This will permanently delete all {flashcards.length} flashcard{flashcards.length !== 1 ? 's' : ''}. This action cannot be undone.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleting}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 disabled:bg-gray-50 text-primary rounded-lg text-sm font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteAllFlashcards}
+                disabled={deleting}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+              >
+                {deleting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    Delete All
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
