@@ -37,9 +37,12 @@ function App() {
             {/* Logo */}
             <div className="flex items-center gap-3">
               <span className="text-2xl">🧠</span>
-              <span className="font-semibold text-primary">
-                Medical Lecture Study Assistant
-              </span>
+              <div>
+                <span className="font-semibold text-primary">
+                  Medical Lecture Study Assistant
+                </span>
+                <span className="ml-2 text-xs text-secondary">v2.73</span>
+              </div>
             </div>
 
             {/* User menu */}
