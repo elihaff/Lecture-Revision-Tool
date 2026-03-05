@@ -46,6 +46,13 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
   const [expandedCards, setExpandedCards] = useState({})
   const [editingCard, setEditingCard] = useState(null) // {index, front, back, tags}
   const csvImportInputRef = useRef(null)
+  const editCardBackRef = useRef(null)
+  const newCardBackRef = useRef(null)
+
+  const essentialSymbols = [
+    { symbol: 'α' }, { symbol: 'β' }, { symbol: 'Δ' }, { symbol: 'μ' },
+    { symbol: '→' }, { symbol: '←' }, { symbol: '↑' }, { symbol: '↓' },
+  ]
 
   useEffect(() => {
     setFlashcards(Array.isArray(lecture.notes?._flashcards) ? lecture.notes._flashcards : [])
@@ -259,12 +266,102 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                 placeholder="Front (question)"
                 className="w-full bg-white border border-divider rounded-lg px-3 py-2 text-sm"
               />
-              <textarea
-                value={newCard.back}
-                onChange={(e) => setNewCard((prev) => ({ ...prev, back: e.target.value }))}
-                placeholder="Back (answer)"
-                rows={3}
-                className="w-full bg-white border border-divider rounded-lg px-3 py-2 text-sm"
+
+              {/* Formatting Toolbar for New Card */}
+              <div className="flex flex-wrap gap-1 p-2 bg-gray-50 rounded-lg border border-divider">
+                <div className="text-xs text-secondary w-full mb-1">Format answer:</div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newCardBackRef.current) return
+                    newCardBackRef.current.focus()
+                    document.execCommand('bold')
+                    setTimeout(() => setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML })), 10)
+                  }}
+                  className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs font-bold"
+                >
+                  B
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newCardBackRef.current) return
+                    newCardBackRef.current.focus()
+                    document.execCommand('italic')
+                    setTimeout(() => setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML })), 10)
+                  }}
+                  className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs italic"
+                >
+                  I
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newCardBackRef.current) return
+                    newCardBackRef.current.focus()
+                    document.execCommand('underline')
+                    setTimeout(() => setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML })), 10)
+                  }}
+                  className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs underline"
+                >
+                  U
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newCardBackRef.current) return
+                    newCardBackRef.current.focus()
+                    document.execCommand('insertUnorderedList')
+                    setTimeout(() => setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML })), 10)
+                  }}
+                  className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs"
+                  title="Bullet point"
+                >
+                  •
+                </button>
+                <span className="border-l border-divider mx-1"></span>
+                {essentialSymbols.map(({ symbol }) => (
+                  <button
+                    key={symbol}
+                    type="button"
+                    onClick={() => {
+                      if (!newCardBackRef.current) return
+                      newCardBackRef.current.focus()
+                      document.execCommand('insertText', false, symbol)
+                      setTimeout(() => setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML })), 10)
+                    }}
+                    className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs"
+                  >
+                    {symbol}
+                  </button>
+                ))}
+              </div>
+
+              <div
+                ref={(el) => {
+                  newCardBackRef.current = el
+                  if (el && el.innerHTML !== newCard.back) {
+                    el.innerHTML = newCard.back || ''
+                  }
+                }}
+                contentEditable
+                suppressContentEditableWarning
+                onInput={(e) => {
+                  setNewCard(p => ({ ...p, back: e.currentTarget.innerHTML }))
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Tab') {
+                    e.preventDefault()
+                    if (e.shiftKey) {
+                      document.execCommand('outdent')
+                    } else {
+                      document.execCommand('indent')
+                    }
+                  }
+                }}
+                data-placeholder="Back (answer)"
+                className="w-full bg-white border border-divider rounded-lg px-3 py-2 text-sm min-h-[80px] focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent"
+                style={{ whiteSpace: 'pre-wrap' }}
               />
               <input
                 type="text"
@@ -325,12 +422,102 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                             className="w-full bg-white border border-divider rounded-lg px-3 py-2 text-sm"
                             placeholder="Front"
                           />
-                          <textarea
-                            value={editingCard.back}
-                            onChange={(e) => setEditingCard((prev) => ({ ...prev, back: e.target.value }))}
-                            rows={4}
-                            className="w-full bg-white border border-divider rounded-lg px-3 py-2 text-sm"
-                            placeholder="Back"
+
+                          {/* Formatting Toolbar for Edit Card */}
+                          <div className="flex flex-wrap gap-1 p-2 bg-gray-50 rounded-lg border border-divider">
+                            <div className="text-xs text-secondary w-full mb-1">Format answer:</div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!editCardBackRef.current) return
+                                editCardBackRef.current.focus()
+                                document.execCommand('bold')
+                                setTimeout(() => setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML })), 10)
+                              }}
+                              className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs font-bold"
+                            >
+                              B
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!editCardBackRef.current) return
+                                editCardBackRef.current.focus()
+                                document.execCommand('italic')
+                                setTimeout(() => setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML })), 10)
+                              }}
+                              className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs italic"
+                            >
+                              I
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!editCardBackRef.current) return
+                                editCardBackRef.current.focus()
+                                document.execCommand('underline')
+                                setTimeout(() => setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML })), 10)
+                              }}
+                              className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs underline"
+                            >
+                              U
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!editCardBackRef.current) return
+                                editCardBackRef.current.focus()
+                                document.execCommand('insertUnorderedList')
+                                setTimeout(() => setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML })), 10)
+                              }}
+                              className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs"
+                              title="Bullet point"
+                            >
+                              •
+                            </button>
+                            <span className="border-l border-divider mx-1"></span>
+                            {essentialSymbols.map(({ symbol }) => (
+                              <button
+                                key={symbol}
+                                type="button"
+                                onClick={() => {
+                                  if (!editCardBackRef.current) return
+                                  editCardBackRef.current.focus()
+                                  document.execCommand('insertText', false, symbol)
+                                  setTimeout(() => setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML })), 10)
+                                }}
+                                className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs"
+                              >
+                                {symbol}
+                              </button>
+                            ))}
+                          </div>
+
+                          <div
+                            ref={(el) => {
+                              editCardBackRef.current = el
+                              if (el && el.innerHTML !== editingCard.back) {
+                                el.innerHTML = editingCard.back || ''
+                              }
+                            }}
+                            contentEditable
+                            suppressContentEditableWarning
+                            onInput={(e) => {
+                              setEditingCard(p => ({ ...p, back: e.currentTarget.innerHTML }))
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Tab') {
+                                e.preventDefault()
+                                if (e.shiftKey) {
+                                  document.execCommand('outdent')
+                                } else {
+                                  document.execCommand('indent')
+                                }
+                              }
+                            }}
+                            data-placeholder="Back"
+                            className="w-full bg-white border border-divider rounded-lg px-3 py-2 text-sm min-h-[100px] focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent"
+                            style={{ whiteSpace: 'pre-wrap' }}
                           />
                           <input
                             type="text"

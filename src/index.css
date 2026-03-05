@@ -18,6 +18,13 @@ body {
   outline: none;
 }
 
+/* ContentEditable placeholder */
+[contenteditable][data-placeholder]:empty:before {
+  content: attr(data-placeholder);
+  color: #94a3b8;
+  font-style: italic;
+}
+
 [contenteditable] ul {
   margin-left: 1.25rem;
   list-style-type: disc;

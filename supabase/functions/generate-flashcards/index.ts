@@ -137,15 +137,10 @@ serve(async (req) => {
       parsed = JSON.parse(`${candidate.slice(0, lastComplete + 1)}]`)
     }
 
-    const lectureTag = titleToTag(lecture_title || 'Lecture')
-    const modulePart = module_abbreviation ? `${module_abbreviation}_` : ''
-    const tags = `Day2 ${modulePart}${lectureTag}`.trim()
-
     const cards = parsed
       .map((card) => ({
         front: String(card?.front || card?.q || card?.question || '').trim(),
         back: String(card?.back || card?.a || card?.answer || '').trim(),
-        tags,
       }))
       .filter((card) => card.front && card.back)
       .slice(0, 50)
