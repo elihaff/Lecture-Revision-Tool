@@ -386,7 +386,8 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                 contentEditable
                 suppressContentEditableWarning
                 onInput={(e) => {
-                  setNewCard(p => ({ ...p, back: e.currentTarget.innerHTML }))
+                  const html = e.currentTarget.innerHTML
+                  setNewCard(p => ({ ...p, back: html }))
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Tab') {
@@ -581,7 +582,8 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                             contentEditable
                             suppressContentEditableWarning
                             onInput={(e) => {
-                              setEditingCard(p => ({ ...p, back: e.currentTarget.innerHTML }))
+                              const html = e.currentTarget.innerHTML
+                              setEditingCard(p => ({ ...p, back: html }))
                             }}
                             onKeyDown={(e) => {
                               if (e.key === 'Tab') {
