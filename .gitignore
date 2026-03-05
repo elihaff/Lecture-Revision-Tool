@@ -5,3 +5,4 @@
 .env*.local
 node_modules/
 test-screenshots/
+api-keys.md

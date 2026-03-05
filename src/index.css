@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: #F7F7F8;
+  color: #111111;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* ContentEditable list styling (Tailwind preflight removes default bullets) */
+[contenteditable] {
+  outline: none;
+}
+
+[contenteditable] ul {
+  margin-left: 1.25rem;
+  list-style-type: disc;
+}
+
+[contenteditable] ul ul {
+  margin-left: 1.25rem;
+  list-style-type: circle;
+}
+
+[contenteditable] ul ul ul {
+  list-style-type: square;
+}
+
+[contenteditable] li {
+  margin: 0.125rem 0;
+}
+
+/* Notes content styling */
+.notes-content strong {
+  font-weight: 600;
+  color: #1a1a2e;
+}
+
+.notes-content em {
+  font-style: italic;
+}
+
+.notes-content sup {
+  font-size: 0.75em;
+  vertical-align: super;
+}
+
+.notes-content sub {
+  font-size: 0.75em;
+  vertical-align: sub;
+}
+
+/* Nested bullet lists in notes */
+.notes-content ul {
+  margin-left: 1.25rem;
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+  list-style-type: disc;
+}
+
+.notes-content ul ul {
+  list-style-type: circle;
+}
+
+.notes-content ul ul ul {
+  list-style-type: square;
+}
+
+.notes-content li {
+  margin: 0.125rem 0;
+}
