@@ -886,47 +886,57 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                 <Layers className="w-4 h-4" />
                 Flashcards
               </div>
-              <p className={`text-lg font-medium ${flashcardsCount > 0 ? 'text-primary' : 'text-secondary'}`}>
-                {flashcardsCount > 0 ? `${flashcardsCount} cards` : 'No flashcards yet'}
+              <p className={`text-lg font-medium ${flashcardsCount > 0 ? 'text-success' : 'text-secondary'}`}>
+                {flashcardsCount > 0 ? 'Generated' : 'Not yet generated'}
               </p>
-              <div className="mt-4 flex gap-2">
-                <button
-                  onClick={handleGenerateFlashcards}
-                  disabled={!lecture.notes_generated || generatingFlashcards}
-                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg font-medium text-white text-sm transition-colors"
-                >
-                  {generatingFlashcards ? <Loader2 className="w-4 h-4 animate-spin" /> : <Layers className="w-4 h-4" />}
-                  {generatingFlashcards ? 'Generating...' : 'Generate'}
-                </button>
-                <button
-                  onClick={() => flashcardsCsvInputRef.current?.click()}
-                  disabled={importingFlashcards}
-                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg font-medium text-white text-sm transition-colors"
-                >
-                  {importingFlashcards ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                  {importingFlashcards ? 'Importing...' : 'Import CSV'}
-                </button>
-                <input
-                  ref={flashcardsCsvInputRef}
-                  type="file"
-                  accept=".csv,text/csv"
-                  onChange={handleImportFlashcardsCsv}
-                  className="hidden"
-                />
-              </div>
-              {flashcardsCount > 0 && (
-                <button
-                  onClick={() => setShowFlashcards(true)}
-                  className="mt-3 w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-accent hover:bg-blue-600 rounded-lg font-medium text-white text-sm transition-colors"
-                >
-                  <Eye className="w-4 h-4" />
-                  View Flashcards
-                </button>
-              )}
-              {!lecture.notes_generated && (
-                <p className="text-xs text-secondary mt-2">
-                  Generate requires notes first. CSV import works anytime.
+              {flashcardsCount > 0 && lecture.processed_at && (
+                <p className="text-sm text-secondary mt-1">
+                  Processed {formatDate(lecture.processed_at)}
                 </p>
+              )}
+              {flashcardsCount > 0 ? (
+                <div className="mt-4 space-y-3">
+                  <button
+                    onClick={() => setShowFlashcards(true)}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-accent hover:bg-blue-600 rounded-lg font-medium text-white text-sm transition-colors"
+                  >
+                    <Eye className="w-4 h-4" />
+                    View Flashcards
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="mt-4 flex gap-2">
+                    <button
+                      onClick={handleGenerateFlashcards}
+                      disabled={!lecture.notes_generated || generatingFlashcards}
+                      className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg font-medium text-white text-sm transition-colors"
+                    >
+                      {generatingFlashcards ? <Loader2 className="w-4 h-4 animate-spin" /> : <Layers className="w-4 h-4" />}
+                      {generatingFlashcards ? 'Generating...' : 'Generate'}
+                    </button>
+                    <button
+                      onClick={() => flashcardsCsvInputRef.current?.click()}
+                      disabled={importingFlashcards}
+                      className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg font-medium text-white text-sm transition-colors"
+                    >
+                      {importingFlashcards ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                      {importingFlashcards ? 'Importing...' : 'Import CSV'}
+                    </button>
+                    <input
+                      ref={flashcardsCsvInputRef}
+                      type="file"
+                      accept=".csv,text/csv"
+                      onChange={handleImportFlashcardsCsv}
+                      className="hidden"
+                    />
+                  </div>
+                  {!lecture.notes_generated && (
+                    <p className="text-xs text-secondary mt-2">
+                      Generate requires notes first. CSV import works anytime.
+                    </p>
+                  )}
+                </>
               )}
             </div>
 
