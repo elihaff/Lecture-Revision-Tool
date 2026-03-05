@@ -276,7 +276,11 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                     if (!newCardBackRef.current) return
                     newCardBackRef.current.focus()
                     document.execCommand('bold')
-                    setTimeout(() => setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML })), 10)
+                    setTimeout(() => {
+                      if (newCardBackRef.current) {
+                        setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML }))
+                      }
+                    }, 10)
                   }}
                   className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs font-bold"
                 >
@@ -288,7 +292,11 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                     if (!newCardBackRef.current) return
                     newCardBackRef.current.focus()
                     document.execCommand('italic')
-                    setTimeout(() => setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML })), 10)
+                    setTimeout(() => {
+                      if (newCardBackRef.current) {
+                        setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML }))
+                      }
+                    }, 10)
                   }}
                   className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs italic"
                 >
@@ -300,7 +308,11 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                     if (!newCardBackRef.current) return
                     newCardBackRef.current.focus()
                     document.execCommand('underline')
-                    setTimeout(() => setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML })), 10)
+                    setTimeout(() => {
+                      if (newCardBackRef.current) {
+                        setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML }))
+                      }
+                    }, 10)
                   }}
                   className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs underline"
                 >
@@ -312,7 +324,11 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                     if (!newCardBackRef.current) return
                     newCardBackRef.current.focus()
                     document.execCommand('insertUnorderedList')
-                    setTimeout(() => setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML })), 10)
+                    setTimeout(() => {
+                      if (newCardBackRef.current) {
+                        setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML }))
+                      }
+                    }, 10)
                   }}
                   className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs"
                   title="Bullet point"
@@ -328,7 +344,11 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                       if (!newCardBackRef.current) return
                       newCardBackRef.current.focus()
                       document.execCommand('insertText', false, symbol)
-                      setTimeout(() => setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML })), 10)
+                      setTimeout(() => {
+                      if (newCardBackRef.current) {
+                        setNewCard(p => ({ ...p, back: newCardBackRef.current.innerHTML }))
+                      }
+                    }, 10)
                     }}
                     className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs"
                   >
@@ -339,9 +359,28 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
 
               <div
                 ref={(el) => {
-                  newCardBackRef.current = el
-                  if (el && el.innerHTML !== newCard.back) {
-                    el.innerHTML = newCard.back || ''
+                  if (el) {
+                    newCardBackRef.current = el
+                    if (el.innerHTML !== newCard.back) {
+                      const selection = window.getSelection()
+                      const range = selection?.rangeCount > 0 ? selection.getRangeAt(0) : null
+                      const startOffset = range?.startOffset
+                      const startContainer = range?.startContainer
+
+                      el.innerHTML = newCard.back || ''
+
+                      // Restore cursor position after setting innerHTML
+                      if (range && startContainer && el.contains(startContainer)) {
+                        try {
+                          range.setStart(startContainer, Math.min(startOffset || 0, startContainer.textContent?.length || 0))
+                          range.collapse(true)
+                          selection.removeAllRanges()
+                          selection.addRange(range)
+                        } catch (e) {
+                          // Cursor positioning failed, ignore
+                        }
+                      }
+                    }
                   }
                 }}
                 contentEditable
@@ -432,7 +471,11 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                                 if (!editCardBackRef.current) return
                                 editCardBackRef.current.focus()
                                 document.execCommand('bold')
-                                setTimeout(() => setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML })), 10)
+                                setTimeout(() => {
+                                  if (editCardBackRef.current) {
+                                    setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML }))
+                                  }
+                                }, 10)
                               }}
                               className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs font-bold"
                             >
@@ -444,7 +487,11 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                                 if (!editCardBackRef.current) return
                                 editCardBackRef.current.focus()
                                 document.execCommand('italic')
-                                setTimeout(() => setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML })), 10)
+                                setTimeout(() => {
+                                  if (editCardBackRef.current) {
+                                    setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML }))
+                                  }
+                                }, 10)
                               }}
                               className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs italic"
                             >
@@ -456,7 +503,11 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                                 if (!editCardBackRef.current) return
                                 editCardBackRef.current.focus()
                                 document.execCommand('underline')
-                                setTimeout(() => setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML })), 10)
+                                setTimeout(() => {
+                                  if (editCardBackRef.current) {
+                                    setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML }))
+                                  }
+                                }, 10)
                               }}
                               className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs underline"
                             >
@@ -468,7 +519,11 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                                 if (!editCardBackRef.current) return
                                 editCardBackRef.current.focus()
                                 document.execCommand('insertUnorderedList')
-                                setTimeout(() => setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML })), 10)
+                                setTimeout(() => {
+                                  if (editCardBackRef.current) {
+                                    setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML }))
+                                  }
+                                }, 10)
                               }}
                               className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs"
                               title="Bullet point"
@@ -484,7 +539,11 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                                   if (!editCardBackRef.current) return
                                   editCardBackRef.current.focus()
                                   document.execCommand('insertText', false, symbol)
-                                  setTimeout(() => setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML })), 10)
+                                  setTimeout(() => {
+                                  if (editCardBackRef.current) {
+                                    setEditingCard(p => ({ ...p, back: editCardBackRef.current.innerHTML }))
+                                  }
+                                }, 10)
                                 }}
                                 className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs"
                               >
@@ -495,9 +554,28 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
 
                           <div
                             ref={(el) => {
-                              editCardBackRef.current = el
-                              if (el && el.innerHTML !== editingCard.back) {
-                                el.innerHTML = editingCard.back || ''
+                              if (el) {
+                                editCardBackRef.current = el
+                                if (el.innerHTML !== editingCard.back) {
+                                  const selection = window.getSelection()
+                                  const range = selection?.rangeCount > 0 ? selection.getRangeAt(0) : null
+                                  const startOffset = range?.startOffset
+                                  const startContainer = range?.startContainer
+
+                                  el.innerHTML = editingCard.back || ''
+
+                                  // Restore cursor position after setting innerHTML
+                                  if (range && startContainer && el.contains(startContainer)) {
+                                    try {
+                                      range.setStart(startContainer, Math.min(startOffset || 0, startContainer.textContent?.length || 0))
+                                      range.collapse(true)
+                                      selection.removeAllRanges()
+                                      selection.addRange(range)
+                                    } catch (e) {
+                                      // Cursor positioning failed, ignore
+                                    }
+                                  }
+                                }
                               }
                             }}
                             contentEditable
