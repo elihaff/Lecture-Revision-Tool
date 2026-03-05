@@ -4,7 +4,7 @@ import { Auth } from './components/Auth'
 import { Dashboard } from './components/Dashboard'
 
 function App() {
-  const { user, loading, signIn, signUp, signOut } = useAuth()
+  const { user, loading, signIn, signUp, signOut, resetPasswordRequest, updatePassword } = useAuth()
 
   // Show loading spinner while checking auth state
   if (loading) {
@@ -17,7 +17,14 @@ function App() {
 
   // Show auth screen if not logged in
   if (!user) {
-    return <Auth onSignIn={signIn} onSignUp={signUp} />
+    return (
+      <Auth
+        onSignIn={signIn}
+        onSignUp={signUp}
+        onResetPasswordRequest={resetPasswordRequest}
+        onUpdatePassword={updatePassword}
+      />
+    )
   }
 
   // Show dashboard if logged in
