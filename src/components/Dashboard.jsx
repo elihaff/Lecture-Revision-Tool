@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Plus, BookOpen, Loader2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { migrateAllFlashcards } from '../lib/flashcardService'
 import { ModuleCard } from './ModuleCard'
 import { CreateModuleModal } from './CreateModuleModal'
 import { EditModuleModal } from './EditModuleModal'
@@ -16,10 +17,32 @@ export function Dashboard({ user }) {
   const [draggedModule, setDraggedModule] = useState(null)
   const [dropIndex, setDropIndex] = useState(null)
   const dragCounter = useRef(0)
+  const migrationAttempted = useRef(false)
 
   // Fetch modules on mount
   useEffect(() => {
     fetchModules()
+  }, [])
+
+  // Auto-migrate flashcards from JSONB to table (runs once on mount)
+  useEffect(() => {
+    const runMigration = async () => {
+      if (migrationAttempted.current) return
+      migrationAttempted.current = true
+
+      console.log('Checking for flashcards to migrate...')
+      const { totalMigrated, lecturesMigrated, error } = await migrateAllFlashcards()
+
+      if (error) {
+        console.error('Flashcard migration error:', error)
+      } else if (totalMigrated > 0) {
+        console.log(`✅ Migrated ${totalMigrated} flashcards from ${lecturesMigrated} lectures`)
+      } else {
+        console.log('No flashcards to migrate')
+      }
+    }
+
+    runMigration()
   }, [])
 
   const fetchModules = async () => {
