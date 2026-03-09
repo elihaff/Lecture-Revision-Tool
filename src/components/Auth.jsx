@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { LogIn, UserPlus, Mail, Lock, AlertCircle } from 'lucide-react'
 
-export function Auth({ onSignIn, onSignUp, onResetPasswordRequest, onUpdatePassword }) {
+export function Auth({ onSignIn, onSignUp, onResetPasswordRequest, onUpdatePassword, onRecoveryComplete }) {
   const [isLogin, setIsLogin] = useState(true)
   const [isForgotPassword, setIsForgotPassword] = useState(false)
   const [isResettingPassword, setIsResettingPassword] = useState(false)
@@ -42,6 +42,9 @@ export function Auth({ onSignIn, onSignUp, onResetPasswordRequest, onUpdatePassw
         if (error) throw error
         setMessage('Password updated successfully! Redirecting...')
         setTimeout(() => {
+          if (onRecoveryComplete) {
+            onRecoveryComplete()
+          }
           window.location.hash = ''
           window.location.reload()
         }, 2000)

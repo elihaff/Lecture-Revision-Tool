@@ -90,8 +90,8 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
           height: initialCropArea.height * scale
         })
       } else {
-        // Initialize crop to full image
-        setCropArea({ x: 0, y: 0, width: displayWidth, height: displayHeight })
+        // New crop flow: user draws crop rectangle manually.
+        setCropArea(null)
       }
 
       // Restore initial annotations if provided, scaled to display size
@@ -139,13 +139,13 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
   // Redraw overlay canvas
   const redrawOverlay = useCallback(() => {
     const overlay = overlayCanvasRef.current
-    if (!overlay || !cropArea) return
+    if (!overlay) return
 
     const ctx = overlay.getContext('2d')
     ctx.clearRect(0, 0, overlay.width, overlay.height)
 
     // Draw semi-transparent overlay outside crop area (darker for better visibility)
-    if (currentTool === 'crop') {
+    if (currentTool === 'crop' && cropArea) {
       ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'
       // Top
       ctx.fillRect(0, 0, overlay.width, cropArea.y)
@@ -476,11 +476,8 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
     // For crop tool, ensure minimum size
     if (currentTool === 'crop' && dragMode === 'create' && cropArea) {
       if (cropArea.width < 20 || cropArea.height < 20) {
-        // Reset to full image if crop is too small
-        const canvas = canvasRef.current
-        if (canvas) {
-          setCropArea({ x: 0, y: 0, width: canvas.width, height: canvas.height })
-        }
+        // Ignore tiny drag gestures and require an intentional rectangle.
+        setCropArea(null)
       }
     }
 
@@ -545,10 +542,7 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
 
   const handleReset = () => {
     setAnnotations([])
-    const canvas = canvasRef.current
-    if (canvas) {
-      setCropArea({ x: 0, y: 0, width: canvas.width, height: canvas.height })
-    }
+    setCropArea(null)
   }
 
   // Delete annotation
@@ -874,6 +868,7 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
     onConfirm({
       dataUrl: finalDataUrl,
       pageNum: imageData.pageNum,
+      isUploaded: imageData.isUploaded,
       width: outputCanvas.width,
       height: outputCanvas.height,
       cropped: cropArea.width < canvasRef.current?.width || cropArea.height < canvasRef.current?.height,
@@ -1548,7 +1543,7 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
         {/* Footer */}
         <div className="px-6 py-3 border-t border-gray-200 flex justify-between items-center">
           <p className="text-sm text-gray-500">
-            {currentTool === 'crop' && 'Click and drag to draw crop rectangle'}
+            {currentTool === 'crop' && (cropArea ? 'Drag inside crop to move, corners to resize, or draw a new rectangle' : 'Click and drag to draw crop rectangle')}
             {currentTool === 'draw' && 'Click and drag to draw freehand'}
             {currentTool === 'circle' && 'Click center, drag to set radius'}
             {currentTool === 'arrow' && 'Click start, drag to end point'}
@@ -1563,7 +1558,7 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
             </button>
             <button
               onClick={handleConfirm}
-              disabled={!imageLoaded}
+              disabled={!imageLoaded || !cropArea}
               className="px-5 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 rounded-lg flex items-center gap-2"
             >
               <Check className="w-4 h-4" />

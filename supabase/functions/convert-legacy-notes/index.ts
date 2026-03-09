@@ -6,6 +6,77 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+function normalizePointLevels(rawLevels: unknown, pointsLength: number) {
+  const input = Array.isArray(rawLevels) ? rawLevels : []
+  const normalized = Array.from({ length: pointsLength }, (_, idx) => {
+    const raw = Number(input[idx] ?? 0)
+    if (!Number.isFinite(raw)) return 0
+    return Math.max(0, Math.floor(raw))
+  })
+
+  for (let i = 1; i < normalized.length; i++) {
+    normalized[i] = Math.min(normalized[i], normalized[i - 1] + 1)
+  }
+  return normalized
+}
+
+function inferPointLevels(points: string[]) {
+  const levels = Array(points.length).fill(0)
+  let activeParentIndex: number | null = null
+
+  const isHeaderLike = (text: string) => {
+    const clean = String(text || '').trim()
+    if (!clean) return false
+    if (clean.endsWith(':')) return true
+    const words = clean.split(/\s+/).filter(Boolean)
+    return words.length <= 5 && !/[.!?]$/.test(clean) && !clean.includes('→')
+  }
+
+  for (let i = 0; i < points.length; i++) {
+    const current = String(points[i] || '').trim()
+    if (!current) continue
+
+    if (isHeaderLike(current)) {
+      levels[i] = 0
+      activeParentIndex = i
+      continue
+    }
+
+    if (activeParentIndex !== null) {
+      const prev = String(points[i - 1] || '').trim()
+      const prevWasHeader = i - 1 === activeParentIndex || isHeaderLike(prev)
+      if (prevWasHeader || levels[i - 1] > 0) {
+        levels[i] = 1
+        continue
+      }
+    }
+
+    levels[i] = 0
+    activeParentIndex = null
+  }
+
+  return levels
+}
+
+function normalizeGeneratedSections(rawSections: unknown) {
+  const sections = Array.isArray(rawSections) ? rawSections : []
+  return sections.map((section: any, sectionIndex: number) => {
+    const points = Array.isArray(section?.points)
+      ? section.points.map((p: unknown) => String(p ?? '').trim()).filter((p: string) => p.length > 0)
+      : []
+    const suppliedLevels = normalizePointLevels(section?.pointLevels, points.length)
+    const inferredLevels = inferPointLevels(points)
+    const nonZeroSupplied = suppliedLevels.reduce((sum, lvl) => sum + (lvl > 0 ? 1 : 0), 0)
+    const nonZeroInferred = inferredLevels.reduce((sum, lvl) => sum + (lvl > 0 ? 1 : 0), 0)
+    const pointLevels = nonZeroSupplied >= nonZeroInferred ? suppliedLevels : inferredLevels
+    return {
+      section: String(section?.section || `${sectionIndex + 1}. Section`),
+      points,
+      pointLevels
+    }
+  })
+}
+
 const CONVERT_PROMPT = `You are converting an existing set of lecture notes from a PDF into a structured JSON format.
 
 The PDF contains medical lecture notes that were previously created. Your task is to:
@@ -22,9 +93,11 @@ IMPORTANT RULES:
 - If there are numbered sections (1., 2., etc.), keep that numbering
 
 Return ONLY valid JSON in this exact format:
-{"title": "Title from the notes", "learningObjectives": ["LO1", "LO2"], "notes": [{"section": "1. Section Title", "points": ["First bullet point", "Second bullet point"]}]}
+{"title": "Title from the notes", "learningObjectives": ["LO1", "LO2"], "notes": [{"section": "1. Section Title", "points": ["First bullet point", "Second bullet point", "Detail of second point"], "pointLevels": [0, 0, 1]}]}
 
 Do NOT include bullet point characters at the start of points - just the text content.
+Use pointLevels to encode nesting (0=main bullet, 1=sub-bullet, 2=sub-sub-bullet).
+pointLevels length MUST match points length.
 If no learning objectives are found, return an empty array for learningObjectives.`
 
 serve(async (req) => {
@@ -133,7 +206,7 @@ serve(async (req) => {
         data: {
           title: parsedResult.title || 'Converted Notes',
           learning_objectives: learningObjectives,
-          notes: parsedResult.notes || []
+          notes: normalizeGeneratedSections(parsedResult.notes)
         }
       }),
       {

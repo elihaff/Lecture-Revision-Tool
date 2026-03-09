@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { X, Search, ChevronLeft, ChevronRight, Image, FileImage } from 'lucide-react'
+import { X, Search, ChevronLeft, ChevronRight, Image, FileImage, Link } from 'lucide-react'
 
 export function ImagePickerModal({
   isOpen,
@@ -9,27 +9,68 @@ export function ImagePickerModal({
   existingImages,
   onSelectSlide,
   onSelectExisting,
-  currentKey
+  currentKey,
+  notes,
+  getSectionImage,
+  getPointImage,
+  getPointImageKey
 }) {
   const [activeTab, setActiveTab] = useState('slides')
+  const [slidesSelectionMode, setSlidesSelectionMode] = useState('slides') // 'slides' | 'link-existing'
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [previewSize, setPreviewSize] = useState('large')
 
-  // Filter thumbnails by search query
-  const filteredThumbnails = thumbnails.filter(thumb => {
+  // Filter slide thumbnails by search query (exclude uploaded images)
+  const slideThumbnails = thumbnails.filter(thumb => !thumb.id?.startsWith('uploaded-'))
+  const filteredThumbnails = slideThumbnails.filter(thumb => {
     if (!searchQuery.trim()) return true
-    return thumb.text.includes(searchQuery.toLowerCase())
+    return thumb.text?.includes(searchQuery.toLowerCase())
   })
 
-  // Get existing images as array (excluding current point)
-  const existingImageEntries = Object.entries(existingImages || {}).filter(
-    ([key]) => key !== currentKey
-  )
+  // Get uploaded images only
+  const uploadedImages = thumbnails.filter(thumb => thumb.id?.startsWith('uploaded-'))
+
+  const availableExistingImages = (() => {
+    const allImages = []
+    let figNum = 1
+    const sections = notes?.notes || []
+
+    sections.forEach((section, sIdx) => {
+      const sectionImg = getSectionImage ? getSectionImage(sIdx) : null
+      if (sectionImg) {
+        allImages.push({
+          key: `section-${sIdx}`,
+          image: sectionImg,
+          figNum: figNum++,
+          label: String(section.section || 'Section'),
+          type: 'section'
+        })
+      }
+
+      const points = section.points || []
+      points.forEach((point, pIdx) => {
+        const pointImg = getPointImage ? getPointImage(sIdx, pIdx) : null
+        if (pointImg) {
+          allImages.push({
+            key: getPointImageKey ? getPointImageKey(sIdx, pIdx) : `${sIdx}-${pIdx}`,
+            image: pointImg,
+            figNum: figNum++,
+            label: String(point || '').replace(/<[^>]+>/g, ' ').trim(),
+            type: 'point'
+          })
+        }
+      })
+    })
+
+    return allImages.filter((img) => img.key !== currentKey)
+  })()
 
   // Reset selection when modal opens or thumbnails change
   useEffect(() => {
     if (isOpen) {
+      setActiveTab('slides')
+      setSlidesSelectionMode('slides')
       setSelectedIndex(0)
       setSearchQuery('')
     }
@@ -39,7 +80,9 @@ export function ImagePickerModal({
   const handleKeyDown = useCallback((e) => {
     if (!isOpen) return
 
-    const items = activeTab === 'slides' ? filteredThumbnails : existingImageEntries
+    const items = activeTab === 'slides'
+      ? (slidesSelectionMode === 'slides' ? filteredThumbnails : availableExistingImages)
+      : uploadedImages
     if (items.length === 0) return
 
     switch (e.key) {
@@ -61,10 +104,17 @@ export function ImagePickerModal({
         break
       case 'Enter':
         e.preventDefault()
-        if (activeTab === 'slides') {
+        if (activeTab === 'slides' && slidesSelectionMode === 'slides') {
           onSelectSlide(filteredThumbnails[selectedIndex].pageNum)
+        } else if (activeTab === 'slides' && slidesSelectionMode === 'link-existing') {
+          if (onSelectExisting) {
+            onSelectExisting(availableExistingImages[selectedIndex].key)
+          }
         } else {
-          onSelectExisting(existingImageEntries[selectedIndex][0])
+          // For uploaded images, call onSelectSlide with the uploaded image index in original thumbnails array
+          const uploadedImg = uploadedImages[selectedIndex]
+          const originalIndex = thumbnails.findIndex(t => t.id === uploadedImg.id)
+          onSelectSlide(originalIndex + 1) // pageNum is 1-indexed
         }
         break
       case 'Escape':
@@ -72,7 +122,7 @@ export function ImagePickerModal({
         onClose()
         break
     }
-  }, [isOpen, activeTab, filteredThumbnails, existingImageEntries, selectedIndex, onSelectSlide, onSelectExisting, onClose])
+  }, [isOpen, activeTab, slidesSelectionMode, filteredThumbnails, availableExistingImages, uploadedImages, selectedIndex, onSelectSlide, onSelectExisting, thumbnails, onClose])
 
   useEffect(() => {
     document.addEventListener('keydown', handleKeyDown)
@@ -81,17 +131,19 @@ export function ImagePickerModal({
 
   // Ensure selectedIndex is valid when filter changes
   useEffect(() => {
-    const items = activeTab === 'slides' ? filteredThumbnails : existingImageEntries
+    const items = activeTab === 'slides'
+      ? (slidesSelectionMode === 'slides' ? filteredThumbnails : availableExistingImages)
+      : uploadedImages
     if (selectedIndex >= items.length) {
       setSelectedIndex(Math.max(0, items.length - 1))
     }
-  }, [filteredThumbnails, existingImageEntries, activeTab, selectedIndex])
+  }, [filteredThumbnails, availableExistingImages, uploadedImages, activeTab, slidesSelectionMode, selectedIndex])
 
   if (!isOpen) return null
 
   const selectedItem = activeTab === 'slides'
-    ? filteredThumbnails[selectedIndex]
-    : existingImageEntries[selectedIndex]
+    ? (slidesSelectionMode === 'slides' ? filteredThumbnails[selectedIndex] : null)
+    : uploadedImages[selectedIndex]
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -110,7 +162,7 @@ export function ImagePickerModal({
         {/* Tabs */}
         <div className="flex border-b border-gray-200">
           <button
-            onClick={() => { setActiveTab('slides'); setSelectedIndex(0) }}
+            onClick={() => { setActiveTab('slides'); setSlidesSelectionMode('slides'); setSelectedIndex(0) }}
             className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
               activeTab === 'slides'
                 ? 'text-indigo-600 border-b-2 border-indigo-600'
@@ -118,46 +170,130 @@ export function ImagePickerModal({
             }`}
           >
             <FileImage className="w-4 h-4 inline mr-2" />
-            From Slides ({thumbnails.length})
+            From Slides ({slideThumbnails.length})
           </button>
           <button
-            onClick={() => { setActiveTab('notes'); setSelectedIndex(0) }}
+            onClick={() => { setActiveTab('uploaded'); setSelectedIndex(0) }}
             className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
-              activeTab === 'notes'
+              activeTab === 'uploaded'
                 ? 'text-indigo-600 border-b-2 border-indigo-600'
                 : 'text-gray-500 hover:text-gray-700'
             }`}
           >
             <Image className="w-4 h-4 inline mr-2" />
-            From Notes ({existingImageEntries.length})
+            Uploaded Images ({uploadedImages.length})
           </button>
         </div>
 
-        {/* Search (only for slides) */}
+        {/* Slides mode controls */}
         {activeTab === 'slides' && (
           <div className="px-6 py-3 border-b border-gray-100">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search slides by text content..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-              />
+            <div className="flex items-center gap-2 mb-3">
+              <button
+                onClick={() => {
+                  setSlidesSelectionMode('slides')
+                  setSelectedIndex(0)
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  slidesSelectionMode === 'slides'
+                    ? 'bg-indigo-100 text-indigo-700'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                <FileImage className="w-3.5 h-3.5 inline mr-1" />
+                Pick from slides
+              </button>
+              <button
+                onClick={() => {
+                  setSlidesSelectionMode('link-existing')
+                  setSelectedIndex(0)
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  slidesSelectionMode === 'link-existing'
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                <Link className="w-3.5 h-3.5 inline mr-1" />
+                Link already inserted image
+              </button>
             </div>
+
+            {slidesSelectionMode === 'slides' && (
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search slides by text content..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                />
+              </div>
+            )}
           </div>
         )}
 
         {/* Content */}
         <div className="flex-1 overflow-hidden flex">
           {/* Thumbnail grid */}
-          <div className="w-1/2 overflow-y-auto p-4 border-r border-gray-100">
-            {thumbnailsLoading && activeTab === 'slides' ? (
+          <div className={(activeTab === 'slides' && slidesSelectionMode === 'link-existing') ? 'w-full overflow-y-auto p-4' : 'w-1/2 overflow-y-auto p-4 border-r border-gray-100'}>
+            {thumbnailsLoading && activeTab === 'slides' && slidesSelectionMode === 'slides' ? (
               <div className="flex items-center justify-center h-full">
                 <div className="text-center">
                   <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
                   <p className="text-sm text-gray-500">Loading slides...</p>
+                </div>
+              </div>
+            ) : activeTab === 'slides' && slidesSelectionMode === 'link-existing' ? (
+              <div>
+                <p className="text-sm text-gray-600 mb-4">
+                  Select an image that's already inserted in your notes to reference it at this bullet point.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {availableExistingImages.length === 0 ? (
+                    <div className="col-span-full text-center py-8 text-gray-500">
+                      No images available to link. Insert images into other bullet points first.
+                    </div>
+                  ) : (
+                    availableExistingImages.map((item) => (
+                      <button
+                        key={item.key}
+                        onClick={() => {
+                          if (onSelectExisting) {
+                            onSelectExisting(item.key)
+                          }
+                        }}
+                        className="border-2 border-gray-200 rounded-lg p-4 hover:border-green-500 hover:bg-green-50 transition-all text-left group"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="flex-shrink-0">
+                            <img
+                              src={item.image.dataUrl}
+                              alt={`Fig ${item.figNum}`}
+                              className="w-24 h-24 object-contain border border-gray-200 rounded"
+                            />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-green-600 mb-1">
+                              Fig {item.figNum}
+                              {item.image.isUploaded ? (
+                                <span className="text-gray-500 ml-1 text-xs">(Uploaded)</span>
+                              ) : item.image.pageNum && (
+                                <span className="text-gray-500 ml-1 text-xs">(Slide {item.image.pageNum})</span>
+                              )}
+                            </div>
+                            <div className="text-sm text-gray-700 line-clamp-2">
+                              {item.label}
+                            </div>
+                            <div className="mt-2 text-xs text-gray-500">
+                              {item.type === 'section' ? 'Section heading' : 'Bullet point'}
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
             ) : activeTab === 'slides' ? (
@@ -191,11 +327,14 @@ export function ImagePickerModal({
               </div>
             ) : (
               <div className="grid grid-cols-3 gap-2">
-                {existingImageEntries.map(([key, imageData], index) => (
+                {uploadedImages.map((thumb, index) => (
                   <button
-                    key={key}
+                    key={thumb.id}
                     onClick={() => setSelectedIndex(index)}
-                    onDoubleClick={() => onSelectExisting(key)}
+                    onDoubleClick={() => {
+                      const originalIndex = thumbnails.findIndex(t => t.id === thumb.id)
+                      onSelectSlide(originalIndex + 1)
+                    }}
                     className={`relative aspect-[4/3] bg-gray-100 rounded-lg overflow-hidden border-2 transition-all ${
                       selectedIndex === index
                         ? 'border-indigo-600 ring-2 ring-indigo-200'
@@ -203,30 +342,31 @@ export function ImagePickerModal({
                     }`}
                   >
                     <img
-                      src={imageData.dataUrl}
-                      alt={`Image from ${key}`}
+                      src={thumb.dataUrl}
+                      alt={`Uploaded image ${index + 1}`}
                       className="w-full h-full object-contain"
                     />
                     <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
-                      {key}
+                      {index + 1}
                     </span>
                   </button>
                 ))}
-                {existingImageEntries.length === 0 && (
+                {uploadedImages.length === 0 && (
                   <div className="col-span-3 text-center py-8 text-gray-500">
-                    No images have been added to notes yet
+                    No images uploaded yet. Use "Add Images" to upload images from your device.
                   </div>
                 )}
               </div>
             )}
           </div>
 
-          {/* Preview pane */}
+          {/* Preview pane (hidden when linking existing image) */}
+          {!(activeTab === 'slides' && slidesSelectionMode === 'link-existing') && (
           <div className="w-1/2 p-4 flex flex-col">
             <div className="flex-1 bg-gray-50 rounded-lg flex items-center justify-center overflow-hidden">
               {selectedItem ? (
                 <img
-                  src={activeTab === 'slides' ? selectedItem.dataUrl : selectedItem[1].dataUrl}
+                  src={selectedItem.dataUrl}
                   alt="Preview"
                   className="max-w-full max-h-full object-contain"
                 />
@@ -237,22 +377,23 @@ export function ImagePickerModal({
                 </div>
               )}
             </div>
-
             {/* Preview info */}
             {selectedItem && (
               <div className="mt-3 text-center">
                 <p className="text-sm text-gray-600">
                   {activeTab === 'slides'
-                    ? `Slide ${selectedItem.pageNum} of ${thumbnails.length}`
-                    : `Point ${selectedItem[0]}`
+                    ? `Slide ${selectedItem.pageNum} of ${slideThumbnails.length}`
+                    : `Image ${selectedIndex + 1} of ${uploadedImages.length}`
                   }
                 </p>
               </div>
             )}
           </div>
+          )}
         </div>
 
         {/* Footer */}
+        {!(activeTab === 'slides' && slidesSelectionMode === 'link-existing') && (
         <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <span className="text-xs text-gray-500">
@@ -268,19 +409,22 @@ export function ImagePickerModal({
             </button>
             <button
               onClick={() => {
-                if (activeTab === 'slides' && filteredThumbnails[selectedIndex]) {
+                if (activeTab === 'slides' && slidesSelectionMode === 'slides' && filteredThumbnails[selectedIndex]) {
                   onSelectSlide(filteredThumbnails[selectedIndex].pageNum)
-                } else if (activeTab === 'notes' && existingImageEntries[selectedIndex]) {
-                  onSelectExisting(existingImageEntries[selectedIndex][0])
+                } else if (activeTab === 'uploaded' && uploadedImages[selectedIndex]) {
+                  const uploadedImg = uploadedImages[selectedIndex]
+                  const originalIndex = thumbnails.findIndex(t => t.id === uploadedImg.id)
+                  onSelectSlide(originalIndex + 1)
                 }
               }}
               disabled={!selectedItem}
               className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg transition-colors"
             >
-              {activeTab === 'slides' ? 'Select & Crop' : 'Use This Image'}
+              Select & Crop
             </button>
           </div>
         </div>
+        )}
       </div>
     </div>
   )

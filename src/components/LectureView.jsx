@@ -6,12 +6,16 @@ import { generateAndSaveNotes } from '../lib/notesGenerator'
 import { generateFlashcardsFromNotes } from '../lib/flashcardsGenerator'
 import { NotesView } from './NotesView'
 import { FlashcardsView } from './FlashcardsView'
+import { LearnModeView } from './LearnModeView'
+import { FlashcardReviewView } from './FlashcardReviewView'
 
 export function LectureView({ lecture: initialLecture, module, user, onBack }) {
   const [lecture, setLecture] = useState(initialLecture)
   const [loading, setLoading] = useState(true)
   const [showNotes, setShowNotes] = useState(false)
   const [showFlashcards, setShowFlashcards] = useState(false)
+  const [showLearnMode, setShowLearnMode] = useState(false)
+  const [showFlashcardReview, setShowFlashcardReview] = useState(false)
   const [uploadState, setUploadState] = useState('idle') // idle, uploading, processing, complete, error
   const [uploadError, setUploadError] = useState(null)
   const [progressMessage, setProgressMessage] = useState('')
@@ -426,19 +430,12 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
         firstCells[1]?.includes('answer')
       const startIndex = hasHeader ? 1 : 0
 
-      const sourceTitle = (lecture.title || 'Lecture')
-        .split(/[\s_\-.]+/)
-        .filter(Boolean)
-        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-        .join('')
-      const defaultTags = `Day2 ${module?.abbreviation ? `${module.abbreviation}_` : ''}${sourceTitle}`.trim()
-
       const imported = []
       for (let i = startIndex; i < lines.length; i++) {
         const cells = parseCsvLine(lines[i])
         const front = String(cells[0] || '').trim()
         const back = String(cells[1] || '').trim()
-        const tags = String(cells[2] || defaultTags).trim()
+        const tags = String(cells[2] || '').trim()
         if (!front || !back) continue
         imported.push({ front, back, tags })
       }
@@ -456,6 +453,23 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
       setImportingFlashcards(false)
       e.target.value = ''
     }
+  }
+
+  // Show LearnModeView if learning
+  if (showLearnMode) {
+    return (
+      <LearnModeView
+        lecture={lecture}
+        module={module}
+        onBack={async () => {
+          setShowLearnMode(false)
+          await fetchLectureData()
+        }}
+        onComplete={async () => {
+          await fetchLectureData()
+        }}
+      />
+    )
   }
 
   // Show NotesView if notes are being viewed
@@ -483,6 +497,16 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
         module={module}
         onBack={() => setShowFlashcards(false)}
         onSaved={fetchLectureData}
+      />
+    )
+  }
+
+  if (showFlashcardReview) {
+    return (
+      <FlashcardReviewView
+        lecture={lecture}
+        module={module}
+        onBack={() => setShowFlashcardReview(false)}
       />
     )
   }
@@ -880,6 +904,74 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
 
           {/* Bottom Row: Metadata Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Notes Status Card */}
+            <div className="bg-surface rounded-xl border border-divider p-6">
+              <div className="flex items-center gap-2 text-secondary text-sm font-medium mb-2">
+                <FileText className="w-4 h-4" />
+                Notes
+              </div>
+              <p className={`text-lg font-medium ${lecture.notes_generated ? 'text-success' : 'text-secondary'}`}>
+                {lecture.notes_generated ? 'Generated' : 'Not yet generated'}
+              </p>
+              {lecture.processed_at && (
+                <p className="text-sm text-secondary mt-1">
+                  Processed {formatDate(lecture.processed_at)}
+                </p>
+              )}
+              {lecture.notes_generated && (
+                <div className="mt-4 space-y-2">
+                  <button
+                    onClick={() => setShowLearnMode(true)}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-medium text-white text-sm transition-colors"
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    Start Learning
+                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setShowNotes(true)}
+                      className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-accent hover:bg-blue-600 rounded-lg font-medium text-white text-sm transition-colors"
+                    >
+                      <Eye className="w-4 h-4" />
+                      View Notes
+                    </button>
+                    <button
+                      onClick={() => setShowResetConfirm(true)}
+                      className="inline-flex items-center justify-center gap-2 px-3 py-2 bg-gray-100 hover:bg-red-50 hover:text-red-600 rounded-lg text-secondary text-sm transition-colors"
+                      title="Remove notes and start fresh"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Reset Confirmation */}
+                  {showResetConfirm && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                      <p className="text-sm text-red-800 mb-3">
+                        Remove all notes and learning objectives for this lecture?
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleResetNotes}
+                          disabled={resetting}
+                          className="flex-1 px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white text-sm font-medium rounded-lg transition-colors"
+                        >
+                          {resetting ? 'Removing...' : 'Yes, Remove'}
+                        </button>
+                        <button
+                          onClick={() => setShowResetConfirm(false)}
+                          disabled={resetting}
+                          className="flex-1 px-3 py-1.5 bg-white border border-gray-300 hover:bg-gray-50 text-primary text-sm font-medium rounded-lg transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* Flashcards Card */}
             <div className="bg-surface rounded-xl border border-divider p-6">
               <div className="flex items-center gap-2 text-secondary text-sm font-medium mb-2">
@@ -895,14 +987,21 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                 </p>
               )}
               {flashcardsCount > 0 ? (
-                <div className="mt-4 space-y-3">
+                <div className="mt-4 space-y-2">
+                  <button
+                    onClick={() => setShowFlashcardReview(true)}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg font-medium text-white text-sm transition-colors"
+                  >
+                    <Layers className="w-4 h-4" />
+                    Start Review
+                  </button>
                   <div className="flex gap-2">
                     <button
                       onClick={() => setShowFlashcards(true)}
                       className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-accent hover:bg-blue-600 rounded-lg font-medium text-white text-sm transition-colors"
                     >
                       <Eye className="w-4 h-4" />
-                      View Flashcards
+                      View/Edit
                     </button>
                     <button
                       onClick={async () => {
@@ -960,67 +1059,6 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                     </p>
                   )}
                 </>
-              )}
-            </div>
-
-            {/* Notes Status Card */}
-            <div className="bg-surface rounded-xl border border-divider p-6">
-              <div className="flex items-center gap-2 text-secondary text-sm font-medium mb-2">
-                <FileText className="w-4 h-4" />
-                Notes
-              </div>
-              <p className={`text-lg font-medium ${lecture.notes_generated ? 'text-success' : 'text-secondary'}`}>
-                {lecture.notes_generated ? 'Generated' : 'Not yet generated'}
-              </p>
-              {lecture.processed_at && (
-                <p className="text-sm text-secondary mt-1">
-                  Processed {formatDate(lecture.processed_at)}
-                </p>
-              )}
-              {lecture.notes_generated && (
-                <div className="mt-4 space-y-3">
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setShowNotes(true)}
-                      className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-accent hover:bg-blue-600 rounded-lg font-medium text-white text-sm transition-colors"
-                    >
-                      <Eye className="w-4 h-4" />
-                      View Notes
-                    </button>
-                    <button
-                      onClick={() => setShowResetConfirm(true)}
-                      className="inline-flex items-center justify-center gap-2 px-3 py-2 bg-gray-100 hover:bg-red-50 hover:text-red-600 rounded-lg text-secondary text-sm transition-colors"
-                      title="Remove notes and start fresh"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  {/* Reset Confirmation */}
-                  {showResetConfirm && (
-                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                      <p className="text-sm text-red-800 mb-3">
-                        Remove all notes and learning objectives for this lecture?
-                      </p>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={handleResetNotes}
-                          disabled={resetting}
-                          className="flex-1 px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white text-sm font-medium rounded-lg transition-colors"
-                        >
-                          {resetting ? 'Removing...' : 'Yes, Remove'}
-                        </button>
-                        <button
-                          onClick={() => setShowResetConfirm(false)}
-                          disabled={resetting}
-                          className="flex-1 px-3 py-1.5 bg-white border border-gray-300 hover:bg-gray-50 text-primary text-sm font-medium rounded-lg transition-colors"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
               )}
             </div>
           </div>

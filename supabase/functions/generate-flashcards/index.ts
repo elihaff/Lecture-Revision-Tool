@@ -141,6 +141,7 @@ serve(async (req) => {
       .map((card) => ({
         front: String(card?.front || card?.q || card?.question || '').trim(),
         back: String(card?.back || card?.a || card?.answer || '').trim(),
+        tags: '',
       }))
       .filter((card) => card.front && card.back)
       .slice(0, 50)

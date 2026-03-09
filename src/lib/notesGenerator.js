@@ -15,6 +15,38 @@ async function fileToBase64(file) {
   })
 }
 
+async function callNotesFunction({
+  supabaseUrl,
+  accessToken,
+  anonKey,
+  body
+}) {
+  // Note: The generate-notes function is deployed with slug 'swift-api'
+  const endpoint = 'swift-api'
+
+  const response = await fetch(`${supabaseUrl}/functions/v1/${endpoint}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`,
+      'apikey': anonKey,
+    },
+    body: JSON.stringify(body),
+  })
+
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const message = result?.error || `HTTP ${response.status}`
+    throw new Error(`Notes generation failed: ${message}`)
+  }
+
+  if (!result.success) {
+    throw new Error(`Notes generation failed: ${result.error || 'Unknown error'}`)
+  }
+
+  return result
+}
+
 /**
  * Generate notes from a PDF file using the Edge Function (no API key needed)
  * @param {File} pdfFile - The PDF file to process
@@ -45,26 +77,15 @@ export async function generateNotesFromPdf(pdfFile, userLearningObjectives = '',
 
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
     const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
-    const functionUrl = `${supabaseUrl}/functions/v1/swift-api`
-
-    const response = await fetch(functionUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${accessToken}`,
-        'apikey': anonKey,
-      },
-      body: JSON.stringify({
+    const result = await callNotesFunction({
+      supabaseUrl,
+      accessToken,
+      anonKey,
+      body: {
         pdf_base64: base64Data,
         user_learning_objectives: userLearningObjectives,
-      }),
+      }
     })
-
-    const result = await response.json()
-
-    if (!result.success) {
-      throw new Error(result.error || 'Failed to generate notes')
-    }
 
     if (onProgress) onProgress({ stage: 'complete', message: 'Notes generated!' })
 
@@ -112,27 +133,16 @@ export async function generateAndSaveNotes(pdfFile, lectureId, userLearningObjec
 
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
     const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
-    const functionUrl = `${supabaseUrl}/functions/v1/swift-api`
-
-    const response = await fetch(functionUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${accessToken}`,
-        'apikey': anonKey,
-      },
-      body: JSON.stringify({
+    await callNotesFunction({
+      supabaseUrl,
+      accessToken,
+      anonKey,
+      body: {
         pdf_base64: base64Data,
         lecture_id: lectureId,
         user_learning_objectives: userLearningObjectives,
-      }),
+      }
     })
-
-    const result = await response.json()
-
-    if (!result.success) {
-      throw new Error(result.error || 'Failed to generate notes')
-    }
 
     if (onProgress) onProgress({ stage: 'complete', message: 'Notes saved!' })
 

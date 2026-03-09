@@ -46,3 +46,6 @@ enable_confirmations = false
 
 [functions.generate-flashcards]
 verify_jwt = true
+
+[functions.generate-interpretation]
+verify_jwt = true

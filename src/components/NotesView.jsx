@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { ArrowLeft, BookOpen, CheckCircle2, Circle, Copy, Check, FileText, Trash2, GripVertical, Edit2, Plus, Save, X, Upload, Loader2, Download, FileUp, Image } from 'lucide-react'
+import { ArrowLeft, BookOpen, CheckCircle2, Circle, Copy, Check, FileText, Trash2, GripVertical, Edit2, Plus, Save, X, Upload, Loader2, Download, FileUp, Image, ChevronLeft, ChevronRight, SlidersHorizontal, IndentDecrease, IndentIncrease } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { resetLectureNotes } from '../lib/lectureService'
 import * as pdfjsLib from 'pdfjs-dist'
@@ -225,6 +225,79 @@ function markdownToHTML(text) {
     .replace(/~([^~]+)~/g, '<sub>$1</sub>')
 }
 
+function clampPointLevels(levels, pointsLength) {
+  const normalized = Array.from({ length: pointsLength }, (_, idx) => {
+    const raw = Number(levels?.[idx] ?? 0)
+    return Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0
+  })
+  for (let i = 1; i < normalized.length; i++) {
+    normalized[i] = Math.min(normalized[i], normalized[i - 1] + 1)
+  }
+  return normalized
+}
+
+function inferFallbackPointLevels(points) {
+  const levels = Array(points.length).fill(0)
+  let activeParentIndex = null
+
+  const isHeaderLike = (text) => {
+    const clean = String(text || '').trim()
+    if (!clean) return false
+    if (clean.endsWith(':')) return true
+    const words = clean.split(/\s+/).filter(Boolean)
+    return words.length <= 6 && !/[.!?]$/.test(clean) && !clean.includes('→')
+  }
+
+  for (let i = 0; i < points.length; i++) {
+    const current = String(points[i] || '').trim()
+    if (!current) continue
+
+    if (isHeaderLike(current)) {
+      levels[i] = 0
+      activeParentIndex = i
+      continue
+    }
+
+    if (activeParentIndex !== null) {
+      const prev = String(points[i - 1] || '').trim()
+      const prevWasHeader = i - 1 === activeParentIndex || isHeaderLike(prev)
+      if (prevWasHeader || levels[i - 1] > 0) {
+        levels[i] = 1
+        continue
+      }
+    }
+
+    levels[i] = 0
+    activeParentIndex = null
+  }
+
+  return levels
+}
+
+function normalizeNotesForDisplay(incomingNotes, fallbackTitle = 'Untitled') {
+  const safeNotes = incomingNotes || { title: fallbackTitle, notes: [] }
+  return {
+    ...safeNotes,
+    notes: (safeNotes.notes || []).map((section) => {
+      const points = Array.isArray(section?.points) ? section.points : []
+      const supplied = clampPointLevels(section?.pointLevels, points.length)
+
+      // Trust backend pointLevels if any exist
+      // Only use heuristic inference as last resort for legacy data with no nesting at all
+      const hasAnySuppliedNesting = supplied.some((lvl) => lvl > 0)
+      const pointLevels = hasAnySuppliedNesting
+        ? supplied
+        : clampPointLevels(inferFallbackPointLevels(points), points.length)
+
+      return {
+        ...section,
+        points,
+        pointLevels
+      }
+    })
+  }
+}
+
 // Copy notes to clipboard as formatted text
 function notesToClipboardText(notes, learningObjectives) {
   if (!notes) return ''
@@ -245,12 +318,174 @@ function notesToClipboardText(notes, learningObjectives) {
       text += `${section.section}\n${'-'.repeat(section.section.length)}\n`
       section.points?.forEach(point => {
         const cleanPoint = point.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ')
-        text += `${cleanPoint.trimStart().startsWith('•') ? cleanPoint : `• ${cleanPoint}`}\n`
+        text += `• ${cleanPoint}\n`
       })
       text += '\n'
     })
   }
   return text
+}
+
+function buildPointHtmlWithFigureRef(point, figNum = null, level = 0) {
+  const bulletPrefix = level > 0 ? '-' : '•'
+  const base = /<(ul|ol|li)\b/i.test(point || '') || String(point || '').trimStart().startsWith('•') || String(point || '').trimStart().startsWith('-')
+    ? markdownToHTML(point)
+    : `${bulletPrefix} ${markdownToHTML(point)}`
+
+  if (!figNum) return base
+  return `${base}<span class="text-indigo-500 text-xs font-medium"> (Fig ${figNum})</span>`
+}
+
+const IMAGE_LAYOUT_DEFAULT = 'm'
+const IMAGE_LAYOUT_SCALES = { s: 0.85, m: 1, l: 1.2 }
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value))
+}
+
+function getImageAspectRatio(image) {
+  const w = Number(image?.width) || 1
+  const h = Number(image?.height) || 1
+  return w / Math.max(h, 1)
+}
+
+function normalizeSectionLayoutForFigures(figures, sectionLayout) {
+  const safeLayout = sectionLayout || {}
+  const figureKeys = new Set(figures.map((f) => f.key))
+
+  const ordered = []
+  ;(safeLayout.order || []).forEach((key) => {
+    if (figureKeys.has(key)) ordered.push(key)
+  })
+  figures.forEach((fig) => {
+    if (!ordered.includes(fig.key)) ordered.push(fig.key)
+  })
+
+  const sizes = {}
+  Object.entries(safeLayout.sizes || {}).forEach(([key, value]) => {
+    if (figureKeys.has(key) && IMAGE_LAYOUT_SCALES[value]) sizes[key] = value
+  })
+
+  const solo = {}
+  Object.entries(safeLayout.solo || {}).forEach(([key, value]) => {
+    if (figureKeys.has(key) && !!value) solo[key] = true
+  })
+
+  return { order: ordered, sizes, solo }
+}
+
+function computeFigureRows(figures, sectionLayout, options = {}) {
+  const {
+    maxRowWidth = 500,
+    columnGap = 12,
+    maxItemsPerRow = 4,
+    minRowHeight = 90,
+    maxRowHeight = 205,
+    targetRowHeight = 128,
+    singletonMinHeight = 120,
+    singletonMaxHeight = 175,
+    singletonTargetHeight = 145,
+    autoSoloAspect = 3.8
+  } = options
+
+  const normalizedLayout = normalizeSectionLayoutForFigures(figures, sectionLayout)
+  const byKey = new Map(figures.map((f) => [f.key, f]))
+  const orderedFigures = normalizedLayout.order.map((key) => byKey.get(key)).filter(Boolean)
+  const rows = []
+
+  const isForcedSolo = (fig) => {
+    if (normalizedLayout.solo?.[fig.key]) return true
+    return getImageAspectRatio(fig.image) >= autoSoloAspect
+  }
+
+  for (let i = 0; i < orderedFigures.length;) {
+    const first = orderedFigures[i]
+    if (!first) break
+
+    if (isForcedSolo(first)) {
+      const sizeScale = IMAGE_LAYOUT_SCALES[normalizedLayout.sizes?.[first.key] || IMAGE_LAYOUT_DEFAULT] || 1
+      const aspect = getImageAspectRatio(first.image)
+      const baseHeight = clamp(maxRowWidth / (aspect * sizeScale), singletonMinHeight, singletonMaxHeight)
+      const width = baseHeight * aspect * sizeScale
+      const shrink = width > maxRowWidth ? maxRowWidth / width : 1
+      rows.push({
+        items: [{ fig: first, width: width * shrink, height: baseHeight * shrink }],
+        forcedSolo: true
+      })
+      i += 1
+      continue
+    }
+
+    const contiguous = []
+    for (let j = i; j < orderedFigures.length; j++) {
+      const next = orderedFigures[j]
+      if (!next || isForcedSolo(next)) break
+      contiguous.push(next)
+      if (contiguous.length >= maxItemsPerRow) break
+    }
+
+    const candidateMax = Math.max(1, Math.min(maxItemsPerRow, contiguous.length))
+    let best = null
+
+    for (let count = 1; count <= candidateMax; count++) {
+      const rowItems = contiguous.slice(0, count)
+      const effectiveAspectSum = rowItems.reduce((sum, fig) => {
+        const sizeScale = IMAGE_LAYOUT_SCALES[normalizedLayout.sizes?.[fig.key] || IMAGE_LAYOUT_DEFAULT] || 1
+        return sum + (getImageAspectRatio(fig.image) * sizeScale)
+      }, 0)
+      if (!effectiveAspectSum) continue
+
+      const rawHeight = (maxRowWidth - columnGap * (count - 1)) / effectiveAspectSum
+      const clampedHeight = count === 1
+        ? clamp(rawHeight, singletonMinHeight, singletonMaxHeight)
+        : clamp(rawHeight, minRowHeight, maxRowHeight)
+
+      let score = Math.abs(clampedHeight - (count === 1 ? singletonTargetHeight : targetRowHeight))
+      if (rawHeight < minRowHeight) score += (minRowHeight - rawHeight) * 0.5
+      if (rawHeight > maxRowHeight) score += (rawHeight - maxRowHeight) * 0.25
+      score += count === 1 ? 8 : 0
+      score -= count * 3
+
+      if (count === 2) {
+        const a1 = getImageAspectRatio(rowItems[0].image)
+        const a2 = getImageAspectRatio(rowItems[1].image)
+        const complementaryPair = (a1 < 1.0 && a2 > 1.15) || (a2 < 1.0 && a1 > 1.15)
+        if (complementaryPair) score -= 14
+        if (orderedFigures.length - i === 2) score -= 6
+      }
+
+      if (!best || score < best.score) {
+        best = { count, rowItems, height: clampedHeight, score }
+      }
+    }
+
+    if (!best) {
+      i += 1
+      continue
+    }
+
+    let prepared = best.rowItems.map((fig) => {
+      const sizeScale = IMAGE_LAYOUT_SCALES[normalizedLayout.sizes?.[fig.key] || IMAGE_LAYOUT_DEFAULT] || 1
+      const height = best.height * sizeScale
+      const width = height * getImageAspectRatio(fig.image)
+      return { fig, width, height }
+    })
+
+    const totalWidth = prepared.reduce((sum, item) => sum + item.width, 0) + columnGap * (prepared.length - 1)
+    if (totalWidth > maxRowWidth) {
+      const shrink = (maxRowWidth - columnGap * (prepared.length - 1)) / Math.max(1, prepared.reduce((sum, item) => sum + item.width, 0))
+      prepared = prepared.map((item) => ({
+        ...item,
+        width: item.width * shrink,
+        height: item.height * shrink
+      }))
+    }
+
+    rows.push({ items: prepared, forcedSolo: prepared.length === 1 })
+    i += best.count
+  }
+
+  return { rows, layout: normalizedLayout }
 }
 
 export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset }) {
@@ -267,6 +502,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
   const [editingNote, setEditingNote] = useState(null)
   const [convertingLegacy, setConvertingLegacy] = useState(false)
   const [uploadingSlides, setUploadingSlides] = useState(false)
+  const [uploadingImages, setUploadingImages] = useState(false)
   const [flashcards, setFlashcards] = useState(lecture.notes?._flashcards || [])
   const [generatingFlashcards, setGeneratingFlashcards] = useState(false)
   const [showAddCard, setShowAddCard] = useState(false)
@@ -279,6 +515,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
   const legacyImportInputRef = useRef(null)
   const csvImportInputRef = useRef(null)
   const slidesUploadRef = useRef(null)
+  const imageUploadRef = useRef(null)
   const cachedPdfRef = useRef(null) // Cache PDF document to avoid re-downloading
 
   // Drag and drop state
@@ -293,6 +530,8 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
   const [pointImages, setPointImages] = useState({})
   const [sectionImages, setSectionImages] = useState({})
   const [imageReferences, setImageReferences] = useState({})
+  const [imageLayout, setImageLayout] = useState({})
+  const [openLayoutControlsKey, setOpenLayoutControlsKey] = useState(null)
   const [imagePickerOpen, setImagePickerOpen] = useState(null) // {sectionIndex, pointIndex} or {sectionIndex} for section images
   const [cropModalOpen, setCropModalOpen] = useState(null) // {pageNum, dataUrl, width, height, targetKey, targetType, sectionIndex, pointIndex, initialAnnotations, initialCropArea}
   const [loadingHighRes, setLoadingHighRes] = useState(false) // Loading state for high-res image fetch
@@ -301,9 +540,26 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
   const completedObjectives = learningObjectives.filter(obj => obj.completed).length
   const sections = notes.notes || []
 
+  const getSectionPointLevels = (section) => {
+    const pointsLength = section?.points?.length || 0
+    const existing = Array.isArray(section?.pointLevels) ? section.pointLevels : []
+    return Array.from({ length: pointsLength }, (_, idx) => {
+      const raw = Number(existing[idx] ?? 0)
+      return Number.isFinite(raw) ? Math.max(0, raw) : 0
+    })
+  }
+
+  const getPointLevel = (sectionIndex, pointIndex) => {
+    const section = notes?.notes?.[sectionIndex]
+    if (!section) return 0
+    return getSectionPointLevels(section)[pointIndex] || 0
+  }
+
   // Sync local notes when lecture prop changes
   useEffect(() => {
-    setNotes(lecture.notes || { title: lecture.title, notes: [] })
+    const normalizedNotes = normalizeNotesForDisplay(lecture.notes, lecture.title)
+
+    setNotes(normalizedNotes)
     setHasChanges(false)
 
     // Clear cached PDF when lecture changes
@@ -325,12 +581,26 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     } else {
       setImageReferences({})
     }
+    if (lecture.notes?._imageLayout) {
+      setImageLayout(lecture.notes._imageLayout)
+    } else {
+      setImageLayout({})
+    }
     if (lecture.notes?._flashcards) {
       setFlashcards(lecture.notes._flashcards)
     } else {
       setFlashcards([])
     }
   }, [lecture.id])
+
+  const buildNotesPayload = (baseNotes = notes) => ({
+    ...baseNotes,
+    _pointImages: Object.keys(pointImages).length > 0 ? pointImages : undefined,
+    _sectionImages: Object.keys(sectionImages).length > 0 ? sectionImages : undefined,
+    _imageReferences: Object.keys(imageReferences).length > 0 ? imageReferences : undefined,
+    _imageLayout: Object.keys(imageLayout).length > 0 ? imageLayout : undefined,
+    _flashcards: flashcards.length > 0 ? flashcards : undefined,
+  })
 
   // Generate PDF thumbnails when lecture has a pdf_path
   useEffect(() => {
@@ -416,13 +686,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     setSaving(true)
 
     // Include image data with notes
-    const notesWithImages = {
-      ...notes,
-      _pointImages: Object.keys(pointImages).length > 0 ? pointImages : undefined,
-      _sectionImages: Object.keys(sectionImages).length > 0 ? sectionImages : undefined,
-      _imageReferences: Object.keys(imageReferences).length > 0 ? imageReferences : undefined,
-      _flashcards: flashcards.length > 0 ? flashcards : undefined,
-    }
+    const notesWithImages = buildNotesPayload(notes)
 
     const { error } = await supabase
       .from('lectures')
@@ -438,10 +702,23 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     setSaving(false)
   }
 
-  // Update notes locally and mark as changed
-  const updateNotes = (newNotes) => {
+  // Update notes locally and auto-save
+  const updateNotes = async (newNotes) => {
     setNotes(newNotes)
-    setHasChanges(true)
+
+    // Auto-save immediately
+    const notesWithImages = buildNotesPayload(newNotes)
+
+    const { error } = await supabase
+      .from('lectures')
+      .update({ notes: notesWithImages })
+      .eq('id', lecture.id)
+
+    if (error) {
+      console.error('Failed to auto-save notes:', error)
+    } else {
+      setHasChanges(false)
+    }
   }
 
   // Copy handler
@@ -898,6 +1175,49 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     }
   }
 
+  // Handle image upload from device
+  const handleImageUpload = async (e) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+
+    setUploadingImages(true)
+
+    try {
+      const newImages = []
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
+
+        // Read file as data URL
+        const reader = new FileReader()
+        const dataUrl = await new Promise((resolve, reject) => {
+          reader.onload = (e) => resolve(e.target.result)
+          reader.onerror = reject
+          reader.readAsDataURL(file)
+        })
+
+        newImages.push({
+          id: `uploaded-${Date.now()}-${i}`,
+          dataUrl,
+          width: 0, // Will be set when image loads
+          height: 0
+        })
+      }
+
+      // Add images to pdfThumbnails so they appear in the image selector
+      setPdfThumbnails(prev => [...prev, ...newImages])
+
+      alert(`Added ${newImages.length} image${newImages.length !== 1 ? 's' : ''}. You can now insert them into your notes.`)
+
+    } catch (error) {
+      console.error('Image upload error:', error)
+      alert(`Failed to upload images: ${error.message}`)
+    } finally {
+      setUploadingImages(false)
+      e.target.value = ''
+    }
+  }
+
   // PDF Export handler - exports notes as PDF with embedded metadata for re-importing
   const handleExportPDF = () => {
     if (!notes) return
@@ -1014,7 +1334,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
     const parseText = (text) => parseInlineText(parseRawText(text))
 
-    const parsePointToBulletRows = (point, figRef = null) => {
+    const parsePointToBulletRows = (point, figRef = null, pointLevel = 0) => {
       const raw = parseRawText(point)
       const lines = raw
         .split('\n')
@@ -1025,21 +1345,13 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       let figRefAttached = false
 
       lines.forEach((line) => {
-        const bulletMatch = line.match(/^(\s*)•\s+(.+)$/)
-        let depth = 0
-        let content = line.trim()
-
-        if (bulletMatch) {
-          const leadingSpaces = bulletMatch[1] || ''
-          depth = Math.floor(leadingSpaces.length / 2)
-          content = bulletMatch[2]
-        }
-
-        const parsed = parseInlineText(`• ${content}`)
+        const content = line.trim().replace(/^([•\-])\s+/, '')
+        const marker = pointLevel > 0 ? '-' : '•'
+        const parsed = parseInlineText(`${marker} ${content}`)
         let textValue = parsed
         if (figRef && !figRefAttached) {
           const asArray = Array.isArray(parsed) ? parsed : [{ text: parsed }]
-          asArray.push({ text: ` (Fig ${figRef})`, fontSize: 9, color: '#8B5CF6' })
+          asArray.push({ text: ` (Fig ${figRef})`, fontSize: 9, color: '#6366F1' })
           textValue = asArray
           figRefAttached = true
         }
@@ -1047,41 +1359,48 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         rows.push({
           text: textValue,
           style: 'bullet',
-          margin: [depth * 16, 2, 0, 2]
+          margin: [pointLevel * 16, 2, 0, 2]
         })
       })
 
       if (rows.length === 0) {
-        const parsed = parseInlineText(`• ${raw}`)
+        const marker = pointLevel > 0 ? '-' : '•'
+        const parsed = parseInlineText(`${marker} ${raw}`)
         const textValue = figRef
-          ? [...(Array.isArray(parsed) ? parsed : [{ text: parsed }]), { text: ` (Fig ${figRef})`, fontSize: 9, color: '#8B5CF6' }]
+          ? [...(Array.isArray(parsed) ? parsed : [{ text: parsed }]), { text: ` (Fig ${figRef})`, fontSize: 9, color: '#6366F1' }]
           : parsed
         rows.push({
           text: textValue,
           style: 'bullet',
-          margin: [0, 2, 0, 2]
+          margin: [pointLevel * 16, 2, 0, 2]
         })
       }
 
       return rows
     }
 
-    const isTextHeavyImage = (image) => {
-      const extractedText = String(image?.text || '').trim()
-      return extractedText.length > 900
+    const buildFigureCaptionParts = (fig) => {
+      const suffix = fig.image?.isUploaded
+        ? 'Uploaded'
+        : `Slide ${fig.image?.pageNum || '?'}`
+      return [
+        { text: `Fig ${fig.figNum}`, color: '#6366F1' },
+        { text: ` (${suffix})`, color: '#6B7280' }
+      ]
     }
 
-    // Helper to calculate image dimensions for export.
-    // Text-heavy figures are rendered larger for readability.
-    const calcGridImageSize = (image, large = false) => {
-      const maxW = large ? 420 : 240
-      const maxH = large ? 320 : 195
-      let w = image.width || maxW
-      let h = image.height || maxH
-      if (w > maxW) { const s = maxW / w; w = maxW; h = h * s }
-      if (h > maxH) { const s = maxH / h; h = maxH; w = w * s }
-      return { width: w, height: h }
-    }
+    const buildPdfFigureStack = (fig, width, height) => {
+      const roundedWidth = Math.round(width)
+      const roundedHeight = Math.round(height)
+          return {
+            width: roundedWidth,
+            alignment: 'center',
+            stack: [
+              { image: fig.image.dataUrl, width: roundedWidth, height: roundedHeight, alignment: 'center' },
+              { text: buildFigureCaptionParts(fig), fontSize: 9, margin: [0, 2, 0, 0], alignment: 'center' }
+            ]
+          }
+        }
 
     // Build learning objectives for embedding (just text strings)
     const loStrings = learningObjectives.map(lo =>
@@ -1162,7 +1481,12 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         const sectionImg = sectionImages[sectionIndex]
         if (sectionImg && sectionImg.dataUrl) {
           figureCounter++
-          sectionFigures.push({ figNum: figureCounter, image: sectionImg, type: 'section' })
+          sectionFigures.push({
+            figNum: figureCounter,
+            image: sectionImg,
+            type: 'section',
+            key: `section-${sectionIndex}`
+          })
         }
 
         // Check for point images
@@ -1172,7 +1496,13 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
             const img = pointImages[pointKey]
             if (img && img.dataUrl) {
               figureCounter++
-              sectionFigures.push({ figNum: figureCounter, image: img, type: 'point', pointIndex })
+              sectionFigures.push({
+                figNum: figureCounter,
+                image: img,
+                type: 'point',
+                pointIndex,
+                key: pointKey
+              })
             }
           })
         }
@@ -1186,7 +1516,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                 ? parseText(section.section || `Section ${sectionIndex + 1}`)
                 : [{ text: parseText(section.section || `Section ${sectionIndex + 1}`) }]
               ),
-              { text: ` (Fig ${sectionFigure.figNum})`, fontSize: 9, color: '#8B5CF6', bold: false }
+              { text: ` (Fig ${sectionFigure.figNum})`, fontSize: 9, color: '#6366F1', bold: false }
             ],
             style: 'sectionHeader'
           })
@@ -1200,6 +1530,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         // Section points as bullets with figure references
         if (section.points && section.points.length > 0) {
           const processedPointRows = []
+          const sectionPointLevels = Array.isArray(section.pointLevels) ? section.pointLevels : []
           section.points.forEach((point, pointIndex) => {
             const pointFigure = sectionFigures.find(f => f.type === 'point' && f.pointIndex === pointIndex)
 
@@ -1210,13 +1541,13 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
             if (pointFigure) {
               figRef = pointFigure.figNum
-            } else if (refKey && pointImages[refKey]) {
-              // Find the figure number for the referenced image
-              const [refS, refP] = refKey.split('-').map(Number)
-              const refFigNum = getFigureNumber(refS, refP)
+            } else if (refKey) {
+              // Linked point reuses existing figure number.
+              const refFigNum = getFigureNumberByKey(refKey)
               if (refFigNum) figRef = refFigNum
             }
-            processedPointRows.push(...parsePointToBulletRows(point, figRef))
+            const level = Number(sectionPointLevels[pointIndex] ?? 0)
+            processedPointRows.push(...parsePointToBulletRows(point, figRef, Math.max(0, level)))
           })
 
           docDefinition.content.push({
@@ -1224,71 +1555,43 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
             margin: [0, 0, 0, 6]
           })
 
-          // After bullets, render image grid if there are figures in this section
+          // After bullets, render image rows if there are figures in this section
           if (sectionFigures.length > 0) {
-            const imageRows = []
-            for (let fi = 0; fi < sectionFigures.length;) {
-              const fig1 = sectionFigures[fi]
-              const fig1TextHeavy = isTextHeavyImage(fig1.image)
-              const slideNum1 = fig1.image.pageNum || '?'
-
-              // Render text-heavy figures in a larger single-column row for readability.
-              if (fig1TextHeavy) {
-                const size1 = calcGridImageSize(fig1.image, true)
-                imageRows.push({
-                  stack: [
-                    { image: fig1.image.dataUrl, width: size1.width, height: size1.height, alignment: 'center' },
-                    { text: `Fig ${fig1.figNum}, Slide ${slideNum1}`, fontSize: 9, color: '#8B5CF6', margin: [0, 2, 0, 0], alignment: 'center' }
-                  ],
-                  margin: [0, 6, 0, 8]
-                })
-                fi += 1
-                continue
-              }
-
-              const row = []
-              const size1 = calcGridImageSize(fig1.image)
-              row.push({
-                stack: [
-                  { image: fig1.image.dataUrl, width: size1.width, height: size1.height },
-                  { text: `Fig ${fig1.figNum}, Slide ${slideNum1}`, fontSize: 9, color: '#8B5CF6', margin: [0, 2, 0, 0], alignment: 'center' }
-                ],
-                width: '*'
-              })
-
-              // Pair normal figures two-per-row when possible.
-              const fig2 = sectionFigures[fi + 1]
-              if (fig2 && !isTextHeavyImage(fig2.image)) {
-                const size2 = calcGridImageSize(fig2.image)
-                const slideNum2 = fig2.image.pageNum || '?'
-                row.push({
-                  stack: [
-                    { image: fig2.image.dataUrl, width: size2.width, height: size2.height },
-                    { text: `Fig ${fig2.figNum}, Slide ${slideNum2}`, fontSize: 9, color: '#8B5CF6', margin: [0, 2, 0, 0], alignment: 'center' }
-                  ],
-                  width: '*'
-                })
-                fi += 2
-              } else {
-                row.push({ text: '', width: '*' })
-                fi += 1
-              }
-
-              imageRows.push({
-                columns: row,
-                columnGap: 15,
-                margin: [0, 5, 0, 5]
-              })
-            }
-
-            docDefinition.content.push({
-              stack: imageRows,
-              unbreakable: sectionFigures.length <= 4,
-              margin: [0, 8, 0, 12]
+            const sectionLayout = imageLayout?.[sectionIndex]
+            const { rows } = computeFigureRows(sectionFigures, sectionLayout, {
+              maxRowWidth: 500,
+              columnGap: 12,
+              maxItemsPerRow: 4,
+              minRowHeight: 90,
+              maxRowHeight: 205,
+              targetRowHeight: 128,
+              singletonMinHeight: 118,
+              singletonMaxHeight: 168,
+              singletonTargetHeight: 145,
+              autoSoloAspect: 3.8
             })
+
+            rows.forEach((row, rowIndex) => {
+              if (row.items.length === 1) {
+                const item = row.items[0]
+                docDefinition.content.push({
+                  ...buildPdfFigureStack(item.fig, item.width, item.height),
+                  margin: [0, rowIndex === 0 ? 6 : 4, 0, 4]
+                })
+                return
+              }
+
+              docDefinition.content.push({
+                columns: row.items.map((item) => buildPdfFigureStack(item.fig, item.width, item.height)),
+                columnGap: 12,
+                margin: [0, rowIndex === 0 ? 6 : 3, 0, 3]
+              })
+            })
+
+            docDefinition.content.push({ text: '', margin: [0, 0, 0, 4] })
           }
-        }
-      })
+          }
+        })
     }
 
     // Build notes object for embedding (compatible with old format, including images)
@@ -1299,6 +1602,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       _pointImages: Object.keys(pointImages).length > 0 ? pointImages : undefined,
       _sectionImages: Object.keys(sectionImages).length > 0 ? sectionImages : undefined,
       _imageReferences: Object.keys(imageReferences).length > 0 ? imageReferences : undefined,
+      _imageLayout: Object.keys(imageLayout).length > 0 ? imageLayout : undefined,
       _flashcards: flashcards.length > 0 ? flashcards : undefined
     }
 
@@ -1373,22 +1677,174 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     setEditingNote(null)
   }
 
+  const shiftPointKeyMapsForInsert = (sectionIndex, insertIndex, insertCount = 1) => {
+    setPointImages(prev => {
+      const next = {}
+      Object.entries(prev).forEach(([key, value]) => {
+        const [si, pi] = String(key).split('-').map(Number)
+        if (si !== sectionIndex || Number.isNaN(pi)) {
+          next[key] = value
+          return
+        }
+        const nextIndex = pi >= insertIndex ? pi + insertCount : pi
+        next[`${si}-${nextIndex}`] = value
+      })
+      return next
+    })
+
+    setImageReferences(prev => {
+      const remap = (key) => {
+        const [si, pi] = String(key).split('-').map(Number)
+        if (si !== sectionIndex || Number.isNaN(pi)) return key
+        return `${si}-${pi >= insertIndex ? pi + insertCount : pi}`
+      }
+      const next = {}
+      Object.entries(prev).forEach(([targetKey, sourceKey]) => {
+        next[remap(targetKey)] = remap(sourceKey)
+      })
+      return next
+    })
+  }
+
+  const shiftPointKeyMapsForDeleteRange = (sectionIndex, startIndex, endIndexExclusive) => {
+    const removedCount = endIndexExclusive - startIndex
+    setPointImages(prev => {
+      const next = {}
+      Object.entries(prev).forEach(([key, value]) => {
+        const [si, pi] = String(key).split('-').map(Number)
+        if (si !== sectionIndex || Number.isNaN(pi)) {
+          next[key] = value
+          return
+        }
+        if (pi >= startIndex && pi < endIndexExclusive) return
+        const nextIndex = pi >= endIndexExclusive ? pi - removedCount : pi
+        next[`${si}-${nextIndex}`] = value
+      })
+      return next
+    })
+
+    setImageReferences(prev => {
+      const remap = (key) => {
+        const [si, pi] = String(key).split('-').map(Number)
+        if (si !== sectionIndex || Number.isNaN(pi)) return key
+        if (pi >= startIndex && pi < endIndexExclusive) return null
+        const nextIndex = pi >= endIndexExclusive ? pi - removedCount : pi
+        return `${si}-${nextIndex}`
+      }
+
+      const next = {}
+      Object.entries(prev).forEach(([targetKey, sourceKey]) => {
+        const nextTarget = remap(targetKey)
+        const nextSource = remap(sourceKey)
+        if (!nextTarget || !nextSource) return
+        next[nextTarget] = nextSource
+      })
+      return next
+    })
+  }
+
   const deletePoint = (sectionIndex, pointIndex) => {
     const updated = JSON.parse(JSON.stringify(notes))
-    updated.notes[sectionIndex].points.splice(pointIndex, 1)
+    const section = updated.notes[sectionIndex]
+    const levels = getSectionPointLevels(section)
+    const baseLevel = levels[pointIndex] || 0
+    let endIndex = pointIndex + 1
+    while (endIndex < levels.length && levels[endIndex] > baseLevel) {
+      endIndex += 1
+    }
+    section.points.splice(pointIndex, endIndex - pointIndex)
+    section.pointLevels = levels.filter((_, idx) => idx < pointIndex || idx >= endIndex)
+    shiftPointKeyMapsForDeleteRange(sectionIndex, pointIndex, endIndex)
     updateNotes(updated)
   }
 
   const addPoint = (sectionIndex) => {
     const updated = JSON.parse(JSON.stringify(notes))
-    updated.notes[sectionIndex].points.push('New point - click to edit')
+    const section = updated.notes[sectionIndex]
+    section.points.push('New point - click to edit')
+    const levels = getSectionPointLevels(section)
+    levels.push(0)
+    section.pointLevels = levels
+    shiftPointKeyMapsForInsert(sectionIndex, section.points.length - 1, 1)
     updateNotes(updated)
     setEditingNote({
       type: 'point',
       sectionIndex,
-      pointIndex: updated.notes[sectionIndex].points.length - 1,
+      pointIndex: section.points.length - 1,
       value: ''
     })
+  }
+
+  const addSubPoint = (sectionIndex, pointIndex) => {
+    const updated = JSON.parse(JSON.stringify(notes))
+    const section = updated.notes[sectionIndex]
+    const levels = getSectionPointLevels(section)
+    const parentLevel = levels[pointIndex] || 0
+
+    let insertIndex = pointIndex + 1
+    while (insertIndex < levels.length && levels[insertIndex] > parentLevel) {
+      insertIndex += 1
+    }
+
+    section.points.splice(insertIndex, 0, 'New sub-point - click to edit')
+    levels.splice(insertIndex, 0, parentLevel + 1)
+    section.pointLevels = levels
+    shiftPointKeyMapsForInsert(sectionIndex, insertIndex, 1)
+    updateNotes(updated)
+    setEditingNote({
+      type: 'point',
+      sectionIndex,
+      pointIndex: insertIndex,
+      value: ''
+    })
+  }
+
+  // Indent: increase nesting level (make it a sub-bullet)
+  const indentPoint = (sectionIndex, pointIndex) => {
+    const updated = JSON.parse(JSON.stringify(notes))
+    const section = updated.notes[sectionIndex]
+    const levels = getSectionPointLevels(section)
+    const currentLevel = levels[pointIndex] || 0
+
+    // Can't indent if we're already at the first point or would exceed parent level by more than 1
+    if (pointIndex === 0) return
+    const prevLevel = levels[pointIndex - 1] || 0
+    if (currentLevel >= prevLevel + 1) return // Already at max indent relative to previous
+
+    // Increase level by 1
+    levels[pointIndex] = currentLevel + 1
+    section.pointLevels = levels
+    updateNotes(updated)
+    setHasChanges(true)
+  }
+
+  // Outdent: decrease nesting level (make it less nested)
+  const outdentPoint = (sectionIndex, pointIndex) => {
+    const updated = JSON.parse(JSON.stringify(notes))
+    const section = updated.notes[sectionIndex]
+    const levels = getSectionPointLevels(section)
+    const currentLevel = levels[pointIndex] || 0
+
+    // Can't outdent if we're already at level 0
+    if (currentLevel === 0) return
+
+    // Decrease level by 1
+    levels[pointIndex] = currentLevel - 1
+
+    // Adjust children: any following points with level > currentLevel need to be adjusted
+    // to maintain the constraint that children can't be more than 1 level deeper than parent
+    const newParentLevel = currentLevel - 1
+    for (let i = pointIndex + 1; i < levels.length; i++) {
+      if (levels[i] <= currentLevel) break // No longer in this point's subtree
+      if (levels[i] > currentLevel) {
+        // This was a child, adjust it to be at most 1 level deeper than new parent
+        levels[i] = Math.min(levels[i], newParentLevel + (levels[i] - currentLevel))
+      }
+    }
+
+    section.pointLevels = levels
+    updateNotes(updated)
+    setHasChanges(true)
   }
 
   const deleteSection = (sectionIndex) => {
@@ -1411,7 +1867,8 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     const newIndex = updated.notes.length + 1
     updated.notes.push({
       section: `${newIndex}. New Section`,
-      points: ['New point - click to edit']
+      points: ['New point - click to edit'],
+      pointLevels: [0]
     })
     updateNotes(updated)
   }
@@ -1542,20 +1999,106 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
   const handleDrop = (targetSectionIndex, targetPointIndex) => {
     if (!draggedPoint) return
-    if (draggedPoint.sectionIndex === targetSectionIndex && draggedPoint.pointIndex === targetPointIndex) return
+    if (draggedPoint.sectionIndex !== targetSectionIndex) {
+      setDraggedPoint(null)
+      setDropTargetPoint(null)
+      return
+    }
 
     const updated = JSON.parse(JSON.stringify(notes))
-    const sourceSection = updated.notes[draggedPoint.sectionIndex]
-    const targetSection = updated.notes[targetSectionIndex]
-
-    const [movedPoint] = sourceSection.points.splice(draggedPoint.pointIndex, 1)
-
-    let adjustedTargetIndex = targetPointIndex
-    if (draggedPoint.sectionIndex === targetSectionIndex && draggedPoint.pointIndex < targetPointIndex) {
-      adjustedTargetIndex = targetPointIndex
+    const section = updated.notes[targetSectionIndex]
+    const points = [...section.points]
+    const levels = getSectionPointLevels(section)
+    const getDirectParentIndex = (arr, idx) => {
+      const lvl = arr[idx] || 0
+      if (lvl <= 0) return null
+      for (let i = idx - 1; i >= 0; i--) {
+        if ((arr[i] || 0) === lvl - 1) return i
+      }
+      return null
     }
-    targetSection.points.splice(adjustedTargetIndex, 0, movedPoint)
 
+    const sourceIndex = draggedPoint.pointIndex
+    if (sourceIndex === targetPointIndex) return
+
+    const sourceLevel = levels[sourceIndex] || 0
+    const sourceParentIndex = getDirectParentIndex(levels, sourceIndex)
+    const targetLevelOriginal = levels[targetPointIndex] || 0
+    const targetParentIndexOriginal = getDirectParentIndex(levels, targetPointIndex)
+    let sourceEnd = sourceIndex + 1
+    while (sourceEnd < levels.length && levels[sourceEnd] > sourceLevel) {
+      sourceEnd += 1
+    }
+
+    // Ignore drops into own subtree.
+    if (targetPointIndex >= sourceIndex && targetPointIndex < sourceEnd) return
+
+    const movedPoints = points.slice(sourceIndex, sourceEnd)
+    const movedLevels = levels.slice(sourceIndex, sourceEnd)
+    points.splice(sourceIndex, sourceEnd - sourceIndex)
+    levels.splice(sourceIndex, sourceEnd - sourceIndex)
+
+    const targetIndexInReduced = targetPointIndex > sourceIndex ? targetPointIndex - (sourceEnd - sourceIndex) : targetPointIndex
+    const targetLevel = levels[targetIndexInReduced] || 0
+
+    // Place moved subtree after target subtree.
+    let insertIndex = targetIndexInReduced + 1
+    while (insertIndex < levels.length && levels[insertIndex] > targetLevel) {
+      insertIndex += 1
+    }
+
+    // Keep sibling-level reorder only for same-level points sharing the same direct parent.
+    // Otherwise, treat drop as nesting under the target.
+    const isSiblingReorder = sourceLevel === targetLevelOriginal && sourceParentIndex === targetParentIndexOriginal
+    const nestedToMain = sourceLevel > 0 && targetLevel === 0
+    const nextRootLevel = isSiblingReorder
+      ? sourceLevel
+      : nestedToMain
+        ? 1
+        : targetLevel + 1
+    const levelDelta = nextRootLevel - sourceLevel
+    const normalizedMovedLevels = movedLevels.map((lvl) => Math.max(0, lvl + levelDelta))
+    if (isSiblingReorder) {
+      // For sibling reorder, insert before target so items can move to top of sibling lists.
+      insertIndex = targetIndexInReduced
+    }
+
+    points.splice(insertIndex, 0, ...movedPoints)
+    levels.splice(insertIndex, 0, ...normalizedMovedLevels)
+
+    // Remap point-index keyed image maps within this section.
+    const oldIndexOrder = Array.from({ length: section.points.length }, (_, idx) => idx)
+    const movedOldIndices = oldIndexOrder.slice(sourceIndex, sourceEnd)
+    oldIndexOrder.splice(sourceIndex, sourceEnd - sourceIndex)
+    oldIndexOrder.splice(insertIndex, 0, ...movedOldIndices)
+    const oldToNew = {}
+    oldIndexOrder.forEach((oldIdx, newIdx) => { oldToNew[oldIdx] = newIdx })
+
+    const remapPointKey = (key) => {
+      const [si, pi] = String(key).split('-').map(Number)
+      if (si !== targetSectionIndex || Number.isNaN(pi)) return key
+      const nextPointIndex = oldToNew[pi]
+      return nextPointIndex === undefined ? null : `${si}-${nextPointIndex}`
+    }
+
+    const nextPointImages = {}
+    Object.entries(pointImages).forEach(([key, value]) => {
+      const nextKey = remapPointKey(key)
+      if (nextKey) nextPointImages[nextKey] = value
+    })
+    setPointImages(nextPointImages)
+
+    const nextImageRefs = {}
+    Object.entries(imageReferences).forEach(([targetKey, sourceKey]) => {
+      const nextTargetKey = remapPointKey(targetKey)
+      if (!nextTargetKey) return
+      const nextSourceKey = remapPointKey(sourceKey) || sourceKey
+      nextImageRefs[nextTargetKey] = nextSourceKey
+    })
+    setImageReferences(nextImageRefs)
+
+    section.points = points
+    section.pointLevels = levels
     updateNotes(updated)
     setDraggedPoint(null)
     setDropTargetPoint(null)
@@ -1603,14 +2146,9 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
   // Generate a key for point images (e.g., "0-1" for section 0, point 1)
   const getPointImageKey = (sectionIndex, pointIndex) => `${sectionIndex}-${pointIndex}`
 
-  // Get image for a specific point (returns image data or null)
+  // Get direct image for a specific point (no reference resolution)
   const getPointImage = (sectionIndex, pointIndex) => {
     const key = getPointImageKey(sectionIndex, pointIndex)
-    // Check if it's a reference to another image
-    if (imageReferences[key]) {
-      const refKey = imageReferences[key]
-      return pointImages[refKey] || null
-    }
     return pointImages[key] || null
   }
 
@@ -1660,7 +2198,28 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
   }
 
   // Get figure number for a point or section image
+  const getFigureNumberByKey = (key) => {
+    if (!key) return null
+    if (key.startsWith('section-')) {
+      const sectionIndex = Number(key.replace('section-', ''))
+      if (Number.isNaN(sectionIndex)) return null
+      return getFigureNumber(sectionIndex, null)
+    }
+    const [sectionIndex, pointIndex] = key.split('-').map(Number)
+    if (Number.isNaN(sectionIndex) || Number.isNaN(pointIndex)) return null
+    return getFigureNumber(sectionIndex, pointIndex)
+  }
+
   const getFigureNumber = (sectionIndex, pointIndex = null) => {
+    // Linked point: inherit source figure number only (do not create new figure).
+    if (pointIndex !== null) {
+      const targetKey = getPointImageKey(sectionIndex, pointIndex)
+      const sourceKey = imageReferences[targetKey]
+      if (sourceKey) {
+        return getFigureNumberByKey(sourceKey)
+      }
+    }
+
     let figNum = 0
 
     // Count section images first (in order)
@@ -1678,7 +2237,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         for (let pi = 0; pi < sectionPoints.length; pi++) {
           if (si === sectionIndex && pi >= pointIndex) break
           const key = getPointImageKey(si, pi)
-          if (pointImages[key] || imageReferences[key]) {
+          if (pointImages[key]) {
             figNum++
           }
         }
@@ -1688,7 +2247,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     // If we're looking for a point image
     if (pointIndex !== null) {
       const key = getPointImageKey(sectionIndex, pointIndex)
-      if (pointImages[key] || imageReferences[key]) {
+      if (pointImages[key]) {
         figNum++
         return figNum
       }
@@ -1697,9 +2256,87 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     return null
   }
 
+  const collectSectionFigures = (sectionIndex, section) => {
+    const sectionFigures = []
+    const sectionImg = getSectionImage(sectionIndex)
+    if (sectionImg) {
+      sectionFigures.push({
+        type: 'section',
+        image: sectionImg,
+        figNum: getFigureNumber(sectionIndex, null),
+        key: `section-${sectionIndex}`
+      })
+    }
+
+    ;(section?.points || []).forEach((_, pointIndex) => {
+      const pointImg = getPointImage(sectionIndex, pointIndex)
+      if (pointImg) {
+        sectionFigures.push({
+          type: 'point',
+          image: pointImg,
+          figNum: getFigureNumber(sectionIndex, pointIndex),
+          pointIndex,
+          key: getPointImageKey(sectionIndex, pointIndex)
+        })
+      }
+    })
+
+    return sectionFigures
+  }
+
+  const updateSectionImageLayout = (sectionIndex, updater) => {
+    setImageLayout((prev) => {
+      const current = prev?.[sectionIndex] || { order: [], sizes: {}, solo: {} }
+      const next = updater(current)
+      return { ...prev, [sectionIndex]: next }
+    })
+    setHasChanges(true)
+  }
+
+  const moveSectionFigure = (sectionIndex, figureKeys, figureKey, direction) => {
+    const fromIndex = figureKeys.indexOf(figureKey)
+    if (fromIndex < 0) return
+    const toIndex = fromIndex + direction
+    if (toIndex < 0 || toIndex >= figureKeys.length) return
+
+    const nextOrder = [...figureKeys]
+    const [moved] = nextOrder.splice(fromIndex, 1)
+    nextOrder.splice(toIndex, 0, moved)
+
+    updateSectionImageLayout(sectionIndex, (current) => ({
+      ...current,
+      order: nextOrder
+    }))
+  }
+
+  const setSectionFigureSize = (sectionIndex, figureKey, size) => {
+    updateSectionImageLayout(sectionIndex, (current) => ({
+      ...current,
+      sizes: { ...(current.sizes || {}), [figureKey]: size }
+    }))
+  }
+
+  const toggleSectionFigureSolo = (sectionIndex, figureKey) => {
+    updateSectionImageLayout(sectionIndex, (current) => {
+      const nextSolo = { ...(current.solo || {}) }
+      if (nextSolo[figureKey]) {
+        delete nextSolo[figureKey]
+      } else {
+        nextSolo[figureKey] = true
+      }
+      return { ...current, solo: nextSolo }
+    })
+  }
+
   // Create a reference from one point to another point's image
   const createImageReference = (fromSectionIndex, fromPointIndex, toKey) => {
     const fromKey = getPointImageKey(fromSectionIndex, fromPointIndex)
+    // Linking should not keep or create a second direct image at this point.
+    setPointImages(prev => {
+      const updated = { ...prev }
+      delete updated[fromKey]
+      return updated
+    })
     setImageReferences(prev => ({ ...prev, [fromKey]: toKey }))
     setHasChanges(true)
   }
@@ -1720,7 +2357,33 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     }
     setImagePickerOpen(null)
 
-    // Show loading state while fetching high-res image
+    // Check if this is an uploaded image (not from PDF slides)
+    const thumbnailIndex = pageNum - 1
+    const selectedThumbnail = pdfThumbnails[thumbnailIndex]
+
+    if (selectedThumbnail && selectedThumbnail.id?.startsWith('uploaded-')) {
+      // This is an uploaded image - use it directly without fetching from PDF
+      console.log('Selected uploaded image:', selectedThumbnail.id)
+
+      // Create an image to get dimensions
+      const img = new window.Image()
+      img.src = selectedThumbnail.dataUrl
+      await new Promise((resolve) => {
+        img.onload = resolve
+      })
+
+      setCropModalOpen({
+        pageNum: null, // No pageNum for uploaded images
+        isUploaded: true, // Mark as uploaded
+        dataUrl: selectedThumbnail.dataUrl,
+        width: img.width,
+        height: img.height,
+        ...targetInfo
+      })
+      return
+    }
+
+    // Show loading state while fetching high-res image from PDF
     setLoadingHighRes(true)
     console.log('Starting high-res fetch...')
 
@@ -1780,6 +2443,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     if (imageData.originalDataUrl) {
       setCropModalOpen({
         pageNum: imageData.pageNum,
+        isUploaded: imageData.isUploaded,
         dataUrl: imageData.originalDataUrl,
         width: imageData.originalWidth,
         height: imageData.originalHeight,
@@ -1912,50 +2576,31 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
             </button>
 
             <div className="flex items-center gap-2">
-              {hasChanges && (
-                <button
-                  onClick={saveNotes}
-                  disabled={saving}
-                  className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white rounded-lg text-sm font-medium transition-colors"
-                >
-                  <Save className="w-4 h-4" />
-                  {saving ? 'Saving...' : 'Save Changes'}
-                </button>
-              )}
+              <button
+                onClick={() => imageUploadRef.current?.click()}
+                disabled={uploadingImages}
+                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                title="Add images from your device"
+              >
+                {uploadingImages ? <Loader2 className="w-4 h-4 animate-spin" /> : <Image className="w-4 h-4" />}
+                {uploadingImages ? 'Uploading...' : 'Add Images'}
+              </button>
+              <input
+                type="file"
+                ref={imageUploadRef}
+                onChange={handleImageUpload}
+                accept="image/*"
+                multiple
+                className="hidden"
+              />
               <button
                 onClick={handleExportPDF}
-                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium transition-colors"
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
                 title="Export as PDF (can be re-imported later)"
               >
                 <Download className="w-4 h-4" />
                 Export PDF
               </button>
-              {pdfThumbnails.length === 0 && (
-                <>
-                  <button
-                    onClick={() => slidesUploadRef.current?.click()}
-                    disabled={uploadingSlides}
-                    className="flex items-center gap-2 px-4 py-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-                    title="Upload lecture slides for image insertion"
-                  >
-                    {uploadingSlides ? <Loader2 className="w-4 h-4 animate-spin" /> : <Image className="w-4 h-4" />}
-                    {uploadingSlides ? 'Uploading...' : 'Upload Slides'}
-                  </button>
-                  <input
-                    type="file"
-                    ref={slidesUploadRef}
-                    onChange={handleSlidesUpload}
-                    accept=".pdf"
-                    className="hidden"
-                  />
-                </>
-              )}
-              {pdfThumbnails.length > 0 && (
-                <span className="flex items-center gap-1 px-3 py-2 text-xs text-green-700 bg-green-50 rounded-lg">
-                  <Image className="w-3.5 h-3.5" />
-                  {pdfThumbnails.length} slides
-                </span>
-              )}
               <button
                 onClick={() => setShowResetConfirm(true)}
                 className="flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-red-50 hover:text-red-600 text-secondary rounded-lg text-sm transition-colors"
@@ -2032,11 +2677,6 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                 </button>
               </div>
             )}
-            {lecture.processed_at && (
-              <p className="text-sm text-secondary mt-1">
-                Generated {new Date(lecture.processed_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
-              </p>
-            )}
           </div>
         </div>
 
@@ -2112,7 +2752,14 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                   </div>
                 ) : (
                   <>
-                    <h3 className="font-semibold text-primary text-lg flex-1">{section.section}</h3>
+                    <h3 className="font-semibold text-primary text-lg flex-1">
+                      {section.section}
+                      {getFigureNumber(sectionIndex, null) && (
+                        <span className="text-indigo-500 text-xs font-medium ml-2">
+                          (Fig {getFigureNumber(sectionIndex, null)})
+                        </span>
+                      )}
+                    </h3>
                     <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity">
                       <button
                         onClick={() => startEditSection(sectionIndex)}
@@ -2127,6 +2774,26 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                         title="Add point"
                       >
                         <Plus className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (pdfThumbnails.length === 0 && Object.keys(pointImages).length === 0) {
+                            alert('No slides available for image insertion.\n\nTo use this feature, you need to upload a slides PDF using the "Convert Existing Notes" option, which stores both the slides and notes PDFs.')
+                          } else {
+                            setImagePickerOpen({ sectionIndex })
+                          }
+                        }}
+                        className={`p-1.5 rounded-lg ${
+                          pdfThumbnails.length === 0 && Object.keys(pointImages).length === 0
+                            ? 'bg-gray-100 text-gray-400 cursor-help'
+                            : 'bg-gray-100 hover:bg-indigo-100 hover:text-indigo-600'
+                        }`}
+                        title={pdfThumbnails.length === 0 && Object.keys(pointImages).length === 0
+                          ? "No slides available - use 'Convert Existing Notes' to upload slides"
+                          : "Insert section image from slides"
+                        }
+                      >
+                        <Image className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => deleteSection(sectionIndex)}
@@ -2145,13 +2812,17 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                 <div className="p-5">
                   <ul className="space-y-2">
                     {section.points.map((point, pointIndex) => (
+                      (() => {
+                        const pointLevel = getPointLevel(sectionIndex, pointIndex)
+                        return (
                       <li
                         key={pointIndex}
-                        className={`text-sm text-primary pl-4 border-l-2 border-accent/30 py-2 group flex items-start gap-2 ${
+                        className={`text-sm text-primary border-l-2 border-accent/30 py-2 group flex items-start gap-2 ${
                           dropTargetPoint?.sectionIndex === sectionIndex && dropTargetPoint?.pointIndex === pointIndex &&
                           !(draggedPoint?.sectionIndex === sectionIndex && draggedPoint?.pointIndex === pointIndex)
                             ? 'bg-blue-50 border-l-accent' : ''
                         }`}
+                        style={{ marginLeft: `${pointLevel * 18}px`, paddingLeft: '12px' }}
                         onDragOver={(e) => handlePointDragOver(e, sectionIndex, pointIndex)}
                         onDragLeave={handleDragLeave}
                         onDrop={() => handleDrop(sectionIndex, pointIndex)}
@@ -2284,30 +2955,57 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                               <GripVertical className="w-4 h-4 text-gray-400" />
                             </span>
                             <div className="flex-1">
-                              <div className="flex items-start gap-2">
-                            <div
-                              className="flex-1 notes-content leading-relaxed"
-                              dangerouslySetInnerHTML={{
-                                __html: /<(ul|ol|li)\b/i.test(point || '')
-                                  || String(point || '').trimStart().startsWith('•')
-                                  ? markdownToHTML(point)
-                                  : `• ${markdownToHTML(point)}`,
-                              }}
-                            />
-                                {getFigureNumber(sectionIndex, pointIndex) && (
-                                  <span className="text-indigo-500 text-xs font-medium">
-                                    (Fig {getFigureNumber(sectionIndex, pointIndex)})
-                                  </span>
-                                )}
-                              </div>
+                              <div
+                                className="notes-content leading-relaxed"
+                                dangerouslySetInnerHTML={{
+                                  __html: buildPointHtmlWithFigureRef(point, getFigureNumber(sectionIndex, pointIndex), pointLevel),
+                                }}
+                              />
                             </div>
                             <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity flex-shrink-0">
                               <button
                                 onClick={() => startEditPoint(sectionIndex, pointIndex)}
                                 className="p-1 bg-gray-100 hover:bg-gray-200 rounded"
                                 title="Edit point"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5 text-secondary" />
+                                </button>
+                              <button
+                                onClick={() => outdentPoint(sectionIndex, pointIndex)}
+                                className={`p-1 rounded ${
+                                  pointLevel === 0
+                                    ? 'bg-gray-100 text-gray-300 cursor-not-allowed'
+                                    : 'bg-gray-100 hover:bg-purple-100 hover:text-purple-600'
+                                }`}
+                                title={pointLevel === 0 ? "Already at main level" : "Outdent (make less nested)"}
+                                disabled={pointLevel === 0}
                               >
-                                <Edit2 className="w-3.5 h-3.5 text-secondary" />
+                                <IndentDecrease className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => indentPoint(sectionIndex, pointIndex)}
+                                className={`p-1 rounded ${
+                                  pointIndex === 0 || pointLevel >= (getSectionPointLevels(section)[pointIndex - 1] || 0) + 1
+                                    ? 'bg-gray-100 text-gray-300 cursor-not-allowed'
+                                    : 'bg-gray-100 hover:bg-purple-100 hover:text-purple-600'
+                                }`}
+                                title={
+                                  pointIndex === 0
+                                    ? "Can't indent first bullet"
+                                    : pointLevel >= (getSectionPointLevels(section)[pointIndex - 1] || 0) + 1
+                                    ? "Already at max indent"
+                                    : "Indent (make more nested)"
+                                }
+                                disabled={pointIndex === 0 || pointLevel >= (getSectionPointLevels(section)[pointIndex - 1] || 0) + 1}
+                              >
+                                <IndentIncrease className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => addSubPoint(sectionIndex, pointIndex)}
+                                className="p-1 bg-gray-100 hover:bg-blue-100 hover:text-accent rounded"
+                                title="Add sub-bullet point"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
                               </button>
                               <button
                                 onClick={() => {
@@ -2340,89 +3038,142 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                           </>
                         )}
                       </li>
+                        )
+                      })()
                     ))}
                   </ul>
 
-                  {/* Section Images Grid - displayed below all bullet points */}
+                  {/* Section Images Layout - shared model with PDF export */}
                   {(() => {
-                    // Collect all figures for this section
-                    const sectionFigures = []
-
-                    // Check for section image
-                    const sectionImg = getSectionImage(sectionIndex)
-                    if (sectionImg) {
-                      sectionFigures.push({
-                        type: 'section',
-                        image: sectionImg,
-                        figNum: getFigureNumber(sectionIndex, null),
-                        key: `section-${sectionIndex}`
-                      })
-                    }
-
-                    // Check for point images
-                    section.points.forEach((_, pointIndex) => {
-                      const pointImg = getPointImage(sectionIndex, pointIndex)
-                      if (pointImg) {
-                        sectionFigures.push({
-                          type: 'point',
-                          image: pointImg,
-                          figNum: getFigureNumber(sectionIndex, pointIndex),
-                          pointIndex,
-                          key: getPointImageKey(sectionIndex, pointIndex)
-                        })
-                      }
-                    })
-
+                    const sectionFigures = collectSectionFigures(sectionIndex, section)
                     if (sectionFigures.length === 0) return null
+
+                    const sectionLayout = imageLayout?.[sectionIndex]
+                    const { rows, layout } = computeFigureRows(sectionFigures, sectionLayout, {
+                      maxRowWidth: 780,
+                      columnGap: 14,
+                      maxItemsPerRow: 4,
+                      minRowHeight: 95,
+                      maxRowHeight: 250,
+                      targetRowHeight: 140,
+                      singletonMinHeight: 124,
+                      singletonMaxHeight: 210,
+                      singletonTargetHeight: 152,
+                      autoSoloAspect: 3.8
+                    })
+                    const orderedKeys = layout.order
+
+                    const renderFigureCard = (fig, width, height) => {
+                      const currentSize = layout.sizes?.[fig.key] || IMAGE_LAYOUT_DEFAULT
+                      const isSoloPinned = !!layout.solo?.[fig.key]
+                      const itemIndex = orderedKeys.indexOf(fig.key)
+                      const isFirst = itemIndex <= 0
+                      const isLast = itemIndex === orderedKeys.length - 1
+                      const controlsOpen = openLayoutControlsKey === fig.key
+
+                      return (
+                        <div key={fig.key} className="relative group/img">
+                          <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                            <img
+                              src={fig.image.dataUrl}
+                              alt={`Figure ${fig.figNum}`}
+                              style={{ width: `${Math.round(width)}px`, height: `${Math.round(height)}px`, maxWidth: '100%' }}
+                              className="rounded shadow-sm mx-auto block object-contain"
+                            />
+                            <div className="text-center mt-2 text-xs text-indigo-600 font-medium">
+                              Fig {fig.figNum}
+                              {fig.image.isUploaded ? (
+                                <span className="text-gray-500 ml-1">(Uploaded)</span>
+                              ) : fig.image.pageNum && (
+                                <span className="text-gray-500 ml-1">(Slide {fig.image.pageNum})</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="absolute top-4 right-4 opacity-0 group-hover/img:opacity-100 flex gap-1 justify-end transition-opacity">
+                            <button
+                              onClick={() => setOpenLayoutControlsKey((prev) => (prev === fig.key ? null : fig.key))}
+                              className={`p-1.5 rounded-lg shadow-md border ${controlsOpen ? 'bg-indigo-50 border-indigo-200' : 'bg-white/95 border-gray-200 hover:bg-white'}`}
+                              title="Layout controls"
+                            >
+                              <SlidersHorizontal className={`w-4 h-4 ${controlsOpen ? 'text-indigo-600' : 'text-gray-600'}`} />
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (fig.type === 'point') {
+                                  handleEditExistingImage(sectionIndex, fig.pointIndex)
+                                } else {
+                                  handleEditExistingImage(sectionIndex, null)
+                                }
+                              }}
+                              className="p-1.5 bg-white/95 hover:bg-white rounded-lg shadow-md border border-gray-200"
+                              title="Edit image"
+                            >
+                              <Edit2 className="w-4 h-4 text-gray-600" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (fig.type === 'point') {
+                                  removePointImage(sectionIndex, fig.pointIndex)
+                                } else {
+                                  removeSectionImage(sectionIndex)
+                                }
+                              }}
+                              className="p-1.5 bg-white/95 hover:bg-red-50 rounded-lg shadow-md border border-gray-200"
+                              title="Remove image"
+                            >
+                              <X className="w-4 h-4 text-red-500" />
+                            </button>
+                          </div>
+                          {controlsOpen && (
+                            <div className="absolute top-14 right-4 bg-white/95 border border-gray-200 rounded-lg shadow-md p-2 flex flex-wrap gap-1 z-10">
+                              <button
+                                onClick={() => moveSectionFigure(sectionIndex, orderedKeys, fig.key, -1)}
+                                disabled={isFirst}
+                                className="p-1.5 bg-white hover:bg-gray-50 rounded border border-gray-200 disabled:opacity-40"
+                                title="Move earlier"
+                              >
+                                <ChevronLeft className="w-4 h-4 text-gray-600" />
+                              </button>
+                              <button
+                                onClick={() => moveSectionFigure(sectionIndex, orderedKeys, fig.key, 1)}
+                                disabled={isLast}
+                                className="p-1.5 bg-white hover:bg-gray-50 rounded border border-gray-200 disabled:opacity-40"
+                                title="Move later"
+                              >
+                                <ChevronRight className="w-4 h-4 text-gray-600" />
+                              </button>
+                              {['s', 'm', 'l'].map((sizeOption) => (
+                                <button
+                                  key={`${fig.key}-${sizeOption}`}
+                                  onClick={() => setSectionFigureSize(sectionIndex, fig.key, sizeOption)}
+                                  className={`px-2 py-1 text-xs rounded border ${currentSize === sizeOption ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                                  title={`Set size ${sizeOption.toUpperCase()}`}
+                                >
+                                  {sizeOption.toUpperCase()}
+                                </button>
+                              ))}
+                              <button
+                                onClick={() => toggleSectionFigureSolo(sectionIndex, fig.key)}
+                                className={`px-2 py-1 text-xs rounded border ${isSoloPinned ? 'bg-amber-100 text-amber-800 border-amber-300' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                                title="Toggle own row"
+                              >
+                                Solo
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    }
 
                     return (
                       <div className="mt-6 pt-4 border-t border-gray-100">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {sectionFigures.map((fig) => (
-                            <div key={fig.key} className="relative group/img">
-                              <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                                <img
-                                  src={fig.image.dataUrl}
-                                  alt={`Figure ${fig.figNum}`}
-                                  className="max-w-full w-auto max-h-[400px] rounded shadow-sm mx-auto block"
-                                />
-                                <div className="text-center mt-2 text-xs text-indigo-600 font-medium">
-                                  Fig {fig.figNum}
-                                  {fig.image.pageNum && (
-                                    <span className="text-gray-500 ml-1">
-                                      (Slide {fig.image.pageNum})
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="absolute top-4 right-4 opacity-0 group-hover/img:opacity-100 flex gap-1 transition-opacity">
-                                <button
-                                  onClick={() => {
-                                    if (fig.type === 'point') {
-                                      handleEditExistingImage(sectionIndex, fig.pointIndex)
-                                    } else {
-                                      handleEditExistingImage(sectionIndex, null)
-                                    }
-                                  }}
-                                  className="p-1.5 bg-white/95 hover:bg-white rounded-lg shadow-md border border-gray-200"
-                                  title="Edit image"
-                                >
-                                  <Edit2 className="w-4 h-4 text-gray-600" />
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    if (fig.type === 'point') {
-                                      removePointImage(sectionIndex, fig.pointIndex)
-                                    } else {
-                                      removeSectionImage(sectionIndex)
-                                    }
-                                  }}
-                                  className="p-1.5 bg-white/95 hover:bg-red-50 rounded-lg shadow-md border border-gray-200"
-                                  title="Remove image"
-                                >
-                                  <X className="w-4 h-4 text-red-500" />
-                                </button>
-                              </div>
+                        <div className="space-y-4">
+                          {rows.map((row, rowIndex) => (
+                            <div
+                              key={`row-${sectionIndex}-${rowIndex}`}
+                              className={`flex gap-3 ${row.items.length === 1 ? 'justify-center' : 'items-start'}`}
+                            >
+                              {row.items.map((item) => renderFigureCard(item.fig, item.width, item.height))}
                             </div>
                           ))}
                         </div>
@@ -2467,7 +3218,13 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         existingImages={pointImages}
         onSelectSlide={handleSelectSlide}
         onSelectExisting={handleSelectExisting}
-        currentKey={imagePickerOpen ? getPointImageKey(imagePickerOpen.sectionIndex, imagePickerOpen.pointIndex) : null}
+        currentKey={imagePickerOpen && imagePickerOpen.pointIndex !== undefined
+          ? getPointImageKey(imagePickerOpen.sectionIndex, imagePickerOpen.pointIndex)
+          : null}
+        notes={notes}
+        getSectionImage={getSectionImage}
+        getPointImage={getPointImage}
+        getPointImageKey={getPointImageKey}
       />
 
       {/* Loading overlay for high-res image fetch */}
@@ -2484,7 +3241,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       <CropModal
         isOpen={!!cropModalOpen}
         onClose={() => setCropModalOpen(null)}
-        imageData={cropModalOpen ? { dataUrl: cropModalOpen.dataUrl, pageNum: cropModalOpen.pageNum } : null}
+        imageData={cropModalOpen ? { dataUrl: cropModalOpen.dataUrl, pageNum: cropModalOpen.pageNum, isUploaded: cropModalOpen.isUploaded } : null}
         onConfirm={handleCropConfirm}
         initialAnnotations={cropModalOpen?.initialAnnotations || null}
         initialCropArea={cropModalOpen?.initialCropArea || null}
