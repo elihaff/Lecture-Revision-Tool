@@ -981,3 +981,252 @@ Users trust the content they directly edit; attaching actions (like delete image
 ---
 
 *Added after v3.28 fix to move flashcard image deletion controls from duplicate previews to in-editor, in-place image overlays.*
+
+---
+
+# Entry 9: Spaced Repetition "Again" Card Queue Position - Sorting by Effective Due Date
+
+## The Problem
+After implementing Anki-style two-cycle learning steps for flashcards, "Again" cards consistently appeared at the back of the first cycle queue (position 20/20) instead of reappearing within a few cards as expected.
+
+Desired behavior:
+- Press "Again" on a card in first cycle
+- Card should reappear within next 1-3 cards (after ~18 seconds)
+- Mimics Anki's behavior of interleaving failed cards with new cards
+
+Actual behavior:
+- "Again" cards went to position 20 (last in queue)
+- All 19 unreviewed NEW cards appeared before the "Again" card
+- This persisted across multiple sorting approaches
+
+## Timeline of Investigation (v3.84 - v3.86)
+
+### Phase 1: Minimum Delay Enforcement (v3.84)
+**Initial hypothesis:** Cards showing immediately due to no time-based filtering
+
+**Implementation:**
+- Added 30-second minimum delay filter using `last_reviewed_at`
+- Cards reviewed within 30 seconds excluded from eligible queue
+- Added waiting state with 5-second auto-reload
+
+**Result:** "Again" cards now waited 30 seconds, but then appeared at position 20 instead of near front
+
+### Phase 2: Sort by `last_reviewed_at` (v3.85)
+**Hypothesis:** Sorting by `due_date` puts overdue NEW cards before "Again" cards
+
+**Analysis:**
+- NEW cards: `due_date` = 2 weeks ago (creation timestamp), `last_reviewed_at` = null
+- "Again" cards: `due_date` = now + 18 seconds, `last_reviewed_at` = now
+- Sorting by due_date made NEW cards appear extremely overdue
+
+**Implementation:**
+Changed sorting to use `last_reviewed_at` within same learning step:
+```javascript
+// Unreviewed cards first (no last_reviewed_at)
+if (!reviewedA && reviewedB) return -1
+if (reviewedA && !reviewedB) return 1
+
+// Both reviewed - oldest review first
+return reviewedA - reviewedB
+```
+
+**Result:** NEW cards (unreviewed, `last_reviewed_at` = null) ALWAYS came before reviewed cards, placing "Again" cards at position 20
+
+### Phase 3: Root Cause Discovery (v3.86)
+**User feedback:** "again cards in the first cycle only show at the back of the queue. The second cycle seems to work well though."
+
+**Deep investigation of database schema:**
+```sql
+due_date TIMESTAMPTZ DEFAULT now() NOT NULL,
+```
+
+**Key realization:** When flashcards are created, `due_date` is set to the creation timestamp (could be weeks/months ago), NOT when they should be reviewed.
+
+**Scenario breakdown:**
+1. Cards created 2 weeks ago
+2. NEW card: `due_date` = 2 weeks ago, `last_reviewed_at` = null
+3. Press "Again" → `due_date` = now + 18 seconds, `last_reviewed_at` = now
+4. After 30-second delay → "Again" card: `due_date` = now - 12 seconds (slightly overdue)
+
+**Both previous sorting approaches failed:**
+- **Sort by `due_date`:** NEW cards (2 weeks overdue) >> "Again" cards (12 seconds overdue)
+- **Sort by `last_reviewed_at`:** NEW cards (null) always before reviewed cards
+
+## Root Cause Analysis
+
+### Why All Sorting Approaches Failed
+
+**The fundamental issue:** NEW cards have misleading `due_date` timestamps that don't represent review urgency.
+
+`due_date` for NEW cards = **creation timestamp** (when card was added to database)
+`due_date` for LEARNING cards = **calculated next review time** (now + interval)
+
+This created an apples-to-oranges comparison:
+- NEW cards appeared weeks/months overdue (due 2 weeks ago)
+- "Again" cards appeared barely overdue (due 12 seconds ago)
+- NEW cards won every sort comparison
+
+### Mental Model Errors
+
+**Error 1: Assuming `due_date` represents review urgency consistently**
+- Thought: "due_date shows when card should be reviewed, sort by that"
+- Reality: NEW cards have creation timestamps, LEARNING cards have calculated review times
+
+**Error 2: Treating "unreviewed" as higher priority than "recently failed"**
+- Thought: "Cards never seen should come before cards just reviewed"
+- Reality: In Anki's model, failed cards are interleaved with new cards to balance workload
+
+**Error 3: Focusing on sorting algorithm instead of data semantics**
+- Thought: "Find the right sort function"
+- Reality: The underlying data had inconsistent meaning across card states
+
+## The Solution That Worked
+
+**Calculate "effective due date" that normalizes NEW and LEARNING cards:**
+
+```javascript
+const sortCards = (cards) => {
+  const now = new Date()
+
+  return cards.sort((a, b) => {
+    // Sort by learning_step first (step 0 before step 1)
+    const stepA = a.learning_step || 0
+    const stepB = b.learning_step || 0
+
+    if (stepA !== stepB) {
+      return stepA - stepB
+    }
+
+    // Calculate effective due date
+    // NEW cards (never reviewed) → treat as due NOW (not overdue)
+    // LEARNING cards (reviewed) → use actual due_date
+    const effectiveDueA = a.last_reviewed_at ? new Date(a.due_date) : now
+    const effectiveDueB = b.last_reviewed_at ? new Date(b.due_date) : now
+
+    // Sort by effective due date (most overdue first)
+    return effectiveDueA - effectiveDueB
+  })
+}
+```
+
+**Why this works:**
+
+After pressing "Again" and waiting 30 seconds:
+- **NEW card:** effective due = **now** (0 seconds overdue)
+- **"Again" card:** actual due = **now - 12 seconds** (12 seconds overdue)
+
+The "Again" card is **more overdue**, so it appears **first** in the queue.
+
+As time passes (1 minute later):
+- **NEW card:** effective due = **now** (still not overdue)
+- **"Again" card:** actual due = **now - 42 seconds** (42 seconds overdue)
+
+"Again" cards remain near the front, interleaved with NEW cards as expected.
+
+## Corrective Actions Taken
+
+1. Changed sorting to use "effective due date" instead of raw `due_date` or `last_reviewed_at`
+2. NEW cards (never reviewed) treated as due NOW (not overdue)
+3. LEARNING cards (reviewed) use actual `due_date` from algorithm
+4. Preserved 30-second minimum delay to prevent immediate re-showing
+5. Deployed as v3.86.0
+
+## Principles for Future Problem-Solving
+
+### 1. Understand Data Semantics Across States
+
+When a field has different meanings in different states:
+- Document what the field means in each state
+- Normalize values when comparing across states
+- Consider separate fields if semantics diverge too much
+
+**Example:** `due_date` meant "created_at" for NEW cards but "next_review_at" for LEARNING cards.
+
+### 2. Verify Assumptions About Timestamp Fields
+
+Before sorting by timestamp:
+1. What sets this timestamp initially?
+2. Does it mean the same thing for all records?
+3. Is it updated consistently?
+4. Does it represent the concept I think it represents?
+
+### 3. Investigate Data, Not Just Algorithms
+
+When sorting logic fails repeatedly:
+- Stop tweaking the sort function
+- Examine the actual data being sorted
+- Check database schema and default values
+- Look at sample records in each state
+
+### 4. Normalize Before Comparing
+
+When comparing entities in different lifecycle states:
+- Define what "equal priority" means
+- Calculate derived values that make states comparable
+- Don't assume database fields are comparison-ready
+
+### 5. Test with Actual Data Patterns
+
+The bug only manifested with:
+- Cards created weeks ago (realistic production data)
+- Not immediately after creation (test data)
+
+Always test with realistic data ages and states.
+
+## Prevention Checklist for Queue Sorting Features
+
+### Before Implementing Sorting:
+- [ ] Document what each sortable field means in each entity state
+- [ ] Verify timestamps represent comparable concepts
+- [ ] Check database schema defaults (do they set meaningful initial values?)
+- [ ] Test with old records, not just newly created ones
+
+### When Debugging Sort Order:
+- [ ] Query actual data being sorted (timestamps, states, ages)
+- [ ] Compare field values across different entity states
+- [ ] Check if fields have different semantic meaning in different states
+- [ ] Calculate derived/normalized values if needed
+
+### After Implementing:
+- [ ] Test with data created at different times (today, last week, last month)
+- [ ] Verify behavior across all entity states (new, learning, review)
+- [ ] Confirm queue positions match expected mental model
+- [ ] Check second cycle works as expected too
+
+## Applying to Future Issues
+
+### Red Flags That Should Trigger "Data Semantics" Investigation:
+1. Sorting works for some records but not others
+2. Newer records sort differently than older records
+3. Same algorithm produces different results across entity states
+4. Timestamp comparisons yield unexpected results
+5. Default database values participate in business logic
+
+### Questions to Ask Immediately:
+1. "What does this field mean for NEW vs LEARNING vs REVIEW states?"
+2. "Is this timestamp set at creation or at first use?"
+3. "Do I need to normalize this value before comparing?"
+4. "Am I comparing values with fundamentally different meanings?"
+
+### Standard Pattern for State-Dependent Sorting:
+```javascript
+// Calculate normalized/effective value based on state
+const effectiveValue = record.state === 'new'
+  ? deriveFromContext(record)  // e.g., "now"
+  : record.actualValue          // e.g., due_date
+
+// Sort by normalized values
+records.sort((a, b) => effectiveValueA - effectiveValueB)
+```
+
+## Key Insight
+
+**Database fields can have state-dependent semantics that make them incomparable without normalization.**
+
+When a field like `due_date` represents "creation time" for NEW records but "next review time" for LEARNING records, raw comparisons produce meaningless results. The fix isn't a better sorting algorithm—it's recognizing the semantic mismatch and computing a normalized value that makes states comparable.
+
+**Before debugging sorting logic, verify the data being sorted represents what you think it represents.**
+
+---
+
+*Added after fixing "Again" card queue position bug through v3.84-v3.86. The resolution required introducing "effective due date" concept that treats NEW cards as due NOW rather than using their creation timestamp, allowing proper interleaving of failed cards with new cards in the first learning cycle.*
