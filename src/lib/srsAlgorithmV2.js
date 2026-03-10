@@ -29,11 +29,15 @@ export const STATE = {
 export const CONFIG = {
   // Learning steps (in minutes) - cards cycle through these WITHIN the same session
   // Only after completing do they graduate to next-day+ scheduling
-  LEARNING_STEPS: [0.5, 6, 10], // Step 0: <1 min, Step 1: 6 min, Step 2: 10 min, then graduate
+  LEARNING_STEPS: [0.3, 10], // Step 0: <1 min (first cycle), Step 1: 10 min (second cycle), then graduate
+
+  // Hard interval for first cycle (step 0)
+  HARD_FIRST_CYCLE_INTERVAL: 6, // minutes (between Again <1m and Good 10m)
 
   // Graduating intervals (when completing final learning step)
   GRADUATING_INTERVAL_GOOD: 1,  // days (when rated Good on final step)
-  GRADUATING_INTERVAL_EASY: 4,  // days (when rated Easy, skips steps)
+  GRADUATING_INTERVAL_EASY_FIRST: 1,  // days (when rated Easy at step 0 - skip to review)
+  GRADUATING_INTERVAL_EASY_LATER: 4,  // days (when rated Easy at step 1+ - bonus interval)
 
   // Relearning steps (when card forgotten from review)
   RELEARNING_STEPS: [10],  // Single step before returning to review
@@ -124,7 +128,13 @@ export function calculateNextReview(card, rating, reviewTimeMs = null) {
       // Repeat current step (don't advance)
       newState = STATE.LEARNING
       newLearningStep = currentStep // Stay at current step
-      newInterval = minutesToDays(CONFIG.LEARNING_STEPS[newLearningStep])
+
+      // Special interval for first cycle (step 0)
+      if (currentStep === 0) {
+        newInterval = minutesToDays(CONFIG.HARD_FIRST_CYCLE_INTERVAL)
+      } else {
+        newInterval = minutesToDays(CONFIG.LEARNING_STEPS[newLearningStep])
+      }
     }
     else if (rating === RATING.GOOD) {
       // Advance to next step or graduate
@@ -145,7 +155,14 @@ export function calculateNextReview(card, rating, reviewTimeMs = null) {
     else if (rating === RATING.EASY) {
       // Skip all remaining steps - graduate immediately
       newState = STATE.REVIEW
-      newInterval = CONFIG.GRADUATING_INTERVAL_EASY
+      // Different intervals based on which step Easy was pressed
+      if (currentStep === 0) {
+        // First cycle: 1 day (same as Good in second cycle)
+        newInterval = CONFIG.GRADUATING_INTERVAL_EASY_FIRST
+      } else {
+        // Second cycle or later: 4 days (bonus for being easy after review)
+        newInterval = CONFIG.GRADUATING_INTERVAL_EASY_LATER
+      }
       newRepetitions = 1
       newLearningStep = 0
       newEaseFactor = ease_factor + CONFIG.EASY_EASE_BONUS
@@ -173,7 +190,7 @@ export function calculateNextReview(card, rating, reviewTimeMs = null) {
       // Graduate back to review
       newState = STATE.REVIEW
       newInterval = rating === RATING.EASY ?
-        CONFIG.GRADUATING_INTERVAL_EASY :
+        CONFIG.GRADUATING_INTERVAL_EASY_LATER :
         CONFIG.GRADUATING_INTERVAL_GOOD
       newLearningStep = 0
       if (rating === RATING.EASY) {
@@ -221,7 +238,7 @@ export function calculateNextReview(card, rating, reviewTimeMs = null) {
     else if (rating === RATING.EASY) {
       // Easy - bonus interval
       if (repetitions === 0) {
-        newInterval = CONFIG.GRADUATING_INTERVAL_EASY
+        newInterval = CONFIG.GRADUATING_INTERVAL_EASY_LATER
       } else if (repetitions === 1) {
         newInterval = 6 * CONFIG.EASY_BONUS_MULTIPLIER
       } else {
