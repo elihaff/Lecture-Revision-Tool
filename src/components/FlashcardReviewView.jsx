@@ -52,9 +52,10 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
       // Combine learning cards + limited new cards
       const learningCards = [...inLearningCards, ...limitedNewCards]
 
-      // Calculate cycle counts for all cards in lecture
-      const firstCycle = allCards.filter(c => (c.state === 'new' || c.state === 'learning') && (c.learning_step === 0 || !c.learning_step)).length
-      const secondCycle = allCards.filter(c => c.state === 'learning' && c.learning_step === 1).length
+      // Calculate cycle counts from the ACTIVE learning queue (not all cards)
+      // This respects the 20 new card limit
+      const firstCycle = learningCards.filter(c => (c.state === 'new' || c.state === 'learning') && (c.learning_step === 0 || !c.learning_step)).length
+      const secondCycle = learningCards.filter(c => c.state === 'learning' && c.learning_step === 1).length
       const graduated = allCards.filter(c => c.state === 'review').length
 
       setCycleCounts({
