@@ -485,7 +485,7 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
             </div>
 
             <p className="text-secondary mb-6">
-              This will reset all {reviewQueue.length} flashcards in this lecture back to "new" state.
+              This will reset all {cycleCounts.firstCycle + cycleCounts.secondCycle + cycleCounts.graduated} flashcards in this lecture back to "new" state.
               All progress, intervals, and ease factors will be lost. This cannot be undone.
             </p>
 
