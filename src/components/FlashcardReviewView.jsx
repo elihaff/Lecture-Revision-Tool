@@ -42,11 +42,15 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
 
       if (fetchError) throw fetchError
 
-      // Filter for cards that need learning (new or learning state, not graduated to review yet)
-      const learningCards = allCards.filter(card => {
-        // Include new cards and cards in learning state (NOT review state)
-        return card.state === 'new' || card.state === 'learning'
-      })
+      // Split cards by state
+      const newCards = allCards.filter(card => card.state === 'new')
+      const inLearningCards = allCards.filter(card => card.state === 'learning')
+
+      // Limit new cards to 20 per lecture (Anki-style)
+      const limitedNewCards = newCards.slice(0, 20)
+
+      // Combine learning cards + limited new cards
+      const learningCards = [...inLearningCards, ...limitedNewCards]
 
       // Calculate cycle counts for all cards in lecture
       const firstCycle = allCards.filter(c => (c.state === 'new' || c.state === 'learning') && (c.learning_step === 0 || !c.learning_step)).length
