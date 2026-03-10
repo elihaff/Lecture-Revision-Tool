@@ -4,7 +4,7 @@
  */
 
 import { supabase } from './supabase'
-import { calculateNextReview, getReviewQueue, STATE, CONFIG } from './srsAlgorithm'
+import { calculateNextReview, getReviewQueue, STATE, CONFIG } from './srsAlgorithmV2'
 
 // ============================================================
 // FLASHCARD CRUD OPERATIONS
@@ -304,6 +304,7 @@ export async function resetFlashcard(flashcardId) {
       repetitions: 0,
       due_date: new Date().toISOString(),
       state: STATE.NEW,
+      learning_step: 0,
       last_reviewed_at: null,
       review_count: 0,
       lapse_count: 0,

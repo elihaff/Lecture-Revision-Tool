@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { ArrowLeft, Check, RotateCcw, BookOpen, Loader2, Zap, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Check, RotateCcw, BookOpen, Loader2, Zap, AlertCircle, MinusCircle, RefreshCw } from 'lucide-react'
 import { getLectureReviewQueue, recordReview } from '../lib/flashcardService'
-import { RATING, getNextIntervals, shuffle } from '../lib/srsAlgorithm'
+import { RATING, getNextIntervals, shuffle } from '../lib/srsAlgorithmV2'
+import { resetFlashcard, getFlashcardsByLecture } from '../lib/flashcardService'
 
 export function FlashcardReviewView({ lecture, module, onBack }) {
   // State
@@ -20,6 +21,8 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
   const [saving, setSaving] = useState(false)
   const [sessionComplete, setSessionComplete] = useState(false)
   const [reviewStartTime, setReviewStartTime] = useState(null)
+  const [showResetModal, setShowResetModal] = useState(false)
+  const [resetting, setResetting] = useState(false)
 
   // Load review queue on mount
   useEffect(() => {
@@ -134,6 +137,38 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
       console.error('Failed to record review:', err)
       alert('Failed to save review: ' + err.message)
       setSaving(false)
+    }
+  }
+
+  const handleResetProgress = async () => {
+    setResetting(true)
+
+    try {
+      // Get all flashcards for this lecture
+      const { data: cards, error: fetchError } = await getFlashcardsByLecture(lecture.id)
+
+      if (fetchError) throw fetchError
+
+      // Reset each card
+      for (const card of cards) {
+        await resetFlashcard(card.id)
+      }
+
+      // Reload review queue
+      await loadReviewQueue()
+
+      // Reset UI state
+      setCurrentIndex(0)
+      setIsFlipped(false)
+      setReviewedCardIds(new Set())
+      setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
+      setSessionComplete(false)
+      setShowResetModal(false)
+      setResetting(false)
+    } catch (err) {
+      console.error('Failed to reset progress:', err)
+      alert('Failed to reset progress: ' + err.message)
+      setResetting(false)
     }
   }
 
@@ -308,6 +343,14 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
             </button>
 
             <div className="flex items-center gap-4">
+              <button
+                onClick={() => setShowResetModal(true)}
+                className="flex items-center gap-2 px-3 py-1.5 text-secondary hover:text-primary hover:bg-gray-100 rounded-lg transition-colors"
+                title="Reset all progress for this lecture"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span className="text-sm">Reset Progress</span>
+              </button>
               <div
                 className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium"
                 style={{ backgroundColor: `${module.color}15`, color: module.color }}
@@ -404,7 +447,7 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
                 disabled={saving}
                 className="flex flex-col items-center justify-center gap-2 px-4 py-4 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-medium text-white transition-colors"
               >
-                <span className="text-lg">😕</span>
+                <MinusCircle className="w-5 h-5" />
                 <span className="text-sm">Hard</span>
                 <span className="text-xs opacity-75">{nextIntervals.hard || '?'}</span>
               </button>
@@ -450,6 +493,49 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
           )}
         </div>
       </main>
+
+      {/* Reset Progress Modal */}
+      {showResetModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-surface rounded-2xl p-6 max-w-md w-full shadow-xl border border-divider">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex items-center justify-center w-12 h-12 bg-orange-100 rounded-xl">
+                <AlertCircle className="w-6 h-6 text-orange-600" />
+              </div>
+              <h2 className="text-xl font-bold text-primary">Reset Progress?</h2>
+            </div>
+
+            <p className="text-secondary mb-6">
+              This will reset all {reviewQueue.length} flashcards in this lecture back to "new" state.
+              All progress, intervals, and ease factors will be lost. This cannot be undone.
+            </p>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowResetModal(false)}
+                disabled={resetting}
+                className="flex-1 px-4 py-2 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium text-primary transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleResetProgress}
+                disabled={resetting}
+                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium text-white transition-colors flex items-center justify-center gap-2"
+              >
+                {resetting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Resetting...
+                  </>
+                ) : (
+                  'Reset All'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
