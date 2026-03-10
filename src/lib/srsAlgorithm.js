@@ -35,7 +35,8 @@ export const CONFIG = {
   RELEARNING_INTERVAL: 1, // days
 
   // Learning steps for new cards (in minutes)
-  LEARNING_STEPS: [10, 1440], // 10 minutes, then 1 day
+  // Cards must pass through all steps before graduating
+  LEARNING_STEPS: [1, 10], // 1 minute (in-session), 10 minutes (in-session)
 
   // Ease factor bounds
   STARTING_EASE: 2.5,

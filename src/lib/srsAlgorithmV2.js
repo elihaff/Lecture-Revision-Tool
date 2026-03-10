@@ -29,7 +29,7 @@ export const STATE = {
 export const CONFIG = {
   // Learning steps (in minutes) - cards cycle through these WITHIN the same session
   // Only after completing do they graduate to next-day+ scheduling
-  LEARNING_STEPS: [1, 10], // Step 0: 1 min, Step 1: 10 min, then graduate
+  LEARNING_STEPS: [6, 10], // Step 0: 6 min, Step 1: 10 min, then graduate
 
   // Graduating intervals (when completing final learning step)
   GRADUATING_INTERVAL_GOOD: 1,  // days (when rated Good on final step)
