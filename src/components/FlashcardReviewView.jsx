@@ -76,17 +76,26 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
         return
       }
 
-      // Sort by due_date, but treat overdue cards separately
-      // This makes intervals approximate queue positions
+      // Sort by learning_step FIRST, then by due_date within each step
+      // This ensures all first cycle cards appear before second cycle cards
       const now = new Date()
       learningCards.sort((a, b) => {
+        const stepA = a.learning_step || 0
+        const stepB = b.learning_step || 0
+
+        // Sort by learning step first (step 0 before step 1)
+        if (stepA !== stepB) {
+          return stepA - stepB
+        }
+
+        // Within same step, sort by due date
         const dueA = new Date(a.due_date)
         const dueB = new Date(b.due_date)
 
         const isOverdueA = dueA <= now
         const isOverdueB = dueB <= now
 
-        // Both overdue - maintain original order (shuffle if needed)
+        // Both overdue - maintain order
         if (isOverdueA && isOverdueB) return 0
 
         // A overdue, B not - A comes first
