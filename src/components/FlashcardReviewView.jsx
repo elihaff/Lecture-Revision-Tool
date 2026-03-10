@@ -8,15 +8,18 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
   // State
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [reviewQueue, setReviewQueue] = useState([]) // Cards to review this session
-  const [currentIndex, setCurrentIndex] = useState(0)
+  const [currentCard, setCurrentCard] = useState(null)
   const [isFlipped, setIsFlipped] = useState(false)
-  const [reviewedCardIds, setReviewedCardIds] = useState(new Set())
   const [sessionStats, setSessionStats] = useState({
     again: 0,
     hard: 0,
     good: 0,
     easy: 0,
+  })
+  const [cycleCounts, setCycleCounts] = useState({
+    firstCycle: 0,
+    secondCycle: 0,
+    graduated: 0,
   })
   const [saving, setSaving] = useState(false)
   const [sessionComplete, setSessionComplete] = useState(false)
@@ -24,44 +27,79 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
   const [showResetModal, setShowResetModal] = useState(false)
   const [resetting, setResetting] = useState(false)
 
-  // Load review queue on mount
+  // Load next card on mount and after each review
   useEffect(() => {
-    loadReviewQueue()
+    loadNextCard()
   }, [lecture.id])
 
-  const loadReviewQueue = async () => {
+  const loadNextCard = async () => {
     setLoading(true)
     setError(null)
 
     try {
-      // Get due cards + new cards for this lecture
-      const { dueCards, newCards, total, error: queueError } = await getLectureReviewQueue(lecture.id)
+      // Get all flashcards for this lecture
+      const { data: allCards, error: fetchError } = await getFlashcardsByLecture(lecture.id)
 
-      if (queueError) throw queueError
+      if (fetchError) throw fetchError
 
-      if (total === 0) {
-        setSessionComplete(true)
-        setLoading(false)
-        return
+      const now = new Date()
+
+      // Filter for cards that need learning (new or learning state, not graduated to review yet)
+      const learningCards = allCards.filter(card => {
+        // Include new cards and cards in learning state
+        if (card.state === 'new' || card.state === 'learning') {
+          // Check if card is due now
+          const dueDate = new Date(card.due_date)
+          return dueDate <= now
+        }
+        return false
+      })
+
+      // Calculate cycle counts for all cards in lecture
+      const firstCycle = allCards.filter(c => (c.state === 'new' || c.state === 'learning') && (c.learning_step === 0 || !c.learning_step)).length
+      const secondCycle = allCards.filter(c => c.state === 'learning' && c.learning_step === 1).length
+      const graduated = allCards.filter(c => c.state === 'review').length
+
+      setCycleCounts({
+        firstCycle,
+        secondCycle,
+        graduated,
+      })
+
+      // If no learning cards due, check if session is complete
+      if (learningCards.length === 0) {
+        // Check if there are any cards still in learning (not yet graduated)
+        const stillLearning = allCards.filter(c => c.state === 'new' || c.state === 'learning').length
+
+        if (stillLearning === 0) {
+          // All cards graduated - session complete!
+          setSessionComplete(true)
+          setLoading(false)
+          return
+        } else {
+          // Cards exist but not due yet - show waiting message
+          setCurrentCard(null)
+          setLoading(false)
+          return
+        }
       }
 
-      // Combine and shuffle cards
-      // Show due cards first, then new cards
-      const combined = [...dueCards, ...newCards]
-      const shuffled = shuffle(combined)
+      // Sort by learning_step (step 0 first, then step 1)
+      learningCards.sort((a, b) => {
+        const stepA = a.learning_step || 0
+        const stepB = b.learning_step || 0
+        return stepA - stepB
+      })
 
-      setReviewQueue(shuffled)
+      // Get first card
+      setCurrentCard(learningCards[0])
       setLoading(false)
     } catch (err) {
-      console.error('Failed to load review queue:', err)
+      console.error('Failed to load next card:', err)
       setError(err.message)
       setLoading(false)
     }
   }
-
-  const currentCard = reviewQueue[currentIndex]
-  const remainingCards = reviewQueue.length - reviewedCardIds.size
-  const progress = reviewQueue.length > 0 ? (reviewedCardIds.size / reviewQueue.length) * 100 : 0
 
   // Calculate next intervals for button labels
   const nextIntervals = currentCard && isFlipped ? getNextIntervals(currentCard) : {}
@@ -82,7 +120,7 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
       // Calculate review time
       const timeMs = reviewStartTime ? Date.now() - reviewStartTime : null
 
-      // Record review in database
+      // Record review in database (updates due_date, learning_step, state, etc.)
       const { error: reviewError } = await recordReview(currentCard.id, rating, timeMs)
 
       if (reviewError) {
@@ -96,43 +134,13 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
         [ratingKey]: prev[ratingKey] + 1,
       }))
 
-      // Mark card as reviewed
-      setReviewedCardIds(prev => new Set([...prev, currentCard.id]))
+      // Reset UI state for next card
+      setIsFlipped(false)
+      setReviewStartTime(null)
+      setSaving(false)
 
-      // Handle "Again" cards - add back to queue for same session
-      if (rating === RATING.AGAIN) {
-        // Fetch updated card state from database
-        const { data: updatedCard } = await recordReview(currentCard.id, rating, timeMs)
-
-        // Add card back to queue (3-5 cards ahead)
-        const insertPosition = Math.min(
-          currentIndex + 3 + Math.floor(Math.random() * 3),
-          reviewQueue.length
-        )
-
-        const newQueue = [...reviewQueue]
-        newQueue.splice(insertPosition, 0, updatedCard || currentCard)
-        setReviewQueue(newQueue)
-      }
-
-      // Move to next card or finish
-      if (currentIndex < reviewQueue.length - 1) {
-        setCurrentIndex(currentIndex + 1)
-        setIsFlipped(false)
-        setReviewStartTime(null)
-        setSaving(false)
-      } else {
-        // Check if there are more cards (from Again cycling)
-        if (reviewedCardIds.size < reviewQueue.length) {
-          setCurrentIndex(currentIndex + 1)
-          setIsFlipped(false)
-          setReviewStartTime(null)
-          setSaving(false)
-        } else {
-          setSessionComplete(true)
-          setSaving(false)
-        }
-      }
+      // Load next card (checks due dates and learning steps)
+      await loadNextCard()
     } catch (err) {
       console.error('Failed to record review:', err)
       alert('Failed to save review: ' + err.message)
@@ -154,17 +162,15 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
         await resetFlashcard(card.id)
       }
 
-      // Reload review queue
-      await loadReviewQueue()
-
       // Reset UI state
-      setCurrentIndex(0)
       setIsFlipped(false)
-      setReviewedCardIds(new Set())
       setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
       setSessionComplete(false)
       setShowResetModal(false)
       setResetting(false)
+
+      // Reload next card
+      await loadNextCard()
     } catch (err) {
       console.error('Failed to reset progress:', err)
       alert('Failed to reset progress: ' + err.message)
@@ -256,10 +262,15 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
             </div>
 
             <h2 className="text-2xl font-bold text-primary mb-2">Session Complete!</h2>
-            <p className="text-secondary mb-8">
+            <p className="text-secondary mb-4">
               You reviewed {totalReviewed} card{totalReviewed !== 1 ? 's' : ''}
-              {reviewQueue.length === 0 && ' - All caught up!'}
             </p>
+            <div className="bg-green-50 border border-green-200 rounded-xl p-6 mb-8">
+              <p className="text-green-900 font-medium mb-2">All cards graduated! 🎉</p>
+              <p className="text-sm text-green-700">
+                {cycleCounts.graduated} card{cycleCounts.graduated !== 1 ? 's' : ''} completed learning cycles and scheduled for review.
+              </p>
+            </div>
 
             {/* Stats */}
             {totalReviewed > 0 && (
@@ -286,15 +297,6 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
               </div>
             )}
 
-            {/* No cards message */}
-            {reviewQueue.length === 0 && (
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 mb-8">
-                <p className="text-blue-900 font-medium mb-2">All caught up!</p>
-                <p className="text-sm text-blue-700">
-                  No cards are due for review right now. Come back later to continue learning.
-                </p>
-              </div>
-            )}
 
             {/* Actions */}
             <button
@@ -309,20 +311,57 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
     )
   }
 
-  // No current card (shouldn't happen)
-  if (!currentCard) {
+  // No current card - waiting for cards to be due
+  if (!currentCard && !loading) {
     return (
-      <div className="min-h-screen bg-background p-8">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-2 text-secondary hover:text-primary mb-4 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back to Lecture
-        </button>
-        <div className="flex items-center justify-center py-20">
-          <p className="text-secondary">No cards to review</p>
-        </div>
+      <div className="min-h-screen bg-background">
+        <header className="bg-surface border-b border-divider">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex items-center justify-between h-16">
+              <button
+                onClick={onBack}
+                className="flex items-center gap-2 text-secondary hover:text-primary transition-colors"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span className="text-sm">Back to Lecture</span>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="bg-surface rounded-2xl p-8 shadow-sm border border-divider text-center">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-2xl mb-4">
+              <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+            </div>
+            <h2 className="text-2xl font-bold text-primary mb-2">Waiting for cards...</h2>
+            <p className="text-secondary mb-6">
+              Some cards are in learning cycles but not due yet. They'll appear when their interval completes.
+            </p>
+
+            <div className="flex items-center justify-center gap-4 mb-6">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+                <span className="text-xs text-secondary">
+                  First Cycle: <span className="font-medium text-primary">{cycleCounts.firstCycle}</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                <span className="text-xs text-secondary">
+                  Second Cycle: <span className="font-medium text-primary">{cycleCounts.secondCycle}</span>
+                </span>
+              </div>
+            </div>
+
+            <button
+              onClick={loadNextCard}
+              className="px-6 py-2 bg-accent hover:bg-blue-600 rounded-lg font-medium text-white transition-colors"
+            >
+              Check Again
+            </button>
+          </div>
+        </main>
       </div>
     )
   }
@@ -364,21 +403,27 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
             </div>
           </div>
 
-          {/* Progress Bar */}
+          {/* Cycle Progress */}
           <div className="pb-4">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-secondary">
-                Card {reviewedCardIds.size + 1} of {reviewQueue.length}
-              </span>
-              <span className="text-xs text-secondary">
-                {remainingCards} remaining
-              </span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div
-                className="bg-accent rounded-full h-2 transition-all duration-300"
-                style={{ width: `${progress}%` }}
-              />
+            <div className="flex items-center justify-center gap-4">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+                <span className="text-xs text-secondary">
+                  First Cycle: <span className="font-medium text-primary">{cycleCounts.firstCycle}</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                <span className="text-xs text-secondary">
+                  Second Cycle: <span className="font-medium text-primary">{cycleCounts.secondCycle}</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                <span className="text-xs text-secondary">
+                  Graduated: <span className="font-medium text-primary">{cycleCounts.graduated}</span>
+                </span>
+              </div>
             </div>
           </div>
         </div>
