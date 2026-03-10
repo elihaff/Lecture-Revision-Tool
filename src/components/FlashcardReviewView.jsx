@@ -46,8 +46,12 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
       const newCards = allCards.filter(card => card.state === 'new')
       const inLearningCards = allCards.filter(card => card.state === 'learning')
 
-      // Limit new cards to 20 per lecture (Anki-style)
-      const limitedNewCards = newCards.slice(0, 20)
+      // Only introduce new cards when no cards are in learning state
+      // This ensures the first batch of 20 must complete before introducing more
+      const slotsAvailable = inLearningCards.length === 0 ? 20 : 0
+
+      // Introduce new cards only when starting a fresh batch
+      const limitedNewCards = newCards.slice(0, slotsAvailable)
 
       // Combine learning cards + limited new cards
       const learningCards = [...inLearningCards, ...limitedNewCards]
