@@ -97,7 +97,7 @@ function App() {
                 <span className="font-semibold text-primary">
                   Medical Lecture Study Assistant
                 </span>
-                <span className="ml-2 text-xs text-secondary">v3.72</span>
+                <span className="ml-2 text-xs text-secondary">v3.73</span>
               </div>
             </div>
 

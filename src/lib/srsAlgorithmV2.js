@@ -29,7 +29,7 @@ export const STATE = {
 export const CONFIG = {
   // Learning steps (in minutes) - cards cycle through these WITHIN the same session
   // Only after completing do they graduate to next-day+ scheduling
-  LEARNING_STEPS: [6, 10], // Step 0: 6 min, Step 1: 10 min, then graduate
+  LEARNING_STEPS: [0.5, 6, 10], // Step 0: <1 min, Step 1: 6 min, Step 2: 10 min, then graduate
 
   // Graduating intervals (when completing final learning step)
   GRADUATING_INTERVAL_GOOD: 1,  // days (when rated Good on final step)
@@ -329,13 +329,8 @@ export function getNextIntervals(card) {
     try {
       const { updatedCard } = calculateNextReview(card, rating)
 
-      // For learning cards, show "in session" for short intervals
-      if ((updatedCard.state === STATE.LEARNING || updatedCard.state === STATE.RELEARNING) &&
-          updatedCard.interval_days < 1) {
-        intervals[key.toLowerCase()] = 'session'
-      } else {
-        intervals[key.toLowerCase()] = formatInterval(updatedCard.interval_days)
-      }
+      // Always show formatted interval (not "session")
+      intervals[key.toLowerCase()] = formatInterval(updatedCard.interval_days)
     } catch (error) {
       intervals[key.toLowerCase()] = '?'
     }

@@ -439,7 +439,7 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
               >
                 <RotateCcw className="w-5 h-5" />
                 <span className="text-sm">Again</span>
-                <span className="text-xs opacity-75">&lt;10m</span>
+                <span className="text-xs opacity-75">{nextIntervals.again || '?'}</span>
               </button>
 
               <button
