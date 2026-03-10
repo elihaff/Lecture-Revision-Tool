@@ -26,6 +26,7 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
   const [reviewStartTime, setReviewStartTime] = useState(null)
   const [showResetModal, setShowResetModal] = useState(false)
   const [resetting, setResetting] = useState(false)
+  const [activeSessionCardIds, setActiveSessionCardIds] = useState(null) // Track current batch of cards
 
   // Load next card on mount and after each review
   useEffect(() => {
@@ -42,24 +43,60 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
 
       if (fetchError) throw fetchError
 
-      // Split cards by state
-      const newCards = allCards.filter(card => card.state === 'new')
-      const inLearningCards = allCards.filter(card => card.state === 'learning')
+      // Check if we need to start a new session
+      if (activeSessionCardIds === null) {
+        // No active session - start a new batch of 20 new cards
+        const newCards = allCards.filter(card => card.state === 'new')
 
-      // Only introduce new cards when no cards are in learning state
-      // This ensures the first batch of 20 must complete before introducing more
-      const slotsAvailable = inLearningCards.length === 0 ? 20 : 0
+        if (newCards.length === 0) {
+          // No new cards left - session complete
+          setSessionComplete(true)
+          setLoading(false)
+          return
+        }
 
-      // Introduce new cards only when starting a fresh batch
-      const limitedNewCards = newCards.slice(0, slotsAvailable)
+        // Select first 20 new cards
+        const batchCards = newCards.slice(0, 20)
+        const batchIds = batchCards.map(c => c.id)
 
-      // Combine learning cards + limited new cards
-      const learningCards = [...inLearningCards, ...limitedNewCards]
+        // Store session card IDs
+        setActiveSessionCardIds(batchIds)
 
-      // Calculate cycle counts from the ACTIVE learning queue (not all cards)
-      // This respects the 20 new card limit
-      const firstCycle = learningCards.filter(c => (c.state === 'new' || c.state === 'learning') && (c.learning_step === 0 || !c.learning_step)).length
-      const secondCycle = learningCards.filter(c => c.state === 'learning' && c.learning_step === 1).length
+        // Calculate cycle counts for this batch
+        const firstCycle = batchCards.filter(c => (c.state === 'new' || c.state === 'learning') && (c.learning_step === 0 || !c.learning_step)).length
+        const secondCycle = batchCards.filter(c => c.state === 'learning' && c.learning_step === 1).length
+        const graduated = allCards.filter(c => c.state === 'review').length
+
+        setCycleCounts({
+          firstCycle,
+          secondCycle,
+          graduated,
+        })
+
+        // Sort and get first card
+        const sortedCards = sortCards(batchCards)
+        setCurrentCard(sortedCards[0])
+        setLoading(false)
+        return
+      }
+
+      // Active session exists - get cards from this session that haven't graduated yet
+      const sessionCards = allCards.filter(card =>
+        activeSessionCardIds.includes(card.id) && card.state !== 'review'
+      )
+
+      // Check if all session cards have graduated
+      if (sessionCards.length === 0) {
+        // Session complete - clear session IDs to start new batch on next load
+        setActiveSessionCardIds(null)
+        setSessionComplete(true)
+        setLoading(false)
+        return
+      }
+
+      // Calculate cycle counts for active session cards only
+      const firstCycle = sessionCards.filter(c => (c.state === 'new' || c.state === 'learning') && (c.learning_step === 0 || !c.learning_step)).length
+      const secondCycle = sessionCards.filter(c => c.state === 'learning' && c.learning_step === 1).length
       const graduated = allCards.filter(c => c.state === 'review').length
 
       setCycleCounts({
@@ -68,54 +105,47 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
         graduated,
       })
 
-      // If no learning cards, session is complete
-      if (learningCards.length === 0) {
-        // All cards graduated - session complete!
-        setSessionComplete(true)
-        setLoading(false)
-        return
-      }
-
-      // Sort by learning_step FIRST, then by due_date within each step
-      // This ensures all first cycle cards appear before second cycle cards
-      const now = new Date()
-      learningCards.sort((a, b) => {
-        const stepA = a.learning_step || 0
-        const stepB = b.learning_step || 0
-
-        // Sort by learning step first (step 0 before step 1)
-        if (stepA !== stepB) {
-          return stepA - stepB
-        }
-
-        // Within same step, sort by due date
-        const dueA = new Date(a.due_date)
-        const dueB = new Date(b.due_date)
-
-        const isOverdueA = dueA <= now
-        const isOverdueB = dueB <= now
-
-        // Both overdue - maintain order
-        if (isOverdueA && isOverdueB) return 0
-
-        // A overdue, B not - A comes first
-        if (isOverdueA && !isOverdueB) return -1
-
-        // B overdue, A not - B comes first
-        if (!isOverdueA && isOverdueB) return 1
-
-        // Both not overdue - sort by soonest due date
-        return dueA - dueB
-      })
-
-      // Get first card (soonest due)
-      setCurrentCard(learningCards[0])
+      // Sort and get next card
+      const sortedCards = sortCards(sessionCards)
+      setCurrentCard(sortedCards[0])
       setLoading(false)
     } catch (err) {
       console.error('Failed to load next card:', err)
       setError(err.message)
       setLoading(false)
     }
+  }
+
+  const sortCards = (cards) => {
+    const now = new Date()
+    return cards.sort((a, b) => {
+      const stepA = a.learning_step || 0
+      const stepB = b.learning_step || 0
+
+      // Sort by learning step first (step 0 before step 1)
+      if (stepA !== stepB) {
+        return stepA - stepB
+      }
+
+      // Within same step, sort by due date
+      const dueA = new Date(a.due_date)
+      const dueB = new Date(b.due_date)
+
+      const isOverdueA = dueA <= now
+      const isOverdueB = dueB <= now
+
+      // Both overdue - maintain order
+      if (isOverdueA && isOverdueB) return 0
+
+      // A overdue, B not - A comes first
+      if (isOverdueA && !isOverdueB) return -1
+
+      // B overdue, A not - B comes first
+      if (!isOverdueA && isOverdueB) return 1
+
+      // Both not overdue - sort by soonest due date
+      return dueA - dueB
+    })
   }
 
   // Calculate next intervals for button labels
@@ -183,10 +213,11 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
       setIsFlipped(false)
       setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
       setSessionComplete(false)
+      setActiveSessionCardIds(null) // Clear active session
       setShowResetModal(false)
       setResetting(false)
 
-      // Reload next card
+      // Reload next card (will start new session)
       await loadNextCard()
     } catch (err) {
       console.error('Failed to reset progress:', err)
