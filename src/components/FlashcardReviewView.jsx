@@ -33,6 +33,17 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
     loadNextCard()
   }, [lecture.id])
 
+  // Auto-reload when waiting for cards (minimum delay enforcement)
+  useEffect(() => {
+    if (!currentCard && !loading && !sessionComplete) {
+      const timer = setTimeout(() => {
+        loadNextCard()
+      }, 5000) // Check again after 5 seconds
+
+      return () => clearTimeout(timer)
+    }
+  }, [currentCard, loading, sessionComplete])
+
   const loadNextCard = async () => {
     setLoading(true)
     setError(null)
@@ -94,6 +105,32 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
         return
       }
 
+      // Filter out cards that were reviewed too recently (enforce minimum delay for "Again" cards)
+      const now = new Date()
+      const eligibleCards = sessionCards.filter(card => {
+        if (!card.last_reviewed_at) return true // Never reviewed, show immediately
+        const timeSinceReview = now - new Date(card.last_reviewed_at)
+        return timeSinceReview > 30000 // 30 seconds minimum delay
+      })
+
+      // If no eligible cards yet (all recently reviewed), show waiting state
+      if (eligibleCards.length === 0) {
+        setCurrentCard(null)
+        setLoading(false)
+
+        // Calculate cycle counts for display
+        const firstCycle = sessionCards.filter(c => (c.state === 'new' || c.state === 'learning') && (c.learning_step === 0 || !c.learning_step)).length
+        const secondCycle = sessionCards.filter(c => c.state === 'learning' && c.learning_step === 1).length
+        const graduated = allCards.filter(c => c.state === 'review').length
+
+        setCycleCounts({
+          firstCycle,
+          secondCycle,
+          graduated,
+        })
+        return
+      }
+
       // Calculate cycle counts for active session cards only
       const firstCycle = sessionCards.filter(c => (c.state === 'new' || c.state === 'learning') && (c.learning_step === 0 || !c.learning_step)).length
       const secondCycle = sessionCards.filter(c => c.state === 'learning' && c.learning_step === 1).length
@@ -106,7 +143,7 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
       })
 
       // Sort and get next card
-      const sortedCards = sortCards(sessionCards)
+      const sortedCards = sortCards(eligibleCards)
       setCurrentCard(sortedCards[0])
       setLoading(false)
     } catch (err) {
@@ -359,9 +396,77 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
     )
   }
 
-  // No current card (shouldn't happen since we always show learning cards)
+  // No current card - cards waiting for minimum delay
   if (!currentCard && !loading) {
-    return null
+    return (
+      <div className="min-h-screen bg-background">
+        <header className="bg-surface border-b border-divider">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex items-center justify-between h-16">
+              <button
+                onClick={onBack}
+                className="flex items-center gap-2 text-secondary hover:text-primary transition-colors"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span className="text-sm">Back to Lecture</span>
+              </button>
+
+              <div className="flex items-center gap-4">
+                <div
+                  className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium"
+                  style={{ backgroundColor: `${module.color}15`, color: module.color }}
+                >
+                  {module.abbreviation}
+                </div>
+              </div>
+            </div>
+
+            {/* Cycle Progress */}
+            <div className="pb-4">
+              <div className="flex items-center justify-center gap-4">
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+                  <span className="text-xs text-secondary">
+                    First Cycle: <span className="font-medium text-primary">{cycleCounts.firstCycle}</span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                  <span className="text-xs text-secondary">
+                    Second Cycle: <span className="font-medium text-primary">{cycleCounts.secondCycle}</span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                  <span className="text-xs text-secondary">
+                    Graduated: <span className="font-medium text-primary">{cycleCounts.graduated}</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="bg-surface rounded-2xl p-8 shadow-sm border border-divider text-center">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-2xl mb-4">
+              <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+            </div>
+            <h2 className="text-2xl font-bold text-primary mb-2">Cards processing...</h2>
+            <p className="text-secondary mb-6">
+              Recently reviewed cards will appear in ~30 seconds. Click Continue to check again.
+            </p>
+
+            <button
+              onClick={loadNextCard}
+              className="px-6 py-3 bg-accent hover:bg-blue-600 rounded-xl font-medium text-white transition-colors"
+            >
+              Continue
+            </button>
+          </div>
+        </main>
+      </div>
+    )
   }
 
   // Active review interface
