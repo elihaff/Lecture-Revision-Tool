@@ -42,17 +42,10 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
 
       if (fetchError) throw fetchError
 
-      const now = new Date()
-
       // Filter for cards that need learning (new or learning state, not graduated to review yet)
       const learningCards = allCards.filter(card => {
-        // Include new cards and cards in learning state
-        if (card.state === 'new' || card.state === 'learning') {
-          // Check if card is due now
-          const dueDate = new Date(card.due_date)
-          return dueDate <= now
-        }
-        return false
+        // Include new cards and cards in learning state (NOT review state)
+        return card.state === 'new' || card.state === 'learning'
       })
 
       // Calculate cycle counts for all cards in lecture
@@ -66,32 +59,23 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
         graduated,
       })
 
-      // If no learning cards due, check if session is complete
+      // If no learning cards, session is complete
       if (learningCards.length === 0) {
-        // Check if there are any cards still in learning (not yet graduated)
-        const stillLearning = allCards.filter(c => c.state === 'new' || c.state === 'learning').length
-
-        if (stillLearning === 0) {
-          // All cards graduated - session complete!
-          setSessionComplete(true)
-          setLoading(false)
-          return
-        } else {
-          // Cards exist but not due yet - show waiting message
-          setCurrentCard(null)
-          setLoading(false)
-          return
-        }
+        // All cards graduated - session complete!
+        setSessionComplete(true)
+        setLoading(false)
+        return
       }
 
-      // Sort by learning_step (step 0 first, then step 1)
+      // Sort by due_date (shortest interval first - soonest cards appear first)
+      // This makes intervals approximate queue positions
       learningCards.sort((a, b) => {
-        const stepA = a.learning_step || 0
-        const stepB = b.learning_step || 0
-        return stepA - stepB
+        const dueA = new Date(a.due_date)
+        const dueB = new Date(b.due_date)
+        return dueA - dueB
       })
 
-      // Get first card
+      // Get first card (soonest due)
       setCurrentCard(learningCards[0])
       setLoading(false)
     } catch (err) {
@@ -311,59 +295,9 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
     )
   }
 
-  // No current card - waiting for cards to be due
+  // No current card (shouldn't happen since we always show learning cards)
   if (!currentCard && !loading) {
-    return (
-      <div className="min-h-screen bg-background">
-        <header className="bg-surface border-b border-divider">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between h-16">
-              <button
-                onClick={onBack}
-                className="flex items-center gap-2 text-secondary hover:text-primary transition-colors"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                <span className="text-sm">Back to Lecture</span>
-              </button>
-            </div>
-          </div>
-        </header>
-
-        <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="bg-surface rounded-2xl p-8 shadow-sm border border-divider text-center">
-            <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-2xl mb-4">
-              <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
-            </div>
-            <h2 className="text-2xl font-bold text-primary mb-2">Waiting for cards...</h2>
-            <p className="text-secondary mb-6">
-              Some cards are in learning cycles but not due yet. They'll appear when their interval completes.
-            </p>
-
-            <div className="flex items-center justify-center gap-4 mb-6">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-orange-500"></div>
-                <span className="text-xs text-secondary">
-                  First Cycle: <span className="font-medium text-primary">{cycleCounts.firstCycle}</span>
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                <span className="text-xs text-secondary">
-                  Second Cycle: <span className="font-medium text-primary">{cycleCounts.secondCycle}</span>
-                </span>
-              </div>
-            </div>
-
-            <button
-              onClick={loadNextCard}
-              className="px-6 py-2 bg-accent hover:bg-blue-600 rounded-lg font-medium text-white transition-colors"
-            >
-              Check Again
-            </button>
-          </div>
-        </main>
-      </div>
-    )
+    return null
   }
 
   // Active review interface
