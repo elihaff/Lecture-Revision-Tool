@@ -154,7 +154,6 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
   }
 
   const sortCards = (cards) => {
-    const now = new Date()
     return cards.sort((a, b) => {
       const stepA = a.learning_step || 0
       const stepB = b.learning_step || 0
@@ -164,24 +163,21 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
         return stepA - stepB
       }
 
-      // Within same step, sort by due date
-      const dueA = new Date(a.due_date)
-      const dueB = new Date(b.due_date)
+      // Within same step, sort by last_reviewed_at (unreviewed first, then oldest review first)
+      const reviewedA = a.last_reviewed_at ? new Date(a.last_reviewed_at) : null
+      const reviewedB = b.last_reviewed_at ? new Date(b.last_reviewed_at) : null
 
-      const isOverdueA = dueA <= now
-      const isOverdueB = dueB <= now
+      // A not reviewed, B reviewed - A comes first
+      if (!reviewedA && reviewedB) return -1
 
-      // Both overdue - maintain order
-      if (isOverdueA && isOverdueB) return 0
+      // B not reviewed, A reviewed - B comes first
+      if (reviewedA && !reviewedB) return 1
 
-      // A overdue, B not - A comes first
-      if (isOverdueA && !isOverdueB) return -1
+      // Both not reviewed - maintain order
+      if (!reviewedA && !reviewedB) return 0
 
-      // B overdue, A not - B comes first
-      if (!isOverdueA && isOverdueB) return 1
-
-      // Both not overdue - sort by soonest due date
-      return dueA - dueB
+      // Both reviewed - oldest review first (reviewed longest ago appears sooner)
+      return reviewedA - reviewedB
     })
   }
 
