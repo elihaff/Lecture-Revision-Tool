@@ -1,18 +1,44 @@
 import { useState, useRef, useEffect } from 'react'
-import { ArrowLeft, BookOpen, CheckCircle2, Circle, Copy, Check, FileText, Trash2, GripVertical, Edit2, Plus, Save, X, Upload, Loader2, Download, FileUp, Image, ChevronLeft, ChevronRight, SlidersHorizontal, IndentDecrease, IndentIncrease } from 'lucide-react'
+import { ArrowLeft, BookOpen, Circle, Copy, Check, FileText, Trash2, GripVertical, Edit2, Plus, Save, X, Upload, Loader2, Download, FileUp, Image, ChevronLeft, ChevronRight, SlidersHorizontal } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { resetLectureNotes } from '../lib/lectureService'
-import * as pdfjsLib from 'pdfjs-dist'
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
-import pdfMake from 'pdfmake/build/pdfmake'
-import pdfFonts from 'pdfmake/build/vfs_fonts'
 import { ImagePickerModal } from './ImagePickerModal'
 import { CropModal } from './CropModal'
+import { useToast } from './Toast'
 
-// Initialize pdfmake with fonts
-pdfMake.vfs = pdfFonts.pdfMake ? pdfFonts.pdfMake.vfs : pdfFonts.vfs
-if (typeof pdfMake.addVirtualFileSystem === 'function') {
-  pdfMake.addVirtualFileSystem(pdfMake.vfs || {})
+let pdfjsLibPromise = null
+let pdfMakePromise = null
+
+async function getPdfJsLib() {
+  if (!pdfjsLibPromise) {
+    pdfjsLibPromise = Promise.all([
+      import('pdfjs-dist'),
+      import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+    ]).then(([pdfjsModule, workerModule]) => {
+      const lib = pdfjsModule?.default || pdfjsModule
+      const workerUrl = workerModule?.default || workerModule
+      lib.GlobalWorkerOptions.workerSrc = workerUrl
+      return lib
+    })
+  }
+  return pdfjsLibPromise
+}
+
+async function getPdfMake() {
+  if (!pdfMakePromise) {
+    pdfMakePromise = Promise.all([
+      import('pdfmake/build/pdfmake'),
+      import('pdfmake/build/vfs_fonts'),
+    ]).then(([pdfMakeModule, fontsModule]) => {
+      const pdfMake = pdfMakeModule?.default || pdfMakeModule
+      const pdfFonts = fontsModule?.default || fontsModule
+      pdfMake.vfs = pdfFonts.pdfMake ? pdfFonts.pdfMake.vfs : pdfFonts.vfs
+      if (typeof pdfMake.addVirtualFileSystem === 'function') {
+        pdfMake.addVirtualFileSystem(pdfMake.vfs || {})
+      }
+      return pdfMake
+    })
+  }
+  return pdfMakePromise
 }
 
 let unicodeFontInitPromise = null
@@ -24,11 +50,11 @@ function hasFontFiles(fontDef, vfsMap) {
   return !!(normalFile && boldFile && vfsMap[normalFile] && vfsMap[boldFile])
 }
 
-function hasUnicodePdfFont() {
+function hasUnicodePdfFont(pdfMake) {
   return hasFontFiles(pdfMake.fonts?.NotoSans, pdfMake.vfs)
 }
 
-function normalizeUnicodePdfFont() {
+function normalizeUnicodePdfFont(pdfMake) {
   const noto = pdfMake.fonts?.NotoSans
   if (!noto) return false
 
@@ -47,7 +73,7 @@ function normalizeUnicodePdfFont() {
     }
   }
 
-  return hasUnicodePdfFont()
+  return hasUnicodePdfFont(pdfMake)
 }
 
 function arrayBufferToBase64(buffer) {
@@ -77,7 +103,7 @@ async function loadDirectUnicodeFontVfs() {
   }
 }
 
-async function probePdfFont(fontName) {
+async function probePdfFont(fontName, pdfMake) {
   return new Promise((resolve) => {
     let settled = false
     const done = (ok) => {
@@ -100,14 +126,15 @@ async function probePdfFont(fontName) {
       })
     } catch (error) {
       clearTimeout(timeoutId)
-      console.error(`PDF font probe failed for ${fontName}:`, error)
+      // PDF font probe failed - non-critical
       done(false)
     }
   })
 }
 
 async function ensureUnicodePdfFont() {
-  if (normalizeUnicodePdfFont()) return true
+  const pdfMake = await getPdfMake()
+  if (normalizeUnicodePdfFont(pdfMake)) return true
 
   if (!unicodeFontInitPromise) {
     unicodeFontInitPromise = (async () => {
@@ -118,7 +145,7 @@ async function ensureUnicodePdfFont() {
       try {
         unicodeVfs = await loadDirectUnicodeFontVfs()
       } catch (directError) {
-        console.warn('Direct Unicode TTF load failed, falling back to custom-fonts.js:', directError)
+        // Unicode TTF load failed, using fallback
       }
 
       let tempPdfMake = null
@@ -193,11 +220,11 @@ async function ensureUnicodePdfFont() {
         pdfMake.addFonts(pdfMake.fonts)
       }
 
-      if (!normalizeUnicodePdfFont()) {
+      if (!normalizeUnicodePdfFont(pdfMake)) {
         throw new Error('Unicode font verification failed after registration')
       }
 
-      const canRenderUnicodeFont = await probePdfFont('NotoSans')
+      const canRenderUnicodeFont = await probePdfFont('NotoSans', pdfMake)
       if (!canRenderUnicodeFont) {
         throw new Error('Unicode font probe failed after registration')
       }
@@ -211,9 +238,6 @@ async function ensureUnicodePdfFont() {
 
   return unicodeFontInitPromise
 }
-
-// Set worker path for pdf.js using Vite's URL import
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
 // Convert markdown-like syntax and symbols to HTML
 function markdownToHTML(text) {
@@ -276,18 +300,20 @@ function inferFallbackPointLevels(points) {
 
 function normalizeNotesForDisplay(incomingNotes, fallbackTitle = 'Untitled') {
   const safeNotes = incomingNotes || { title: fallbackTitle, notes: [] }
+  const isAiFlatPolicy = safeNotes?._ai_nesting_policy === 'flat'
+  const allowLegacyInference = safeNotes?._allow_inferred_nesting === true
   return {
     ...safeNotes,
     notes: (safeNotes.notes || []).map((section) => {
       const points = Array.isArray(section?.points) ? section.points : []
       const supplied = clampPointLevels(section?.pointLevels, points.length)
 
-      // Trust backend pointLevels if any exist
-      // Only use heuristic inference as last resort for legacy data with no nesting at all
       const hasAnySuppliedNesting = supplied.some((lvl) => lvl > 0)
-      const pointLevels = hasAnySuppliedNesting
-        ? supplied
-        : clampPointLevels(inferFallbackPointLevels(points), points.length)
+      // Default behavior: trust stored levels and keep flat if no nesting is provided.
+      // Optional heuristic inference is explicitly opt-in for legacy data only.
+      const pointLevels = (allowLegacyInference && !isAiFlatPolicy && !hasAnySuppliedNesting)
+        ? clampPointLevels(inferFallbackPointLevels(points), points.length)
+        : supplied
 
       return {
         ...section,
@@ -326,15 +352,40 @@ function notesToClipboardText(notes, learningObjectives) {
   return text
 }
 
-function buildPointHtmlWithFigureRef(point, figNum = null, level = 0) {
+function buildPointHtmlWithFigureRefs(point, figNums = [], level = 0) {
   const bulletPrefix = level > 0 ? '-' : '•'
   const base = /<(ul|ol|li)\b/i.test(point || '') || String(point || '').trimStart().startsWith('•') || String(point || '').trimStart().startsWith('-')
     ? markdownToHTML(point)
     : `${bulletPrefix} ${markdownToHTML(point)}`
 
-  if (!figNum) return base
-  return `${base}<span class="text-indigo-500 text-xs font-medium"> (Fig ${figNum})</span>`
+  const cleanFigNums = Array.isArray(figNums) ? figNums.filter((n) => Number.isFinite(Number(n))) : []
+  if (cleanFigNums.length === 0) return base
+  const suffix = cleanFigNums.map((n) => `(Fig ${n})`).join(', ')
+  return `${base}<span class="text-indigo-500 text-xs font-medium"> ${suffix}</span>`
 }
+
+function normalizePointImageEntry(entry) {
+  if (!entry) return []
+  if (Array.isArray(entry)) {
+    return entry.filter((item) => item && (item.dataUrl || item.storagePath))
+  }
+  return (entry.dataUrl || entry.storagePath) ? [entry] : []
+}
+
+function normalizePointImagesMap(rawMap) {
+  const normalized = {}
+  Object.entries(rawMap || {}).forEach(([key, value]) => {
+    const images = normalizePointImageEntry(value)
+    if (images.length === 1) {
+      normalized[key] = images[0]
+    } else if (images.length > 1) {
+      normalized[key] = images
+    }
+  })
+  return normalized
+}
+
+const NOTES_IMAGE_BUCKET = 'lecture-pdfs'
 
 const IMAGE_LAYOUT_DEFAULT = 'm'
 const IMAGE_LAYOUT_SCALES = { s: 0.85, m: 1, l: 1.2 }
@@ -488,15 +539,16 @@ function computeFigureRows(figures, sectionLayout, options = {}) {
   return { rows, layout: normalizedLayout }
 }
 
-export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset }) {
+export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
+  const toast = useToast()
   // Local state for editing
   const [notes, setNotes] = useState(lecture.notes || { title: lecture.title, notes: [] })
   const [hasChanges, setHasChanges] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [saveStatus, setSaveStatus] = useState('saved') // 'saved' | 'saving' | 'error'
   const [copied, setCopied] = useState(false)
-  const [showResetConfirm, setShowResetConfirm] = useState(false)
-  const [resetting, setResetting] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [exportingPdf, setExportingPdf] = useState(false)
 
   // Editing state
   const [editingNote, setEditingNote] = useState(null)
@@ -514,9 +566,16 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
   const importInputRef = useRef(null)
   const legacyImportInputRef = useRef(null)
   const csvImportInputRef = useRef(null)
-  const slidesUploadRef = useRef(null)
-  const imageUploadRef = useRef(null)
   const cachedPdfRef = useRef(null) // Cache PDF document to avoid re-downloading
+  const saveInFlightRef = useRef(false)
+  const pendingSavePayloadRef = useRef(null)
+  const saveWaitersRef = useRef([])
+  const exitingRef = useRef(false)
+  const isMountedRef = useRef(true)
+  const saveDebounceTimerRef = useRef(null)
+  const lastDebouncedPayloadRef = useRef(null)
+  const signedUrlCacheRef = useRef(new Map())
+  const exportImageDataUrlCacheRef = useRef(new Map())
 
   // Drag and drop state
   const [draggedPoint, setDraggedPoint] = useState(null)
@@ -527,6 +586,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
   // Image insertion state
   const [pdfThumbnails, setPdfThumbnails] = useState([])
   const [thumbnailsLoading, setThumbnailsLoading] = useState(false)
+  const [thumbnailsError, setThumbnailsError] = useState('')
   const [pointImages, setPointImages] = useState({})
   const [sectionImages, setSectionImages] = useState({})
   const [imageReferences, setImageReferences] = useState({})
@@ -537,8 +597,183 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
   const [loadingHighRes, setLoadingHighRes] = useState(false) // Loading state for high-res image fetch
 
   const learningObjectives = lecture.learning_objectives || []
-  const completedObjectives = learningObjectives.filter(obj => obj.completed).length
   const sections = notes.notes || []
+  const hasSlidesSource = pdfThumbnails.length > 0
+  const hasInsertedImages = Object.keys(pointImages).length > 0 || Object.keys(sectionImages).length > 0
+  const canInsertFromSlides = hasSlidesSource || hasInsertedImages
+
+  const getImageInsertionUnavailableReason = () => {
+    if (thumbnailsLoading || uploadingSlides) return 'Slides are still loading. Please wait a moment and try again.'
+    if (thumbnailsError) return `${thumbnailsError} Upload slides PDF to enable image insertion.`
+    if (!lecture?.pdf_path) return 'No slides PDF is linked to this lecture yet. Upload slides PDF to enable image insertion.'
+    return 'Slides are not available for this lecture yet. Upload slides PDF to enable image insertion.'
+  }
+
+  const dataUrlToBlob = async (dataUrl) => {
+    const response = await fetch(dataUrl)
+    return await response.blob()
+  }
+
+  const uploadImageDataUrl = async (dataUrl, kind = 'image') => {
+    const { data: authData } = await supabase.auth.getUser()
+    const userId = authData?.user?.id || 'anonymous'
+    const ext = dataUrl.includes('image/png') ? 'png' : 'jpg'
+    const path = `${userId}/${lecture.id}/notes-assets/${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`
+    const blob = await dataUrlToBlob(dataUrl)
+    const { error } = await supabase.storage
+      .from(NOTES_IMAGE_BUCKET)
+      .upload(path, blob, { upsert: false, contentType: blob.type || `image/${ext}` })
+    if (error) throw error
+    return path
+  }
+
+  const ensureImagePersisted = async (image, kindPrefix = 'point') => {
+    if (!image || typeof image !== 'object') return image
+    const next = { ...image }
+
+    if (typeof next.dataUrl === 'string' && next.dataUrl.startsWith('data:image/')) {
+      next.storagePath = await uploadImageDataUrl(next.dataUrl, `${kindPrefix}-cropped`)
+      delete next.dataUrl
+    } else if (next.storagePath) {
+      delete next.dataUrl
+    }
+
+    if (typeof next.originalDataUrl === 'string' && next.originalDataUrl.startsWith('data:image/')) {
+      next.originalStoragePath = await uploadImageDataUrl(next.originalDataUrl, `${kindPrefix}-original`)
+      delete next.originalDataUrl
+    } else if (next.originalStoragePath) {
+      delete next.originalDataUrl
+    }
+
+    return next
+  }
+
+  const ensureImageEntryPersisted = async (entry, kindPrefix = 'point') => {
+    const normalized = normalizePointImageEntry(entry)
+    if (normalized.length === 0) return null
+    const persisted = []
+    for (let i = 0; i < normalized.length; i++) {
+      persisted.push(await ensureImagePersisted(normalized[i], `${kindPrefix}-${i}`))
+    }
+    return persisted.length === 1 ? persisted[0] : persisted
+  }
+
+  const prepareNotesPayloadForPersist = async (payload) => {
+    const next = { ...payload }
+    const rawPointImages = next._pointImages || {}
+    const rawSectionImages = next._sectionImages || {}
+
+    const persistedPointImages = {}
+    for (const [key, value] of Object.entries(rawPointImages)) {
+      const persisted = await ensureImageEntryPersisted(value, `point-${key}`)
+      if (persisted) persistedPointImages[key] = persisted
+    }
+
+    const persistedSectionImages = {}
+    for (const [key, value] of Object.entries(rawSectionImages)) {
+      const persisted = await ensureImagePersisted(value, `section-${key}`)
+      if (persisted) persistedSectionImages[key] = persisted
+    }
+
+    next._pointImages = Object.keys(persistedPointImages).length > 0 ? persistedPointImages : undefined
+    next._sectionImages = Object.keys(persistedSectionImages).length > 0 ? persistedSectionImages : undefined
+    return next
+  }
+
+  const getSignedUrlsMap = async (paths) => {
+    const now = Date.now()
+    const uniquePaths = [...new Set((paths || []).filter(Boolean))]
+    const urlsMap = {}
+    const missingPaths = []
+
+    uniquePaths.forEach((path) => {
+      const cached = signedUrlCacheRef.current.get(path)
+      if (cached && cached.expiresAt > now) {
+        urlsMap[path] = cached.url
+      } else {
+        missingPaths.push(path)
+      }
+    })
+
+    if (missingPaths.length > 0) {
+      const { data, error } = await supabase.storage
+        .from(NOTES_IMAGE_BUCKET)
+        .createSignedUrls(missingPaths, 60 * 60 * 24 * 7)
+
+      if (error) {
+        // Failed to create signed URLs - non-critical
+      } else {
+        ;(data || []).forEach((row) => {
+          if (!row?.path || !row?.signedUrl) return
+          urlsMap[row.path] = row.signedUrl
+          signedUrlCacheRef.current.set(row.path, {
+            url: row.signedUrl,
+            expiresAt: now + (1000 * 60 * 60 * 24 * 6) // refresh before 7-day expiry
+          })
+        })
+      }
+    }
+
+    return urlsMap
+  }
+
+  const hydrateImageForDisplay = (image, signedUrlsMap = {}) => {
+    if (!image || typeof image !== 'object') return image
+    const next = { ...image }
+
+    if (!next.dataUrl && next.storagePath) {
+      const signedUrl = signedUrlsMap[next.storagePath]
+      if (signedUrl) next.dataUrl = signedUrl
+    }
+    if (!next.originalDataUrl && next.originalStoragePath) {
+      const signedOriginalUrl = signedUrlsMap[next.originalStoragePath]
+      if (signedOriginalUrl) next.originalDataUrl = signedOriginalUrl
+    }
+    return next
+  }
+
+  const hydrateImageEntryForDisplay = (entry, signedUrlsMap = {}) => {
+    const normalized = normalizePointImageEntry(entry)
+    if (normalized.length === 0) return null
+    const hydrated = normalized.map((img) => hydrateImageForDisplay(img, signedUrlsMap))
+    return hydrated.length === 1 ? hydrated[0] : hydrated
+  }
+
+  const hydrateImageMapsForDisplay = async (rawPointImages, rawSectionImages) => {
+    const paths = []
+    Object.values(rawPointImages || {}).forEach((entry) => {
+      const normalized = normalizePointImageEntry(entry)
+      normalized.forEach((img) => {
+        if (img?.storagePath) paths.push(img.storagePath)
+        if (img?.originalStoragePath) paths.push(img.originalStoragePath)
+      })
+    })
+    Object.values(rawSectionImages || {}).forEach((img) => {
+      if (img?.storagePath) paths.push(img.storagePath)
+      if (img?.originalStoragePath) paths.push(img.originalStoragePath)
+    })
+    const signedUrlsMap = await getSignedUrlsMap(paths)
+
+    const point = {}
+    for (const [key, value] of Object.entries(rawPointImages || {})) {
+      const hydrated = hydrateImageEntryForDisplay(value, signedUrlsMap)
+      if (hydrated) point[key] = hydrated
+    }
+    const section = {}
+    for (const [key, value] of Object.entries(rawSectionImages || {})) {
+      const hydrated = hydrateImageForDisplay(value, signedUrlsMap)
+      if (hydrated) section[key] = hydrated
+    }
+    return { point, section }
+  }
+
+  const openImagePickerOrExplain = (target) => {
+    if (canInsertFromSlides) {
+      setImagePickerOpen(target)
+      return
+    }
+    toast.info(getImageInsertionUnavailableReason())
+  }
 
   const getSectionPointLevels = (section) => {
     const pointsLength = section?.points?.length || 0
@@ -566,16 +801,10 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     cachedPdfRef.current = null
 
     // Load embedded image data if present
-    if (lecture.notes?._pointImages) {
-      setPointImages(lecture.notes._pointImages)
-    } else {
-      setPointImages({})
-    }
-    if (lecture.notes?._sectionImages) {
-      setSectionImages(lecture.notes._sectionImages)
-    } else {
-      setSectionImages({})
-    }
+    const rawPointImages = lecture.notes?._pointImages ? normalizePointImagesMap(lecture.notes._pointImages) : {}
+    const rawSectionImages = lecture.notes?._sectionImages || {}
+    setPointImages(rawPointImages)
+    setSectionImages(rawSectionImages)
     if (lecture.notes?._imageReferences) {
       setImageReferences(lecture.notes._imageReferences)
     } else {
@@ -591,23 +820,37 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     } else {
       setFlashcards([])
     }
+
+    ;(async () => {
+      const hydrated = await hydrateImageMapsForDisplay(rawPointImages, rawSectionImages)
+      setPointImages(hydrated.point)
+      setSectionImages(hydrated.section)
+    })()
   }, [lecture.id])
 
-  const buildNotesPayload = (baseNotes = notes) => ({
-    ...baseNotes,
-    _pointImages: Object.keys(pointImages).length > 0 ? pointImages : undefined,
-    _sectionImages: Object.keys(sectionImages).length > 0 ? sectionImages : undefined,
-    _imageReferences: Object.keys(imageReferences).length > 0 ? imageReferences : undefined,
-    _imageLayout: Object.keys(imageLayout).length > 0 ? imageLayout : undefined,
-    _flashcards: flashcards.length > 0 ? flashcards : undefined,
-  })
+  const buildNotesPayload = (baseNotes = notes, assetOverrides = {}) => {
+    const nextPointImages = assetOverrides.pointImages ?? pointImages
+    const nextSectionImages = assetOverrides.sectionImages ?? sectionImages
+    const nextImageReferences = assetOverrides.imageReferences ?? imageReferences
+    const nextImageLayout = assetOverrides.imageLayout ?? imageLayout
+
+    return {
+      ...baseNotes,
+      _pointImages: Object.keys(nextPointImages).length > 0 ? nextPointImages : undefined,
+      _sectionImages: Object.keys(nextSectionImages).length > 0 ? nextSectionImages : undefined,
+      _imageReferences: Object.keys(nextImageReferences).length > 0 ? nextImageReferences : undefined,
+      _imageLayout: Object.keys(nextImageLayout).length > 0 ? nextImageLayout : undefined,
+    }
+  }
 
   // Generate PDF thumbnails when lecture has a pdf_path
   useEffect(() => {
     const generateThumbnails = async () => {
-      console.log('Thumbnail generation check - pdf_path:', lecture.pdf_path)
+      // Thumbnail generation check
+      setThumbnailsError('')
       if (!lecture.pdf_path) {
-        console.log('No pdf_path found on lecture, skipping thumbnail generation')
+        // No pdf_path found
+        setPdfThumbnails([])
         return
       }
 
@@ -619,11 +862,13 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
           .download(lecture.pdf_path)
 
         if (downloadError) {
-          console.error('Failed to download PDF for thumbnails:', downloadError)
+          // Failed to download PDF
+          setThumbnailsError('Could not load slides from storage.')
           return
         }
 
         const arrayBuffer = await pdfBlob.arrayBuffer()
+        const pdfjsLib = await getPdfJsLib()
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
 
         // Cache the PDF document for later high-res rendering
@@ -659,9 +904,10 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         }
 
         setPdfThumbnails(thumbnails)
-        console.log(`Generated ${thumbnails.length} PDF thumbnails`)
+        // Thumbnails generated
       } catch (error) {
-        console.error('Failed to generate PDF thumbnails:', error)
+        // Thumbnail generation failed
+        setThumbnailsError('Could not process slides for image insertion.')
       } finally {
         setThumbnailsLoading(false)
       }
@@ -676,48 +922,190 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     ensureUnicodePdfFont()
       .then(() => setUnicodeFontReady(true))
       .catch((error) => {
-        console.error('Unicode font preload failed, using fallback glyph mapping:', error)
+        // Font preload failed, using fallback
         setUnicodeFontReady(false)
       })
   }, [])
 
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (saveDebounceTimerRef.current) {
+        clearTimeout(saveDebounceTimerRef.current)
+        saveDebounceTimerRef.current = null
+      }
+    }
+  }, [])
+
+  const flushQueuedSaves = async () => {
+    if (saveInFlightRef.current) return
+    saveInFlightRef.current = true
+
+    try {
+      while (pendingSavePayloadRef.current) {
+        const payload = pendingSavePayloadRef.current
+        pendingSavePayloadRef.current = null
+
+        const preparedPayload = await prepareNotesPayloadForPersist(payload)
+        const { error } = await supabase
+          .from('lectures')
+          .update({ notes: preparedPayload })
+          .eq('id', lecture.id)
+
+        if (error) throw error
+      }
+
+      if (isMountedRef.current) {
+        setHasChanges(false)
+        setSaveStatus('saved')
+      }
+      const waiters = saveWaitersRef.current.splice(0)
+      waiters.forEach(({ resolve }) => resolve())
+    } catch (error) {
+      if (isMountedRef.current) {
+        setSaveStatus('error')
+      }
+      const waiters = saveWaitersRef.current.splice(0)
+      waiters.forEach(({ reject }) => reject(error))
+    } finally {
+      saveInFlightRef.current = false
+      if (pendingSavePayloadRef.current) {
+        flushQueuedSaves()
+      }
+    }
+  }
+
+  const enqueueNotesSave = (notesWithImages) => {
+    if (isMountedRef.current) {
+      setSaveStatus('saving')
+    }
+    pendingSavePayloadRef.current = notesWithImages
+    const waitForFlush = new Promise((resolve, reject) => {
+      saveWaitersRef.current.push({ resolve, reject })
+    })
+    flushQueuedSaves()
+    return waitForFlush
+  }
+
+  const scheduleNotesSave = (notesWithImages, immediate = false) => {
+    lastDebouncedPayloadRef.current = notesWithImages
+    if (immediate) {
+      if (saveDebounceTimerRef.current) {
+        clearTimeout(saveDebounceTimerRef.current)
+        saveDebounceTimerRef.current = null
+      }
+      return enqueueNotesSave(notesWithImages)
+    }
+    if (saveDebounceTimerRef.current) {
+      clearTimeout(saveDebounceTimerRef.current)
+    }
+    saveDebounceTimerRef.current = setTimeout(() => {
+      const payload = lastDebouncedPayloadRef.current
+      saveDebounceTimerRef.current = null
+      if (payload) enqueueNotesSave(payload)
+    }, 900)
+    return Promise.resolve()
+  }
+
+  const waitForPendingSaves = async () => {
+    if (saveDebounceTimerRef.current) {
+      clearTimeout(saveDebounceTimerRef.current)
+      saveDebounceTimerRef.current = null
+      if (lastDebouncedPayloadRef.current) {
+        await enqueueNotesSave(lastDebouncedPayloadRef.current)
+      }
+    }
+    if (!saveInFlightRef.current && !pendingSavePayloadRef.current) return
+    await new Promise((resolve, reject) => {
+      saveWaitersRef.current.push({ resolve, reject })
+    })
+  }
+
   // Save notes to Supabase (including image data)
   const saveNotes = async () => {
-    setSaving(true)
-
-    // Include image data with notes
-    const notesWithImages = buildNotesPayload(notes)
-
-    const { error } = await supabase
-      .from('lectures')
-      .update({ notes: notesWithImages })
-      .eq('id', lecture.id)
-
-    if (error) {
-      console.error('Failed to save notes:', error)
-      alert('Failed to save: ' + error.message)
-    } else {
-      setHasChanges(false)
+    if (isMountedRef.current) {
+      setSaving(true)
+      setSaveStatus('saving')
     }
-    setSaving(false)
+    const notesWithImages = buildNotesPayload(notes)
+    try {
+      await enqueueNotesSave(notesWithImages)
+      if (isMountedRef.current) {
+        setHasChanges(false)
+        setSaveStatus('saved')
+      }
+    } catch {
+      toast.error('Failed to save notes. Please try again.')
+      if (isMountedRef.current) {
+        setSaveStatus('error')
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setSaving(false)
+      }
+    }
   }
 
   // Update notes locally and auto-save
-  const updateNotes = async (newNotes) => {
+  const updateNotes = async (newNotes, assetOverrides = {}) => {
     setNotes(newNotes)
 
-    // Auto-save immediately
-    const notesWithImages = buildNotesPayload(newNotes)
+    // Auto-save with debounce to avoid writing on every single small edit.
+    const notesWithImages = buildNotesPayload(newNotes, assetOverrides)
+    try {
+      await scheduleNotesSave(notesWithImages, false)
+      setHasChanges(true)
+      if (isMountedRef.current) {
+        setSaveStatus('saving')
+      }
+    } catch (error) {
+      // Auto-save failed
+      if (isMountedRef.current) {
+        setSaveStatus('error')
+      }
+    }
+  }
 
-    const { error } = await supabase
-      .from('lectures')
-      .update({ notes: notesWithImages })
-      .eq('id', lecture.id)
+  const saveNotesAssets = async (assetOverrides) => {
+    const notesWithImages = buildNotesPayload(notes, assetOverrides)
+    try {
+      if (isMountedRef.current) {
+        setSaveStatus('saving')
+      }
+      await scheduleNotesSave(notesWithImages, true)
+    } catch (error) {
+      // Asset save failed
+      if (isMountedRef.current) {
+        setSaveStatus('error')
+      }
+    }
+  }
 
-    if (error) {
-      console.error('Failed to auto-save notes:', error)
-    } else {
-      setHasChanges(false)
+  const handleBack = async () => {
+    if (exitingRef.current) return
+    exitingRef.current = true
+    if (isMountedRef.current) {
+      setSaving(true)
+      setSaveStatus('saving')
+    }
+
+    try {
+      await waitForPendingSaves()
+      if (onBack) {
+        await onBack()
+      }
+    } catch {
+      toast.error('Could not save your changes. Please try again.')
+      exitingRef.current = false
+    } finally {
+      if (isMountedRef.current) {
+        setSaving(false)
+      }
     }
   }
 
@@ -729,30 +1117,13 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch (err) {
-      console.error('Failed to copy:', err)
+      // Copy failed silently
     }
-  }
-
-  // Reset handler
-  const handleReset = async () => {
-    setResetting(true)
-    const result = await resetLectureNotes(lecture.id)
-    if (result.success) {
-      setShowResetConfirm(false)
-      if (onReset) {
-        onReset()
-      } else {
-        onBack()
-      }
-    } else {
-      alert('Failed to reset: ' + result.error)
-    }
-    setResetting(false)
   }
 
   const handleGenerateFlashcards = async () => {
     if (!notes?.notes?.length) {
-      alert('Please generate notes first, then generate flashcards.')
+      toast.warn('Please generate notes first, then generate flashcards.')
       return
     }
 
@@ -766,10 +1137,12 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
       setFlashcards(generated)
       setHasChanges(true)
-      alert(`Generated ${generated.length} flashcards`)
-    } catch (error) {
-      console.error('Failed to generate flashcards:', error)
-      alert(`Failed to generate flashcards: ${error.message}`)
+      toast.success(`Generated ${generated.length} flashcards`)
+      if (onOpenFlashcards) {
+        onOpenFlashcards()
+      }
+    } catch {
+      toast.error('Failed to generate flashcards. Please try again.')
     } finally {
       setGeneratingFlashcards(false)
     }
@@ -787,16 +1160,6 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     setHasChanges(true)
   }
 
-  const defaultFlashcardTags = () => {
-    const source = (notes.title || lecture.title || 'Lecture')
-      .split(/[\s_\-.]+/)
-      .filter(Boolean)
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join('')
-    const modulePrefix = module?.abbreviation ? `${module.abbreviation}_` : ''
-    return `Day2 ${modulePrefix}${source}`.trim()
-  }
-
   const handleAddFlashcard = () => {
     if (!newCard.front.trim() || !newCard.back.trim()) return
     setFlashcards((prev) => [
@@ -804,7 +1167,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       {
         front: newCard.front.trim(),
         back: newCard.back.trim(),
-        tags: defaultFlashcardTags(),
+        tags: '',
       },
     ])
     setNewCard({ front: '', back: '' })
@@ -861,7 +1224,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         const cells = parseCsvLine(lines[i])
         const front = String(cells[0] || '').trim()
         const back = String(cells[1] || '').trim()
-        const tags = String(cells[2] || defaultFlashcardTags()).trim()
+        const tags = String(cells[2] || '').trim()
         if (!front || !back) continue
         imported.push({ front, back, tags })
       }
@@ -872,10 +1235,9 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
       setFlashcards(imported)
       setHasChanges(true)
-      alert(`Imported ${imported.length} flashcards from CSV`)
-    } catch (error) {
-      console.error('CSV import failed:', error)
-      alert(`CSV import failed: ${error.message}`)
+      toast.success(`Imported ${imported.length} flashcards from CSV`)
+    } catch {
+      toast.error('CSV import failed. Please check your file format.')
     } finally {
       e.target.value = ''
     }
@@ -920,9 +1282,8 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       setImporting(true)
 
       const arrayBuffer = await file.arrayBuffer()
+      const pdfjsLib = await getPdfJsLib()
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
-
-      console.log('PDF loaded, pages:', pdf.numPages)
 
       const startDelimiter = '[EMBEDDED_NOTES_DATA_START]'
       const endDelimiter = '[EMBEDDED_NOTES_DATA_END]'
@@ -932,10 +1293,8 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       // First try to get from PDF metadata (new method - no blank pages)
       const metadata = await pdf.getMetadata()
       const keywords = metadata?.info?.Keywords || ''
-      console.log('PDF Keywords metadata length:', keywords.length)
 
       if (keywords.includes(startDelimiter)) {
-        console.log('Found embedded JSON in PDF metadata (keywords)')
         const startIndex = keywords.indexOf(startDelimiter)
         const endIndex = keywords.indexOf(endDelimiter)
         if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
@@ -946,7 +1305,6 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
       // Fall back to content extraction (old method for backwards compatibility)
       if (!importedNotes) {
-        console.log('Trying content extraction fallback...')
         let allText = ''
         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
           const page = await pdf.getPage(pageNum)
@@ -955,13 +1313,10 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
           allText += pageText
         }
 
-        console.log('Total text length:', allText.length)
-
         const startIndex = allText.indexOf(startDelimiter)
         const endIndex = allText.indexOf(endDelimiter)
 
         if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-          console.log('Found embedded JSON in PDF content')
           const jsonStr = allText.substring(startIndex + startDelimiter.length, endIndex).trim()
           importedNotes = JSON.parse(jsonStr)
         } else {
@@ -973,8 +1328,6 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       if (!importedNotes || !importedNotes.title || !importedNotes.notes) {
         throw new Error('Invalid notes structure in PDF metadata')
       }
-
-      console.log('Importing notes:', importedNotes.title, '- Sections:', importedNotes.notes.length)
 
       // Clean up any image data (not supported in this version)
       const { _pointImages, _sectionImages, _imageReferences, ...cleanNotes } = importedNotes
@@ -1000,15 +1353,13 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
           .eq('id', lecture.id)
       }
 
-      alert(`Imported successfully: ${importedNotes.notes.length} sections. Click "Save Changes" to save.`)
+      toast.success(`Imported ${importedNotes.notes.length} sections. Click "Save Changes" to save.`)
 
     } catch (error) {
-      console.error('PDF import error:', error)
-
       if (error.message === 'NO_METADATA') {
-        alert('This PDF cannot be imported.\n\nThis PDF doesn\'t contain embedded metadata. Only PDFs exported from the notes tool can be imported.')
+        toast.error('This PDF cannot be imported. Only PDFs exported from this tool can be re-imported.')
       } else {
-        alert(`Import failed: ${error.message}\n\nPlease ensure you're uploading a PDF that was previously exported from this tool.`)
+        toast.error('Import failed. Please ensure you\'re uploading a PDF exported from this tool.')
       }
     } finally {
       setImporting(false)
@@ -1033,18 +1384,23 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     try {
       setConvertingLegacy(true)
 
-      // Convert PDF to base64
-      const arrayBuffer = await file.arrayBuffer()
-      const base64Data = btoa(
-        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-      )
-
       // Get user session for auth
       const { data: sessionData } = await supabase.auth.getSession()
       const accessToken = sessionData?.session?.access_token
+      const userId = sessionData?.session?.user?.id
 
-      if (!accessToken) {
+      if (!accessToken || !userId) {
         throw new Error('Please sign in to convert notes')
+      }
+
+      // Upload the notes PDF to storage, then convert by storage path.
+      const notesPath = `${userId}/${lecture.id}/notes-legacy-import.pdf`
+      const { error: notesUploadError } = await supabase.storage
+        .from('lecture-pdfs')
+        .upload(notesPath, file, { upsert: true })
+
+      if (notesUploadError) {
+        throw new Error(`Failed to upload notes: ${notesUploadError.message}`)
       }
 
       // Call Edge Function to convert the PDF
@@ -1058,7 +1414,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
           'Authorization': `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
-          pdf_base64: base64Data,
+          notes_path: notesPath,
         }),
       })
 
@@ -1086,11 +1442,10 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
           .eq('id', lecture.id)
       }
 
-      alert(`Converted successfully: ${convertedNotes.notes.length} sections. Click "Save Changes" to save.`)
+      toast.success(`Converted ${convertedNotes.notes.length} sections. Click "Save Changes" to save.`)
 
-    } catch (error) {
-      console.error('Legacy import error:', error)
-      alert(`Conversion failed: ${error.message}`)
+    } catch {
+      toast.error('Conversion failed. Please try again.')
     } finally {
       setConvertingLegacy(false)
       e.target.value = ''
@@ -1134,7 +1489,9 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       }
 
       // Generate thumbnails from the uploaded file
+      setThumbnailsError('')
       const arrayBuffer = await file.arrayBuffer()
+      const pdfjsLib = await getPdfJsLib()
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
 
       const thumbnails = []
@@ -1164,11 +1521,11 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       }
 
       setPdfThumbnails(thumbnails)
-      alert(`Uploaded ${thumbnails.length} slides. You can now insert images from slides into your notes.`)
+      toast.success(`Uploaded ${thumbnails.length} slides. You can now insert images.`)
 
     } catch (error) {
-      console.error('Slides upload error:', error)
-      alert(`Failed to upload slides: ${error.message}`)
+      setThumbnailsError(`Slides upload failed: ${error.message}`)
+      toast.error('Failed to upload slides. Please try again.')
     } finally {
       setUploadingSlides(false)
       e.target.value = ''
@@ -1176,8 +1533,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
   }
 
   // Handle image upload from device
-  const handleImageUpload = async (e) => {
-    const files = e.target.files
+  const handleImageUploadFiles = async (files) => {
     if (!files || files.length === 0) return
 
     setUploadingImages(true)
@@ -1207,21 +1563,64 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       // Add images to pdfThumbnails so they appear in the image selector
       setPdfThumbnails(prev => [...prev, ...newImages])
 
-      alert(`Added ${newImages.length} image${newImages.length !== 1 ? 's' : ''}. You can now insert them into your notes.`)
+      toast.success(`Added ${newImages.length} image${newImages.length !== 1 ? 's' : ''}. You can now insert them.`)
 
-    } catch (error) {
-      console.error('Image upload error:', error)
-      alert(`Failed to upload images: ${error.message}`)
+    } catch {
+      toast.error('Failed to upload images. Please try again.')
     } finally {
       setUploadingImages(false)
-      e.target.value = ''
     }
   }
 
+  const handleImageUpload = async (e) => {
+    const files = e.target.files
+    await handleImageUploadFiles(files)
+    e.target.value = ''
+  }
+
   // PDF Export handler - exports notes as PDF with embedded metadata for re-importing
-  const handleExportPDF = () => {
-    if (!notes) return
-    const useUnicodeFont = normalizeUnicodePdfFont()
+  const handleExportPDF = async () => {
+    if (!notes || exportingPdf) return
+    setExportingPdf(true)
+    const pdfMake = await getPdfMake()
+    const useUnicodeFont = normalizeUnicodePdfFont(pdfMake)
+    const exportLectureTitle = String(lecture?.title || notes?.title || 'Lecture Notes')
+    const exportFileBase = `${exportLectureTitle
+      .replace(/[^a-zA-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      || 'Lecture_Notes'}_notes`
+    const exportFileName = `${exportFileBase}.pdf`
+
+    const fetchImageAsDataUrl = async (src) => {
+      if (!src || typeof src !== 'string') return null
+      if (src.startsWith('data:image/')) return src
+      if (!/^https?:\/\//i.test(src)) return null
+
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 20000)
+      let response
+      try {
+        response = await fetch(src, { signal: controller.signal })
+      } finally {
+        clearTimeout(timeoutId)
+      }
+      if (!response.ok) throw new Error(`Image fetch failed (${response.status})`)
+      const blob = await response.blob()
+
+      return await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : null)
+        reader.onerror = () => reject(new Error('Failed to convert image to data URL'))
+        reader.readAsDataURL(blob)
+      })
+    }
+    const fetchImageAsDataUrlCached = async (src) => {
+      if (!src) return null
+      if (!exportImageDataUrlCacheRef.current.has(src)) {
+        exportImageDataUrlCacheRef.current.set(src, fetchImageAsDataUrl(src).catch(() => null))
+      }
+      return await exportImageDataUrlCacheRef.current.get(src)
+    }
 
     // Helper function to parse text/HTML and keep line breaks + list structure for PDF
     const parseRawText = (text) => {
@@ -1334,7 +1733,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
     const parseText = (text) => parseInlineText(parseRawText(text))
 
-    const parsePointToBulletRows = (point, figRef = null, pointLevel = 0) => {
+    const parsePointToBulletRows = (point, figRefs = [], pointLevel = 0) => {
       const raw = parseRawText(point)
       const lines = raw
         .split('\n')
@@ -1343,15 +1742,19 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
       const rows = []
       let figRefAttached = false
+      const validFigRefs = Array.isArray(figRefs)
+        ? figRefs.filter((n) => Number.isFinite(Number(n)))
+        : []
 
       lines.forEach((line) => {
         const content = line.trim().replace(/^([•\-])\s+/, '')
         const marker = pointLevel > 0 ? '-' : '•'
         const parsed = parseInlineText(`${marker} ${content}`)
         let textValue = parsed
-        if (figRef && !figRefAttached) {
+        if (validFigRefs.length > 0 && !figRefAttached) {
           const asArray = Array.isArray(parsed) ? parsed : [{ text: parsed }]
-          asArray.push({ text: ` (Fig ${figRef})`, fontSize: 9, color: '#6366F1' })
+          const figRefText = validFigRefs.map((n) => `(Fig ${n})`).join(', ')
+          asArray.push({ text: ` ${figRefText}`, fontSize: 9, color: '#6366F1' })
           textValue = asArray
           figRefAttached = true
         }
@@ -1366,8 +1769,8 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       if (rows.length === 0) {
         const marker = pointLevel > 0 ? '-' : '•'
         const parsed = parseInlineText(`${marker} ${raw}`)
-        const textValue = figRef
-          ? [...(Array.isArray(parsed) ? parsed : [{ text: parsed }]), { text: ` (Fig ${figRef})`, fontSize: 9, color: '#6366F1' }]
+        const textValue = validFigRefs.length > 0
+          ? [...(Array.isArray(parsed) ? parsed : [{ text: parsed }]), { text: ` ${validFigRefs.map((n) => `(Fig ${n})`).join(', ')}`, fontSize: 9, color: '#6366F1' }]
           : parsed
         rows.push({
           text: textValue,
@@ -1406,7 +1809,6 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     const loStrings = learningObjectives.map(lo =>
       typeof lo === 'string' ? lo : lo.text
     )
-
     // Build pdfmake document definition
     const docDefinition = {
       pageSize: 'A4',
@@ -1441,7 +1843,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         }
       },
       info: {
-        title: notes.title || 'Lecture Notes',
+        title: exportFileBase,
         author: 'Lecture Revision Tool',
         subject: 'Concise Lecture Notes'
       }
@@ -1449,7 +1851,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
     // Add title
     docDefinition.content.push({
-      text: (notes.title || 'Lecture Notes') + ' (Concise Notes)',
+      text: `${exportLectureTitle} (Concise Notes)`,
       style: 'title'
     })
 
@@ -1469,6 +1871,49 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       })
     }
 
+    const exportSectionImagesEntries = await Promise.allSettled(
+      Object.entries(sectionImages || {}).map(async ([sectionKey, sectionImage]) => {
+        if (!sectionImage) return null
+        const resolvedDataUrl = await fetchImageAsDataUrlCached(sectionImage.dataUrl)
+        if (!resolvedDataUrl) {
+          // Failed to resolve section image
+          return null
+        }
+        return [sectionKey, { ...sectionImage, dataUrl: resolvedDataUrl }]
+      })
+    )
+    const exportSectionImages = Object.fromEntries(
+      exportSectionImagesEntries
+        .filter((result) => result.status === 'fulfilled' && result.value)
+        .map((result) => result.value)
+    )
+
+    const exportPointImagesEntries = await Promise.allSettled(
+      Object.entries(pointImages || {}).map(async ([pointKey, pointImageEntry]) => {
+        const normalizedImages = normalizePointImageEntry(pointImageEntry)
+        if (!normalizedImages.length) return null
+
+        const resolvedImages = (
+          await Promise.all(
+            normalizedImages.map(async (image) => {
+              const resolvedDataUrl = await fetchImageAsDataUrlCached(image?.dataUrl)
+              if (!resolvedDataUrl) return null
+              return { ...image, dataUrl: resolvedDataUrl }
+            })
+          )
+        ).filter(Boolean)
+
+        if (resolvedImages.length === 0) return null
+        if (resolvedImages.length === 1) return [pointKey, resolvedImages[0]]
+        return [pointKey, resolvedImages]
+      })
+    )
+    const exportPointImages = Object.fromEntries(
+      exportPointImagesEntries
+        .filter((result) => result.status === 'fulfilled' && result.value)
+        .map((result) => result.value)
+    )
+
     // Add notes sections with images
     let figureCounter = 0
 
@@ -1478,7 +1923,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         const sectionFigures = []
 
         // Check for section image
-        const sectionImg = sectionImages[sectionIndex]
+        const sectionImg = exportSectionImages[sectionIndex]
         if (sectionImg && sectionImg.dataUrl) {
           figureCounter++
           sectionFigures.push({
@@ -1493,17 +1938,19 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         if (section.points) {
           section.points.forEach((_, pointIndex) => {
             const pointKey = getPointImageKey(sectionIndex, pointIndex)
-            const img = pointImages[pointKey]
-            if (img && img.dataUrl) {
+            const pointImgList = normalizePointImageEntry(exportPointImages[pointKey])
+            pointImgList.forEach((img, pointImageIndex) => {
+              if (!img?.dataUrl) return
               figureCounter++
               sectionFigures.push({
                 figNum: figureCounter,
                 image: img,
                 type: 'point',
                 pointIndex,
-                key: pointKey
+                pointImageIndex,
+                key: `${pointKey}::${pointImageIndex}`
               })
-            }
+            })
           })
         }
 
@@ -1532,22 +1979,9 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
           const processedPointRows = []
           const sectionPointLevels = Array.isArray(section.pointLevels) ? section.pointLevels : []
           section.points.forEach((point, pointIndex) => {
-            const pointFigure = sectionFigures.find(f => f.type === 'point' && f.pointIndex === pointIndex)
-
-            // Check if this point references another image
-            const pointKey = getPointImageKey(sectionIndex, pointIndex)
-            const refKey = imageReferences[pointKey]
-            let figRef = null
-
-            if (pointFigure) {
-              figRef = pointFigure.figNum
-            } else if (refKey) {
-              // Linked point reuses existing figure number.
-              const refFigNum = getFigureNumberByKey(refKey)
-              if (refFigNum) figRef = refFigNum
-            }
+            const figRefs = getPointFigureNumbers(sectionIndex, pointIndex)
             const level = Number(sectionPointLevels[pointIndex] ?? 0)
-            processedPointRows.push(...parsePointToBulletRows(point, figRef, Math.max(0, level)))
+            processedPointRows.push(...parsePointToBulletRows(point, figRefs, Math.max(0, level)))
           })
 
           docDefinition.content.push({
@@ -1594,21 +2028,6 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         })
     }
 
-    // Build notes object for embedding (compatible with old format, including images)
-    const notesForExport = {
-      title: notes.title,
-      learningObjectives: loStrings,
-      notes: notes.notes,
-      _pointImages: Object.keys(pointImages).length > 0 ? pointImages : undefined,
-      _sectionImages: Object.keys(sectionImages).length > 0 ? sectionImages : undefined,
-      _imageReferences: Object.keys(imageReferences).length > 0 ? imageReferences : undefined,
-      _imageLayout: Object.keys(imageLayout).length > 0 ? imageLayout : undefined,
-      _flashcards: flashcards.length > 0 ? flashcards : undefined
-    }
-
-    // CRITICAL: Embed JSON data in PDF metadata for lossless import
-    docDefinition.info.keywords = `[EMBEDDED_NOTES_DATA_START]${JSON.stringify(notesForExport)}[EMBEDDED_NOTES_DATA_END]`
-
     // Generate and download PDF
     try {
       const selectedFont = docDefinition.defaultStyle.font
@@ -1620,11 +2039,12 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       if (!selectedNormal || !pdfMake.vfs?.[selectedNormal] || !selectedBold || !pdfMake.vfs?.[selectedBold]) {
         docDefinition.defaultStyle.font = 'Roboto'
       }
-
-      pdfMake.createPdf(docDefinition).open()
+      pdfMake.createPdf(docDefinition).download(exportFileName)
     } catch (error) {
-      console.error('PDF generation failed:', error)
-      alert('Failed to generate PDF: ' + error.message)
+      // PDF generation failed
+      toast.error('Failed to generate PDF. Please try again.')
+    } finally {
+      setExportingPdf(false)
     }
   }
 
@@ -1677,70 +2097,62 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     setEditingNote(null)
   }
 
-  const shiftPointKeyMapsForInsert = (sectionIndex, insertIndex, insertCount = 1) => {
-    setPointImages(prev => {
-      const next = {}
-      Object.entries(prev).forEach(([key, value]) => {
-        const [si, pi] = String(key).split('-').map(Number)
-        if (si !== sectionIndex || Number.isNaN(pi)) {
-          next[key] = value
-          return
-        }
-        const nextIndex = pi >= insertIndex ? pi + insertCount : pi
-        next[`${si}-${nextIndex}`] = value
-      })
-      return next
+  const shiftPointKeyMapsForInsert = (currentPointImages, currentImageReferences, sectionIndex, insertIndex, insertCount = 1) => {
+    const nextPointImages = {}
+    Object.entries(currentPointImages || {}).forEach(([key, value]) => {
+      const [si, pi] = String(key).split('-').map(Number)
+      if (si !== sectionIndex || Number.isNaN(pi)) {
+        nextPointImages[key] = value
+        return
+      }
+      const nextIndex = pi >= insertIndex ? pi + insertCount : pi
+      nextPointImages[`${si}-${nextIndex}`] = value
     })
 
-    setImageReferences(prev => {
-      const remap = (key) => {
-        const [si, pi] = String(key).split('-').map(Number)
-        if (si !== sectionIndex || Number.isNaN(pi)) return key
-        return `${si}-${pi >= insertIndex ? pi + insertCount : pi}`
-      }
-      const next = {}
-      Object.entries(prev).forEach(([targetKey, sourceKey]) => {
-        next[remap(targetKey)] = remap(sourceKey)
-      })
-      return next
+    const remap = (key) => {
+      const [si, pi] = String(key).split('-').map(Number)
+      if (si !== sectionIndex || Number.isNaN(pi)) return key
+      return `${si}-${pi >= insertIndex ? pi + insertCount : pi}`
+    }
+    const nextImageReferences = {}
+    Object.entries(currentImageReferences || {}).forEach(([targetKey, sourceKey]) => {
+      nextImageReferences[remap(targetKey)] = remap(sourceKey)
     })
+
+    return { nextPointImages, nextImageReferences }
   }
 
-  const shiftPointKeyMapsForDeleteRange = (sectionIndex, startIndex, endIndexExclusive) => {
+  const shiftPointKeyMapsForDeleteRange = (currentPointImages, currentImageReferences, sectionIndex, startIndex, endIndexExclusive) => {
     const removedCount = endIndexExclusive - startIndex
-    setPointImages(prev => {
-      const next = {}
-      Object.entries(prev).forEach(([key, value]) => {
-        const [si, pi] = String(key).split('-').map(Number)
-        if (si !== sectionIndex || Number.isNaN(pi)) {
-          next[key] = value
-          return
-        }
-        if (pi >= startIndex && pi < endIndexExclusive) return
-        const nextIndex = pi >= endIndexExclusive ? pi - removedCount : pi
-        next[`${si}-${nextIndex}`] = value
-      })
-      return next
-    })
-
-    setImageReferences(prev => {
-      const remap = (key) => {
-        const [si, pi] = String(key).split('-').map(Number)
-        if (si !== sectionIndex || Number.isNaN(pi)) return key
-        if (pi >= startIndex && pi < endIndexExclusive) return null
-        const nextIndex = pi >= endIndexExclusive ? pi - removedCount : pi
-        return `${si}-${nextIndex}`
+    const nextPointImages = {}
+    Object.entries(currentPointImages || {}).forEach(([key, value]) => {
+      const [si, pi] = String(key).split('-').map(Number)
+      if (si !== sectionIndex || Number.isNaN(pi)) {
+        nextPointImages[key] = value
+        return
       }
-
-      const next = {}
-      Object.entries(prev).forEach(([targetKey, sourceKey]) => {
-        const nextTarget = remap(targetKey)
-        const nextSource = remap(sourceKey)
-        if (!nextTarget || !nextSource) return
-        next[nextTarget] = nextSource
-      })
-      return next
+      if (pi >= startIndex && pi < endIndexExclusive) return
+      const nextIndex = pi >= endIndexExclusive ? pi - removedCount : pi
+      nextPointImages[`${si}-${nextIndex}`] = value
     })
+
+    const remap = (key) => {
+      const [si, pi] = String(key).split('-').map(Number)
+      if (si !== sectionIndex || Number.isNaN(pi)) return key
+      if (pi >= startIndex && pi < endIndexExclusive) return null
+      const nextIndex = pi >= endIndexExclusive ? pi - removedCount : pi
+      return `${si}-${nextIndex}`
+    }
+
+    const nextImageReferences = {}
+    Object.entries(currentImageReferences || {}).forEach(([targetKey, sourceKey]) => {
+      const nextTarget = remap(targetKey)
+      const nextSource = remap(sourceKey)
+      if (!nextTarget || !nextSource) return
+      nextImageReferences[nextTarget] = nextSource
+    })
+
+    return { nextPointImages, nextImageReferences }
   }
 
   const deletePoint = (sectionIndex, pointIndex) => {
@@ -1754,8 +2166,19 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     }
     section.points.splice(pointIndex, endIndex - pointIndex)
     section.pointLevels = levels.filter((_, idx) => idx < pointIndex || idx >= endIndex)
-    shiftPointKeyMapsForDeleteRange(sectionIndex, pointIndex, endIndex)
-    updateNotes(updated)
+    const { nextPointImages, nextImageReferences } = shiftPointKeyMapsForDeleteRange(
+      pointImages,
+      imageReferences,
+      sectionIndex,
+      pointIndex,
+      endIndex
+    )
+    setPointImages(nextPointImages)
+    setImageReferences(nextImageReferences)
+    updateNotes(updated, {
+      pointImages: nextPointImages,
+      imageReferences: nextImageReferences,
+    })
   }
 
   const addPoint = (sectionIndex) => {
@@ -1765,8 +2188,19 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     const levels = getSectionPointLevels(section)
     levels.push(0)
     section.pointLevels = levels
-    shiftPointKeyMapsForInsert(sectionIndex, section.points.length - 1, 1)
-    updateNotes(updated)
+    const { nextPointImages, nextImageReferences } = shiftPointKeyMapsForInsert(
+      pointImages,
+      imageReferences,
+      sectionIndex,
+      section.points.length - 1,
+      1
+    )
+    setPointImages(nextPointImages)
+    setImageReferences(nextImageReferences)
+    updateNotes(updated, {
+      pointImages: nextPointImages,
+      imageReferences: nextImageReferences,
+    })
     setEditingNote({
       type: 'point',
       sectionIndex,
@@ -1789,62 +2223,25 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     section.points.splice(insertIndex, 0, 'New sub-point - click to edit')
     levels.splice(insertIndex, 0, parentLevel + 1)
     section.pointLevels = levels
-    shiftPointKeyMapsForInsert(sectionIndex, insertIndex, 1)
-    updateNotes(updated)
+    const { nextPointImages, nextImageReferences } = shiftPointKeyMapsForInsert(
+      pointImages,
+      imageReferences,
+      sectionIndex,
+      insertIndex,
+      1
+    )
+    setPointImages(nextPointImages)
+    setImageReferences(nextImageReferences)
+    updateNotes(updated, {
+      pointImages: nextPointImages,
+      imageReferences: nextImageReferences,
+    })
     setEditingNote({
       type: 'point',
       sectionIndex,
       pointIndex: insertIndex,
       value: ''
     })
-  }
-
-  // Indent: increase nesting level (make it a sub-bullet)
-  const indentPoint = (sectionIndex, pointIndex) => {
-    const updated = JSON.parse(JSON.stringify(notes))
-    const section = updated.notes[sectionIndex]
-    const levels = getSectionPointLevels(section)
-    const currentLevel = levels[pointIndex] || 0
-
-    // Can't indent if we're already at the first point or would exceed parent level by more than 1
-    if (pointIndex === 0) return
-    const prevLevel = levels[pointIndex - 1] || 0
-    if (currentLevel >= prevLevel + 1) return // Already at max indent relative to previous
-
-    // Increase level by 1
-    levels[pointIndex] = currentLevel + 1
-    section.pointLevels = levels
-    updateNotes(updated)
-    setHasChanges(true)
-  }
-
-  // Outdent: decrease nesting level (make it less nested)
-  const outdentPoint = (sectionIndex, pointIndex) => {
-    const updated = JSON.parse(JSON.stringify(notes))
-    const section = updated.notes[sectionIndex]
-    const levels = getSectionPointLevels(section)
-    const currentLevel = levels[pointIndex] || 0
-
-    // Can't outdent if we're already at level 0
-    if (currentLevel === 0) return
-
-    // Decrease level by 1
-    levels[pointIndex] = currentLevel - 1
-
-    // Adjust children: any following points with level > currentLevel need to be adjusted
-    // to maintain the constraint that children can't be more than 1 level deeper than parent
-    const newParentLevel = currentLevel - 1
-    for (let i = pointIndex + 1; i < levels.length; i++) {
-      if (levels[i] <= currentLevel) break // No longer in this point's subtree
-      if (levels[i] > currentLevel) {
-        // This was a child, adjust it to be at most 1 level deeper than new parent
-        levels[i] = Math.min(levels[i], newParentLevel + (levels[i] - currentLevel))
-      }
-    }
-
-    section.pointLevels = levels
-    updateNotes(updated)
-    setHasChanges(true)
   }
 
   const deleteSection = (sectionIndex) => {
@@ -2099,7 +2496,12 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
     section.points = points
     section.pointLevels = levels
-    updateNotes(updated)
+    updateNotes(updated, {
+      pointImages: nextPointImages,
+      imageReferences: nextImageRefs,
+      sectionImages,
+      imageLayout,
+    })
     setDraggedPoint(null)
     setDropTargetPoint(null)
   }
@@ -2124,6 +2526,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     if (draggedSection === targetSectionIndex) return
 
     const updated = JSON.parse(JSON.stringify(notes))
+    const originalSectionCount = updated.notes.length
     const [movedSection] = updated.notes.splice(draggedSection, 1)
     updated.notes.splice(targetSectionIndex, 0, movedSection)
 
@@ -2136,7 +2539,100 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       return section
     })
 
-    updateNotes(updated)
+    const oldIndexOrder = Array.from({ length: originalSectionCount }, (_, idx) => idx)
+    const [movedOldIndex] = oldIndexOrder.splice(draggedSection, 1)
+    oldIndexOrder.splice(targetSectionIndex, 0, movedOldIndex)
+    const oldToNewSectionIndex = {}
+    oldIndexOrder.forEach((oldIdx, newIdx) => {
+      oldToNewSectionIndex[oldIdx] = newIdx
+    })
+
+    const remapFigureKey = (key) => {
+      if (!key) return key
+      const value = String(key)
+
+      if (value.startsWith('section-')) {
+        const oldSectionIndex = Number(value.replace('section-', ''))
+        if (Number.isNaN(oldSectionIndex)) return value
+        const newSectionIndex = oldToNewSectionIndex[oldSectionIndex]
+        return newSectionIndex === undefined ? null : `section-${newSectionIndex}`
+      }
+
+      const [pointBase, pointImageSuffix] = value.split('::')
+      const [oldSectionIndex, pointIndex] = pointBase.split('-').map(Number)
+      if (Number.isNaN(oldSectionIndex) || Number.isNaN(pointIndex)) return value
+      const newSectionIndex = oldToNewSectionIndex[oldSectionIndex]
+      if (newSectionIndex === undefined) return null
+      return pointImageSuffix !== undefined
+        ? `${newSectionIndex}-${pointIndex}::${pointImageSuffix}`
+        : `${newSectionIndex}-${pointIndex}`
+    }
+
+    const nextPointImages = {}
+    Object.entries(pointImages).forEach(([key, image]) => {
+      const remappedKey = remapFigureKey(key)
+      if (remappedKey) nextPointImages[remappedKey] = image
+    })
+
+    const nextSectionImages = {}
+    Object.entries(sectionImages).forEach(([key, image]) => {
+      const oldSectionIndex = Number(key)
+      if (Number.isNaN(oldSectionIndex)) return
+      const newSectionIndex = oldToNewSectionIndex[oldSectionIndex]
+      if (newSectionIndex === undefined) return
+      nextSectionImages[newSectionIndex] = image
+    })
+
+    const nextImageReferences = {}
+    Object.entries(imageReferences).forEach(([targetKey, sourceKey]) => {
+      const remappedTarget = remapFigureKey(targetKey)
+      const remappedSource = remapFigureKey(sourceKey)
+      if (!remappedTarget || !remappedSource) return
+      nextImageReferences[remappedTarget] = remappedSource
+    })
+
+    const nextImageLayout = {}
+    Object.entries(imageLayout || {}).forEach(([sectionKey, layout]) => {
+      const oldSectionIndex = Number(sectionKey)
+      if (Number.isNaN(oldSectionIndex)) return
+      const newSectionIndex = oldToNewSectionIndex[oldSectionIndex]
+      if (newSectionIndex === undefined) return
+
+      const safeLayout = layout || {}
+      const remappedOrder = Array.isArray(safeLayout.order)
+        ? safeLayout.order.map((key) => remapFigureKey(key)).filter(Boolean)
+        : []
+      const remappedSizes = {}
+      Object.entries(safeLayout.sizes || {}).forEach(([key, size]) => {
+        const remappedKey = remapFigureKey(key)
+        if (remappedKey) remappedSizes[remappedKey] = size
+      })
+      const remappedSolo = {}
+      Object.entries(safeLayout.solo || {}).forEach(([key, enabled]) => {
+        const remappedKey = remapFigureKey(key)
+        if (remappedKey) remappedSolo[remappedKey] = enabled
+      })
+
+      nextImageLayout[newSectionIndex] = {
+        ...safeLayout,
+        order: remappedOrder,
+        sizes: remappedSizes,
+        solo: remappedSolo,
+      }
+    })
+
+    setPointImages(nextPointImages)
+    setSectionImages(nextSectionImages)
+    setImageReferences(nextImageReferences)
+    setImageLayout(nextImageLayout)
+    setOpenLayoutControlsKey((prev) => remapFigureKey(prev) || null)
+
+    updateNotes(updated, {
+      pointImages: nextPointImages,
+      sectionImages: nextSectionImages,
+      imageReferences: nextImageReferences,
+      imageLayout: nextImageLayout,
+    })
     setDraggedSection(null)
     setDropTargetSection(null)
   }
@@ -2146,34 +2642,73 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
   // Generate a key for point images (e.g., "0-1" for section 0, point 1)
   const getPointImageKey = (sectionIndex, pointIndex) => `${sectionIndex}-${pointIndex}`
 
+  const getPointImages = (sectionIndex, pointIndex) => {
+    const key = getPointImageKey(sectionIndex, pointIndex)
+    return normalizePointImageEntry(pointImages[key])
+  }
+
   // Get direct image for a specific point (no reference resolution)
   const getPointImage = (sectionIndex, pointIndex) => {
-    const key = getPointImageKey(sectionIndex, pointIndex)
-    return pointImages[key] || null
+    return getPointImages(sectionIndex, pointIndex)[0] || null
   }
 
   // Set image for a specific point
-  const setPointImageData = (sectionIndex, pointIndex, imageData) => {
+  const setPointImageData = (sectionIndex, pointIndex, imageData, options = {}) => {
+    const { imageIndex = null, replace = false } = options
     const key = getPointImageKey(sectionIndex, pointIndex)
-    setPointImages(prev => ({ ...prev, [key]: imageData }))
+    const existing = normalizePointImageEntry(pointImages[key])
+    let nextEntry = []
+    if (replace && imageIndex !== null && imageIndex >= 0 && imageIndex < existing.length) {
+      nextEntry = [...existing]
+      nextEntry[imageIndex] = imageData
+    } else if (existing.length === 0) {
+      nextEntry = [imageData]
+    } else {
+      nextEntry = [...existing, imageData]
+    }
+    const valueToStore = nextEntry.length === 1 ? nextEntry[0] : nextEntry
+    const nextPointImages = { ...pointImages, [key]: valueToStore }
+    const nextImageReferences = { ...imageReferences }
+    delete nextImageReferences[key]
+    setPointImages(nextPointImages)
+    setImageReferences(nextImageReferences)
     setHasChanges(true)
+    saveNotesAssets({
+      pointImages: nextPointImages,
+      imageReferences: nextImageReferences,
+      sectionImages,
+      imageLayout,
+    })
   }
 
   // Remove image from a specific point
-  const removePointImage = (sectionIndex, pointIndex) => {
+  const removePointImage = (sectionIndex, pointIndex, imageIndex = null) => {
     const key = getPointImageKey(sectionIndex, pointIndex)
-    setPointImages(prev => {
-      const updated = { ...prev }
-      delete updated[key]
-      return updated
-    })
-    // Also remove any reference
-    setImageReferences(prev => {
-      const updated = { ...prev }
-      delete updated[key]
-      return updated
-    })
+    const existing = normalizePointImageEntry(pointImages[key])
+    const nextPointImages = { ...pointImages }
+    if (imageIndex === null || existing.length <= 1) {
+      delete nextPointImages[key]
+    } else {
+      const remaining = existing.filter((_, idx) => idx !== imageIndex)
+      if (remaining.length === 0) {
+        delete nextPointImages[key]
+      } else {
+        nextPointImages[key] = remaining.length === 1 ? remaining[0] : remaining
+      }
+    }
+    const nextImageReferences = { ...imageReferences }
+    if (imageIndex === null || existing.length <= 1) {
+      delete nextImageReferences[key]
+    }
+    setPointImages(nextPointImages)
+    setImageReferences(nextImageReferences)
     setHasChanges(true)
+    saveNotesAssets({
+      pointImages: nextPointImages,
+      imageReferences: nextImageReferences,
+      sectionImages,
+      imageLayout,
+    })
   }
 
   // Get section image
@@ -2183,18 +2718,29 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
   // Set section image
   const setSectionImageData = (sectionIndex, imageData) => {
-    setSectionImages(prev => ({ ...prev, [sectionIndex]: imageData }))
+    const nextSectionImages = { ...sectionImages, [sectionIndex]: imageData }
+    setSectionImages(nextSectionImages)
     setHasChanges(true)
+    saveNotesAssets({
+      pointImages,
+      imageReferences,
+      sectionImages: nextSectionImages,
+      imageLayout,
+    })
   }
 
   // Remove section image
   const removeSectionImage = (sectionIndex) => {
-    setSectionImages(prev => {
-      const updated = { ...prev }
-      delete updated[sectionIndex]
-      return updated
-    })
+    const nextSectionImages = { ...sectionImages }
+    delete nextSectionImages[sectionIndex]
+    setSectionImages(nextSectionImages)
     setHasChanges(true)
+    saveNotesAssets({
+      pointImages,
+      imageReferences,
+      sectionImages: nextSectionImages,
+      imageLayout,
+    })
   }
 
   // Get figure number for a point or section image
@@ -2205,12 +2751,14 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       if (Number.isNaN(sectionIndex)) return null
       return getFigureNumber(sectionIndex, null)
     }
-    const [sectionIndex, pointIndex] = key.split('-').map(Number)
+    const [pointBase, pointImageSuffix] = String(key).split('::')
+    const [sectionIndex, pointIndex] = pointBase.split('-').map(Number)
     if (Number.isNaN(sectionIndex) || Number.isNaN(pointIndex)) return null
-    return getFigureNumber(sectionIndex, pointIndex)
+    const imageIndex = pointImageSuffix !== undefined ? Number(pointImageSuffix) : 0
+    return getFigureNumber(sectionIndex, pointIndex, Number.isNaN(imageIndex) ? 0 : imageIndex)
   }
 
-  const getFigureNumber = (sectionIndex, pointIndex = null) => {
+  const getFigureNumber = (sectionIndex, pointIndex = null, pointImageIndex = 0) => {
     // Linked point: inherit source figure number only (do not create new figure).
     if (pointIndex !== null) {
       const targetKey = getPointImageKey(sectionIndex, pointIndex)
@@ -2237,8 +2785,9 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         for (let pi = 0; pi < sectionPoints.length; pi++) {
           if (si === sectionIndex && pi >= pointIndex) break
           const key = getPointImageKey(si, pi)
-          if (pointImages[key]) {
-            figNum++
+          const images = normalizePointImageEntry(pointImages[key])
+          if (images.length > 0) {
+            figNum += images.length
           }
         }
       }
@@ -2247,13 +2796,30 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     // If we're looking for a point image
     if (pointIndex !== null) {
       const key = getPointImageKey(sectionIndex, pointIndex)
-      if (pointImages[key]) {
-        figNum++
+      const images = normalizePointImageEntry(pointImages[key])
+      if (images.length > 0) {
+        const safeIndex = Math.max(0, Math.min(pointImageIndex, images.length - 1))
+        figNum += safeIndex + 1
         return figNum
       }
     }
 
     return null
+  }
+
+  const getPointFigureNumbers = (sectionIndex, pointIndex) => {
+    const key = getPointImageKey(sectionIndex, pointIndex)
+    const directImages = normalizePointImageEntry(pointImages[key])
+    if (directImages.length > 0) {
+      return directImages
+        .map((_, idx) => getFigureNumber(sectionIndex, pointIndex, idx))
+        .filter((n) => n !== null)
+    }
+
+    const refKey = imageReferences[key]
+    if (!refKey) return []
+    const refFigNum = getFigureNumberByKey(refKey)
+    return refFigNum ? [refFigNum] : []
   }
 
   const collectSectionFigures = (sectionIndex, section) => {
@@ -2269,28 +2835,34 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     }
 
     ;(section?.points || []).forEach((_, pointIndex) => {
-      const pointImg = getPointImage(sectionIndex, pointIndex)
-      if (pointImg) {
+      const pointImgs = getPointImages(sectionIndex, pointIndex)
+      pointImgs.forEach((pointImg, pointImageIndex) => {
         sectionFigures.push({
           type: 'point',
           image: pointImg,
-          figNum: getFigureNumber(sectionIndex, pointIndex),
+          figNum: getFigureNumber(sectionIndex, pointIndex, pointImageIndex),
           pointIndex,
-          key: getPointImageKey(sectionIndex, pointIndex)
+          pointImageIndex,
+          key: `${getPointImageKey(sectionIndex, pointIndex)}::${pointImageIndex}`
         })
-      }
+      })
     })
 
     return sectionFigures
   }
 
   const updateSectionImageLayout = (sectionIndex, updater) => {
-    setImageLayout((prev) => {
-      const current = prev?.[sectionIndex] || { order: [], sizes: {}, solo: {} }
-      const next = updater(current)
-      return { ...prev, [sectionIndex]: next }
-    })
+    const current = imageLayout?.[sectionIndex] || { order: [], sizes: {}, solo: {} }
+    const next = updater(current)
+    const nextImageLayout = { ...(imageLayout || {}), [sectionIndex]: next }
+    setImageLayout(nextImageLayout)
     setHasChanges(true)
+    saveNotesAssets({
+      pointImages,
+      imageReferences,
+      sectionImages,
+      imageLayout: nextImageLayout,
+    })
   }
 
   const moveSectionFigure = (sectionIndex, figureKeys, figureKey, direction) => {
@@ -2332,18 +2904,22 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
   const createImageReference = (fromSectionIndex, fromPointIndex, toKey) => {
     const fromKey = getPointImageKey(fromSectionIndex, fromPointIndex)
     // Linking should not keep or create a second direct image at this point.
-    setPointImages(prev => {
-      const updated = { ...prev }
-      delete updated[fromKey]
-      return updated
-    })
-    setImageReferences(prev => ({ ...prev, [fromKey]: toKey }))
+    const nextPointImages = { ...pointImages }
+    delete nextPointImages[fromKey]
+    const nextImageReferences = { ...imageReferences, [fromKey]: toKey }
+    setPointImages(nextPointImages)
+    setImageReferences(nextImageReferences)
     setHasChanges(true)
+    saveNotesAssets({
+      pointImages: nextPointImages,
+      imageReferences: nextImageReferences,
+      sectionImages,
+      imageLayout,
+    })
   }
 
   // Handle slide selection from ImagePickerModal - fetch high-res version
   const handleSelectSlide = async (pageNum) => {
-    console.log('handleSelectSlide called, pageNum:', pageNum, 'imagePickerOpen:', imagePickerOpen)
     if (!imagePickerOpen) return
 
     // Store the target info before closing picker
@@ -2363,8 +2939,6 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
     if (selectedThumbnail && selectedThumbnail.id?.startsWith('uploaded-')) {
       // This is an uploaded image - use it directly without fetching from PDF
-      console.log('Selected uploaded image:', selectedThumbnail.id)
-
       // Create an image to get dimensions
       const img = new window.Image()
       img.src = selectedThumbnail.dataUrl
@@ -2385,19 +2959,16 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
     // Show loading state while fetching high-res image from PDF
     setLoadingHighRes(true)
-    console.log('Starting high-res fetch...')
 
     try {
       // Fetch high-resolution version of the slide
       const highResImage = await getFullSizeSlideImage(pageNum)
-      console.log('High-res result:', highResImage ? 'success' : 'null')
       if (!highResImage) {
-        alert('Failed to load high-resolution slide')
+        toast.error('Failed to load high-resolution slide')
         return
       }
 
       // Open crop modal with the high-res slide
-      console.log('Opening crop modal...')
       setCropModalOpen({
         pageNum,
         dataUrl: highResImage.dataUrl,
@@ -2423,7 +2994,10 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
     if (!cropModalOpen) return
 
     if (cropModalOpen.targetType === 'point') {
-      setPointImageData(cropModalOpen.sectionIndex, cropModalOpen.pointIndex, imageData)
+      setPointImageData(cropModalOpen.sectionIndex, cropModalOpen.pointIndex, imageData, {
+        imageIndex: cropModalOpen.pointImageIndex ?? null,
+        replace: cropModalOpen.pointImageIndex !== undefined && cropModalOpen.pointImageIndex !== null
+      })
     } else {
       setSectionImageData(cropModalOpen.sectionIndex, imageData)
     }
@@ -2432,9 +3006,9 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
   }
 
   // Handle editing an existing image - opens crop modal with saved annotations
-  const handleEditExistingImage = async (sectionIndex, pointIndex = null) => {
+  const handleEditExistingImage = async (sectionIndex, pointIndex = null, pointImageIndex = null) => {
     const imageData = pointIndex !== null
-      ? getPointImage(sectionIndex, pointIndex)
+      ? getPointImages(sectionIndex, pointIndex)[pointImageIndex ?? 0]
       : getSectionImage(sectionIndex)
 
     if (!imageData) return
@@ -2447,12 +3021,13 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         dataUrl: imageData.originalDataUrl,
         width: imageData.originalWidth,
         height: imageData.originalHeight,
-        targetType: pointIndex !== null ? 'point' : 'section',
-        sectionIndex,
-        pointIndex,
-        initialAnnotations: imageData.annotations || [],
-        initialCropArea: imageData.cropArea || null
-      })
+          targetType: pointIndex !== null ? 'point' : 'section',
+          sectionIndex,
+          pointIndex,
+          pointImageIndex,
+          initialAnnotations: imageData.annotations || [],
+          initialCropArea: imageData.cropArea || null
+        })
     } else if (imageData.pageNum) {
       // Legacy image without edit data - fetch the slide fresh
       setLoadingHighRes(true)
@@ -2467,6 +3042,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
             targetType: pointIndex !== null ? 'point' : 'section',
             sectionIndex,
             pointIndex,
+            pointImageIndex,
             initialAnnotations: [],
             initialCropArea: null
           })
@@ -2484,45 +3060,35 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
 
   // Get full-size image data for crop modal (re-render at higher resolution)
   const getFullSizeSlideImage = async (pageNum) => {
-    console.log('getFullSizeSlideImage called for page:', pageNum)
     try {
       // Use cached PDF if available (much faster!)
       let pdf = cachedPdfRef.current
-      console.log('Cached PDF:', pdf ? 'yes' : 'no')
 
       // If not cached, download and cache it
       if (!pdf && lecture.pdf_path) {
-        console.log('PDF not cached, downloading from:', lecture.pdf_path)
         const { data: pdfBlob, error } = await supabase.storage
           .from('lecture-pdfs')
           .download(lecture.pdf_path)
 
         if (error) {
-          console.error('Failed to download PDF:', error)
           return null
         }
-        console.log('PDF downloaded, size:', pdfBlob.size)
 
         const arrayBuffer = await pdfBlob.arrayBuffer()
-        console.log('Converting to PDF document...')
+        const pdfjsLib = await getPdfJsLib()
         pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
         cachedPdfRef.current = pdf
-        console.log('PDF document created, pages:', pdf.numPages)
       }
 
       if (!pdf) {
-        console.error('No PDF available - pdf_path:', lecture.pdf_path)
         return null
       }
 
-      console.log('Getting page', pageNum)
       const page = await pdf.getPage(pageNum)
-      console.log('Page retrieved')
 
       // Render at high scale for crisp text (2.0x for good quality)
       let scale = 2.0
       let viewport = page.getViewport({ scale })
-      console.log('Initial viewport size:', viewport.width, 'x', viewport.height)
 
       // Check if canvas would be too large (limit to ~3000px to avoid memory issues)
       const maxDimension = 3000
@@ -2530,7 +3096,6 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         const reductionFactor = Math.min(maxDimension / viewport.width, maxDimension / viewport.height)
         scale = scale * reductionFactor
         viewport = page.getViewport({ scale })
-        console.log('Reduced viewport size:', viewport.width, 'x', viewport.height)
       }
 
       const canvas = document.createElement('canvas')
@@ -2538,16 +3103,12 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       canvas.height = Math.floor(viewport.height)
       const ctx = canvas.getContext('2d')
 
-      console.log('Starting page render...')
       await page.render({
         canvasContext: ctx,
         viewport
       }).promise
-      console.log('Page rendered')
 
-      console.log('Converting to data URL...')
       const dataUrl = canvas.toDataURL('image/jpeg', 0.9)
-      console.log('Data URL created, length:', dataUrl.length)
 
       return {
         dataUrl,
@@ -2555,8 +3116,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         width: viewport.width,
         height: viewport.height
       }
-    } catch (error) {
-      console.error('Failed to get full-size slide:', error)
+    } catch {
       return null
     }
   }
@@ -2567,147 +3127,64 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
       <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-divider">
         <div className="max-w-4xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
-            <button
-              onClick={onBack}
-              className="flex items-center gap-2 text-secondary hover:text-primary transition-colors"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              Back to lecture
-            </button>
+            <div className="flex items-center gap-4">
+              <button
+                onClick={handleBack}
+                disabled={saving}
+                className={`p-2 rounded-lg transition-colors ${saving ? 'opacity-60 cursor-not-allowed' : 'hover:bg-gray-100'}`}
+                aria-label={`Back to ${module?.name || 'module'}`}
+              >
+                <ArrowLeft className="w-5 h-5 text-secondary" />
+              </button>
+              {module && (
+                <div
+                  className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium"
+                  style={{ backgroundColor: `${module.color}15`, color: module.color }}
+                >
+                  {module.abbreviation}
+                </div>
+              )}
+              <h1 className="text-2xl font-bold text-primary">{lecture.title}</h1>
+            </div>
 
             <div className="flex items-center gap-2">
               <button
-                onClick={() => imageUploadRef.current?.click()}
-                disabled={uploadingImages}
-                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-                title="Add images from your device"
-              >
-                {uploadingImages ? <Loader2 className="w-4 h-4 animate-spin" /> : <Image className="w-4 h-4" />}
-                {uploadingImages ? 'Uploading...' : 'Add Images'}
-              </button>
-              <input
-                type="file"
-                ref={imageUploadRef}
-                onChange={handleImageUpload}
-                accept="image/*"
-                multiple
-                className="hidden"
-              />
-              <button
                 onClick={handleExportPDF}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
+                disabled={exportingPdf}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg text-sm font-medium transition-colors"
                 title="Export as PDF (can be re-imported later)"
               >
                 <Download className="w-4 h-4" />
-                Export PDF
-              </button>
-              <button
-                onClick={() => setShowResetConfirm(true)}
-                className="flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-red-50 hover:text-red-600 text-secondary rounded-lg text-sm transition-colors"
-                title="Remove notes and start fresh"
-              >
-                <Trash2 className="w-4 h-4" />
+                {exportingPdf ? 'Exporting...' : 'Export PDF'}
               </button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Reset Confirmation Modal */}
-      {showResetConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
-            <h3 className="text-lg font-semibold text-primary mb-2">Remove Notes?</h3>
-            <p className="text-secondary text-sm mb-6">
-              This will remove all generated notes and learning objectives. You'll need to upload a PDF again.
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={handleReset}
-                disabled={resetting}
-                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white font-medium rounded-lg transition-colors"
-              >
-                {resetting ? 'Removing...' : 'Yes, Remove'}
-              </button>
-              <button
-                onClick={() => setShowResetConfirm(false)}
-                disabled={resetting}
-                className="flex-1 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-primary font-medium rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
-        {/* Title Section */}
-        <div className="flex items-start gap-4 group">
-          {module && (
-            <div
-              className="flex-shrink-0 inline-flex items-center px-3 py-1 rounded-full text-sm font-medium"
-              style={{ backgroundColor: `${module.color}15`, color: module.color }}
-            >
-              {module.abbreviation}
-            </div>
-          )}
-          <div className="flex-1">
-            {editingNote?.type === 'title' ? (
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={editingNote.value}
-                  onChange={(e) => setEditingNote(p => ({ ...p, value: e.target.value }))}
-                  onKeyDown={(e) => e.key === 'Enter' && saveNoteEdit()}
-                  className="flex-1 text-2xl font-bold bg-white border border-divider rounded-lg px-3 py-1 focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
-                  autoFocus
-                />
-                <button onClick={saveNoteEdit} className="px-3 py-1 bg-accent hover:bg-blue-600 text-white rounded-lg text-sm">Save</button>
-                <button onClick={() => setEditingNote(null)} className="px-3 py-1 bg-gray-200 hover:bg-gray-300 text-primary rounded-lg text-sm">Cancel</button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-bold text-primary">{notes.title || lecture.title}</h1>
-                <button
-                  onClick={startEditTitle}
-                  className="opacity-0 group-hover:opacity-100 p-1 bg-gray-100 hover:bg-gray-200 rounded transition-opacity"
-                >
-                  <Edit2 className="w-4 h-4 text-secondary" />
-                </button>
-              </div>
-            )}
-          </div>
+        <div className="text-xs text-secondary">
+          {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'error' ? 'Save failed' : 'Saved'}
         </div>
 
         {/* Learning Objectives Card */}
         {learningObjectives.length > 0 && (
           <div className="bg-blue-50 border border-blue-200 rounded-xl p-5">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center mb-4">
               <div className="flex items-center gap-2">
                 <BookOpen className="w-5 h-5 text-accent" />
                 <h2 className="font-semibold text-accent">Learning Objectives</h2>
               </div>
-              <span className="text-sm text-accent/70">
-                {completedObjectives}/{learningObjectives.length} completed
-              </span>
             </div>
             <ul className="space-y-2">
               {learningObjectives.map((objective, index) => (
                 <li key={objective.id || index}>
-                  <button
-                    onClick={() => onObjectiveToggle && onObjectiveToggle(objective.id, objective.completed)}
-                    className="flex items-start gap-3 w-full text-left p-2 rounded-lg hover:bg-blue-100/50 transition-colors group"
-                  >
-                    {objective.completed ? (
-                      <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
-                    ) : (
-                      <Circle className="w-5 h-5 text-blue-400 group-hover:text-blue-500 flex-shrink-0 mt-0.5" />
-                    )}
-                    <span className={`text-sm leading-relaxed ${objective.completed ? 'text-secondary line-through' : 'text-primary'}`}>
+                  <div className="flex items-start gap-3 w-full text-left p-2 rounded-lg">
+                    <Circle className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" />
+                    <span className="text-sm leading-relaxed text-primary">
                       {objective.text}
                     </span>
-                  </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -2776,20 +3253,14 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                         <Plus className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => {
-                          if (pdfThumbnails.length === 0 && Object.keys(pointImages).length === 0) {
-                            alert('No slides available for image insertion.\n\nTo use this feature, you need to upload a slides PDF using the "Convert Existing Notes" option, which stores both the slides and notes PDFs.')
-                          } else {
-                            setImagePickerOpen({ sectionIndex })
-                          }
-                        }}
+                        onClick={() => openImagePickerOrExplain({ sectionIndex })}
                         className={`p-1.5 rounded-lg ${
-                          pdfThumbnails.length === 0 && Object.keys(pointImages).length === 0
+                          !canInsertFromSlides || thumbnailsLoading || uploadingSlides
                             ? 'bg-gray-100 text-gray-400 cursor-help'
                             : 'bg-gray-100 hover:bg-indigo-100 hover:text-indigo-600'
                         }`}
-                        title={pdfThumbnails.length === 0 && Object.keys(pointImages).length === 0
-                          ? "No slides available - use 'Convert Existing Notes' to upload slides"
+                        title={!canInsertFromSlides || thumbnailsLoading || uploadingSlides
+                          ? getImageInsertionUnavailableReason()
                           : "Insert section image from slides"
                         }
                       >
@@ -2817,16 +3288,17 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                         return (
                       <li
                         key={pointIndex}
-                        className={`text-sm text-primary border-l-2 border-accent/30 py-2 group flex items-start gap-2 ${
-                          dropTargetPoint?.sectionIndex === sectionIndex && dropTargetPoint?.pointIndex === pointIndex &&
-                          !(draggedPoint?.sectionIndex === sectionIndex && draggedPoint?.pointIndex === pointIndex)
-                            ? 'bg-blue-50 border-l-accent' : ''
-                        }`}
+                        className="relative text-sm text-primary border-l-2 border-accent/30 py-2 group flex items-start gap-2"
                         style={{ marginLeft: `${pointLevel * 18}px`, paddingLeft: '12px' }}
                         onDragOver={(e) => handlePointDragOver(e, sectionIndex, pointIndex)}
                         onDragLeave={handleDragLeave}
                         onDrop={() => handleDrop(sectionIndex, pointIndex)}
                       >
+                        {dropTargetPoint?.sectionIndex === sectionIndex &&
+                          dropTargetPoint?.pointIndex === pointIndex &&
+                          !(draggedPoint?.sectionIndex === sectionIndex && draggedPoint?.pointIndex === pointIndex) && (
+                            <div className="absolute -top-0.5 left-0 right-0 h-0.5 bg-accent rounded-full pointer-events-none" />
+                          )}
                         {editingNote?.type === 'point' && editingNote.sectionIndex === sectionIndex && editingNote.pointIndex === pointIndex ? (
                           <div className="flex-1 space-y-2">
                             {/* Formatting Toolbar */}
@@ -2958,7 +3430,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                               <div
                                 className="notes-content leading-relaxed"
                                 dangerouslySetInnerHTML={{
-                                  __html: buildPointHtmlWithFigureRef(point, getFigureNumber(sectionIndex, pointIndex), pointLevel),
+                                  __html: buildPointHtmlWithFigureRefs(point, getPointFigureNumbers(sectionIndex, pointIndex), pointLevel),
                                 }}
                               />
                             </div>
@@ -2971,36 +3443,6 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                                   <Edit2 className="w-3.5 h-3.5 text-secondary" />
                                 </button>
                               <button
-                                onClick={() => outdentPoint(sectionIndex, pointIndex)}
-                                className={`p-1 rounded ${
-                                  pointLevel === 0
-                                    ? 'bg-gray-100 text-gray-300 cursor-not-allowed'
-                                    : 'bg-gray-100 hover:bg-purple-100 hover:text-purple-600'
-                                }`}
-                                title={pointLevel === 0 ? "Already at main level" : "Outdent (make less nested)"}
-                                disabled={pointLevel === 0}
-                              >
-                                <IndentDecrease className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => indentPoint(sectionIndex, pointIndex)}
-                                className={`p-1 rounded ${
-                                  pointIndex === 0 || pointLevel >= (getSectionPointLevels(section)[pointIndex - 1] || 0) + 1
-                                    ? 'bg-gray-100 text-gray-300 cursor-not-allowed'
-                                    : 'bg-gray-100 hover:bg-purple-100 hover:text-purple-600'
-                                }`}
-                                title={
-                                  pointIndex === 0
-                                    ? "Can't indent first bullet"
-                                    : pointLevel >= (getSectionPointLevels(section)[pointIndex - 1] || 0) + 1
-                                    ? "Already at max indent"
-                                    : "Indent (make more nested)"
-                                }
-                                disabled={pointIndex === 0 || pointLevel >= (getSectionPointLevels(section)[pointIndex - 1] || 0) + 1}
-                              >
-                                <IndentIncrease className="w-3.5 h-3.5" />
-                              </button>
-                              <button
                                 onClick={() => addSubPoint(sectionIndex, pointIndex)}
                                 className="p-1 bg-gray-100 hover:bg-blue-100 hover:text-accent rounded"
                                 title="Add sub-bullet point"
@@ -3008,20 +3450,14 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                                 <Plus className="w-3.5 h-3.5" />
                               </button>
                               <button
-                                onClick={() => {
-                                  if (pdfThumbnails.length === 0 && Object.keys(pointImages).length === 0) {
-                                    alert('No slides available for image insertion.\n\nTo use this feature, you need to upload a slides PDF using the "Convert Existing Notes" option, which stores both the slides and notes PDFs.')
-                                  } else {
-                                    setImagePickerOpen({ sectionIndex, pointIndex })
-                                  }
-                                }}
+                                onClick={() => openImagePickerOrExplain({ sectionIndex, pointIndex })}
                                 className={`p-1 rounded ${
-                                  pdfThumbnails.length === 0 && Object.keys(pointImages).length === 0
+                                  !canInsertFromSlides || thumbnailsLoading || uploadingSlides
                                     ? 'bg-gray-100 text-gray-400 cursor-help'
                                     : 'bg-gray-100 hover:bg-indigo-100 hover:text-indigo-600'
                                 }`}
-                                title={pdfThumbnails.length === 0 && Object.keys(pointImages).length === 0
-                                  ? "No slides available - use 'Convert Existing Notes' to upload slides"
+                                title={!canInsertFromSlides || thumbnailsLoading || uploadingSlides
+                                  ? getImageInsertionUnavailableReason()
                                   : "Insert image from slides"
                                 }
                               >
@@ -3100,7 +3536,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                             <button
                               onClick={() => {
                                 if (fig.type === 'point') {
-                                  handleEditExistingImage(sectionIndex, fig.pointIndex)
+                                  handleEditExistingImage(sectionIndex, fig.pointIndex, fig.pointImageIndex)
                                 } else {
                                   handleEditExistingImage(sectionIndex, null)
                                 }
@@ -3113,7 +3549,7 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
                             <button
                               onClick={() => {
                                 if (fig.type === 'point') {
-                                  removePointImage(sectionIndex, fig.pointIndex)
+                                  removePointImage(sectionIndex, fig.pointIndex, fig.pointImageIndex)
                                 } else {
                                   removeSectionImage(sectionIndex)
                                 }
@@ -3218,6 +3654,8 @@ export function NotesView({ lecture, module, onBack, onObjectiveToggle, onReset 
         existingImages={pointImages}
         onSelectSlide={handleSelectSlide}
         onSelectExisting={handleSelectExisting}
+        onUploadImages={handleImageUploadFiles}
+        uploadingImages={uploadingImages}
         currentKey={imagePickerOpen && imagePickerOpen.pointIndex !== undefined
           ? getPointImageKey(imagePickerOpen.sectionIndex, imagePickerOpen.pointIndex)
           : null}

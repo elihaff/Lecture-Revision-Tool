@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react'
 import { ArrowLeft, ArrowRight, CheckCircle2, Circle, BookOpen } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { recomputeLectureProgress } from '../lib/lectureService'
+import { useToast } from './Toast'
 
 export function LearnModeView({ lecture, module, onBack, onComplete }) {
+  const toast = useToast()
   const notes = lecture.notes || { notes: [] }
   const sections = notes.notes || []
   const [currentSectionIndex, setCurrentSectionIndex] = useState(lecture.learn_progress || 0)
@@ -26,8 +29,8 @@ export function LearnModeView({ lecture, module, onBack, onComplete }) {
         .from('lectures')
         .update({ learn_progress: sectionIndex })
         .eq('id', lecture.id)
-    } catch (error) {
-      console.error('Failed to save progress:', error)
+    } catch {
+      // Progress save failed silently - non-critical
     }
   }
 
@@ -43,25 +46,23 @@ export function LearnModeView({ lecture, module, onBack, onComplete }) {
   const handleComplete = async () => {
     setCompleting(true)
     try {
-      // Update lecture phase to 'memorise' and reset learn_progress
+      // Mark Learn Mode completion and reset local section tracker.
       const { error } = await supabase
         .from('lectures')
         .update({
-          phase: 'memorise',
           learn_progress: 0  // Reset progress when completed
         })
         .eq('id', lecture.id)
 
       if (error) {
-        console.error('Failed to update phase:', error)
-        alert('Failed to update progress. Please try again.')
+        toast.error('Failed to update progress. Please try again.')
       } else {
+        await recomputeLectureProgress(lecture.id, { markLearnCompleted: true })
         if (onComplete) onComplete()
         onBack()
       }
-    } catch (error) {
-      console.error('Error completing learn mode:', error)
-      alert('An error occurred. Please try again.')
+    } catch {
+      toast.error('An error occurred. Please try again.')
     } finally {
       setCompleting(false)
     }

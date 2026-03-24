@@ -1,10 +1,231 @@
-import { useState, useEffect } from 'react'
-import { ArrowLeft, Check, RotateCcw, BookOpen, Loader2, Zap, AlertCircle, MinusCircle, RefreshCw } from 'lucide-react'
-import { getLectureReviewQueue, recordReview } from '../lib/flashcardService'
-import { RATING, getNextIntervals, shuffle } from '../lib/srsAlgorithmV2'
-import { resetFlashcard, getFlashcardsByLecture } from '../lib/flashcardService'
+import { useState, useEffect, useRef } from 'react'
+import { ArrowLeft, Check, BookOpen, Loader2, AlertCircle, Edit2, X } from 'lucide-react'
+import { backfillStructuredCardPayload, getCardDisplayTags, getFlashcardsByLecture, recordReview, resetFlashcard, updateFlashcard } from '../lib/flashcardService'
+import { RATING, getNextIntervals } from '../lib/srsAlgorithmV2'
+import { sanitizeHtml } from '../lib/htmlSanitizer'
+import { clearPersistedSession, formatSavedTime, loadPersistedSession, persistSession } from '../lib/studySessionPersistence'
+import { closeStudySessionLog, startStudySessionLog, updateStudySessionLog } from '../lib/sessionLogService'
+import { useToast } from './Toast'
 
-export function FlashcardReviewView({ lecture, module, onBack }) {
+const DEFAULT_DAILY_NEW_CARDS = 20
+const ESSENTIAL_SYMBOLS = ['α', 'β', 'Δ', 'μ', '→', '←', '↑', '↓']
+
+function getTodayKey() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function getDailyLimitStorageKey(userId, lectureId) {
+  return `lecture-review-daily-limit:v1:${userId}:${lectureId}`
+}
+
+function readDailyLimitState(userId, lectureId) {
+  try {
+    const raw = localStorage.getItem(getDailyLimitStorageKey(userId, lectureId))
+    if (!raw) return { date: null, defaultBatchCompleted: false }
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') {
+      return { date: null, defaultBatchCompleted: false }
+    }
+    return {
+      date: String(parsed.date || ''),
+      defaultBatchCompleted: parsed.defaultBatchCompleted === true,
+    }
+  } catch {
+    return { date: null, defaultBatchCompleted: false }
+  }
+}
+
+function markDailyDefaultBatchCompleted(userId, lectureId) {
+  try {
+    localStorage.setItem(
+      getDailyLimitStorageKey(userId, lectureId),
+      JSON.stringify({
+        date: getTodayKey(),
+        defaultBatchCompleted: true,
+      })
+    )
+  } catch {
+    // best effort only
+  }
+}
+
+function clearDailyLimitState(userId, lectureId) {
+  try {
+    localStorage.removeItem(getDailyLimitStorageKey(userId, lectureId))
+  } catch {
+    // best effort only
+  }
+}
+
+function formatCardStateLabel(state) {
+  if (!state) return ''
+  const value = String(state).trim()
+  if (!value) return ''
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function parseTagsInput(input) {
+  return [...new Set(
+    String(input || '')
+      .split(',')
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean)
+  )]
+}
+
+function stripHtmlTags(value) {
+  return String(value || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function normalizeInterpretationQuestion(value) {
+  return String(value || '')
+    .replace(/&lt;br\s*\/?&gt;/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>\s*<p>/gi, '\n\n')
+    .replace(/<\/?p>/gi, '')
+    .replace(/<[^>]+>/g, '')
+    .trim()
+}
+
+function formatQuestionForFrontHtml(question) {
+  const normalized = String(question || '').trim()
+  if (!normalized) return ''
+  return escapeHtml(normalized).replace(/\n/g, '<br>')
+}
+
+function getOcclusionData(card) {
+  return card?.occlusion_data || card?.occlusionData || null
+}
+
+function getInterpretationData(card) {
+  return card?.interpretation_data || card?.interpretationData || null
+}
+
+function extractImageAndQuestionFromFront(frontHtml) {
+  const front = String(frontHtml || '')
+  const srcMatch = front.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i)
+  const imageDataUrl = srcMatch?.[1] || ''
+  const withoutImage = front.replace(/<img[^>]*>/gi, '')
+  const questionText = normalizeInterpretationQuestion(withoutImage)
+  return { imageDataUrl, questionText }
+}
+
+function inferCardKind(card) {
+  if (getOcclusionData(card)) return 'occlusion'
+  if (getInterpretationData(card)) return 'interpretation'
+  const tags = getCardDisplayTags(card).map((tag) => String(tag || '').toLowerCase())
+  if (tags.includes('image occlusion')) return 'occlusion'
+  if (tags.includes('interpretation')) return 'interpretation'
+  return 'text'
+}
+
+function createMaskedImage(imageDataUrl, labelToMask) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = img.width
+      canvas.height = img.height
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        reject(new Error('Failed to create drawing context'))
+        return
+      }
+
+      ctx.drawImage(img, 0, 0)
+
+      const x = (Number(labelToMask.x || 0) / 100) * img.width
+      const y = (Number(labelToMask.y || 0) / 100) * img.height
+      const width = (Number(labelToMask.width || 0) / 100) * img.width
+      const height = (Number(labelToMask.height || 0) / 100) * img.height
+
+      ctx.fillStyle = '#000000'
+      ctx.fillRect(x, y, width, height)
+
+      resolve(canvas.toDataURL('image/png'))
+    }
+    img.onerror = () => reject(new Error('Failed to load image for occlusion rendering'))
+    img.src = imageDataUrl
+  })
+}
+
+function getInitialContentTags(card) {
+  const normalizeTopicTags = (values) => {
+    const blocked = new Set(['text', 'image occlusion', 'interpretation'])
+    return [...new Set((values || [])
+      .map((tag) => String(tag || '').trim().toLowerCase())
+      .filter((tag) => tag && !blocked.has(tag)))]
+  }
+
+  const directTags = Array.isArray(card?.content_tags)
+    ? card.content_tags
+    : Array.isArray(card?.contentTags)
+      ? card.contentTags
+      : null
+  if (Array.isArray(directTags) && directTags.length > 0) {
+    return normalizeTopicTags(directTags)
+  }
+
+  const customTags = Array.isArray(card?.custom_user_tags)
+    ? card.custom_user_tags
+    : Array.isArray(card?.customUserTags)
+      ? card.customUserTags
+      : null
+  if (Array.isArray(customTags) && customTags.length > 0) {
+    return normalizeTopicTags(customTags)
+  }
+
+  const legacyTags = String(card?.tags || '')
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean)
+  if (legacyTags.length > 0) {
+    return normalizeTopicTags(legacyTags)
+  }
+
+  const aiSuggestions = card?.ai_tag_suggestions || card?.aiTagSuggestions
+  const aiTags = Array.isArray(aiSuggestions?.content_tags)
+    ? aiSuggestions.content_tags
+    : Array.isArray(aiSuggestions?.contentTags)
+      ? aiSuggestions.contentTags
+      : []
+  const normalizedAiTags = normalizeTopicTags(aiTags)
+  if (normalizedAiTags.length > 0) {
+    return normalizedAiTags
+  }
+
+  return normalizeTopicTags(getCardDisplayTags(card))
+}
+
+function shuffleCards(cards) {
+  const next = [...(cards || [])]
+  for (let i = next.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[next[i], next[j]] = [next[j], next[i]]
+  }
+  return next
+}
+
+function pickRandomCard(cards) {
+  if (!Array.isArray(cards) || cards.length === 0) return null
+  const idx = Math.floor(Math.random() * cards.length)
+  return cards[idx]
+}
+
+export function FlashcardReviewView({ lecture, module, user, examDate, onBack, autoResumeFromLog = false, onAutoResumeHandled = null }) {
+  const toast = useToast()
   // State
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -23,45 +244,236 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
   })
   const [saving, setSaving] = useState(false)
   const [sessionComplete, setSessionComplete] = useState(false)
+  const [reviewedCardIds, setReviewedCardIds] = useState([])
   const [reviewStartTime, setReviewStartTime] = useState(null)
   const [showResetModal, setShowResetModal] = useState(false)
   const [resetting, setResetting] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editSaving, setEditSaving] = useState(false)
+  const [editingCardDraft, setEditingCardDraft] = useState(null)
+  const [editingOcclusionDraft, setEditingOcclusionDraft] = useState(null)
+  const [editingCardKind, setEditingCardKind] = useState('text')
+  const [drawingOcclusionBox, setDrawingOcclusionBox] = useState(null)
+  const [didEditTags, setDidEditTags] = useState(false)
+  const [newTagInput, setNewTagInput] = useState('')
   const [activeSessionCardIds, setActiveSessionCardIds] = useState(null) // Track current batch of cards
+  const [keyboardFlashRating, setKeyboardFlashRating] = useState(null)
+  const [keyboardRatePending, setKeyboardRatePending] = useState(false)
+  const [resumePrompt, setResumePrompt] = useState(null)
+  const [continuePrompt, setContinuePrompt] = useState(null)
+  const [continueCount, setContinueCount] = useState(DEFAULT_DAILY_NEW_CARDS)
+  const [sessionBatchMeta, setSessionBatchMeta] = useState({ isDefaultDailyBatch: false, size: 0 })
+  const [sessionQueueIds, setSessionQueueIds] = useState([])
+  const [sessionLogId, setSessionLogId] = useState(null)
+  const keyboardFlashTimeoutRef = useRef(null)
+  const sessionLogClosedRef = useRef(false)
+  const sessionLogIdRef = useRef(null)
+  const allCardsRef = useRef([])
+  const editBackRef = useRef(null)
+  const occlusionEditorRef = useRef(null)
+  const sessionMode = 'learn-lecture'
+  const sessionScope = `lecture:${lecture.id}`
+
+  const assignSessionLogId = (value) => {
+    sessionLogIdRef.current = value || null
+    setSessionLogId(value || null)
+  }
+
+  const getStatsSnapshot = (stats = sessionStats, coveredIds = reviewedCardIds) => {
+    const again = Number(stats?.again || 0)
+    const hard = Number(stats?.hard || 0)
+    const good = Number(stats?.good || 0)
+    const easy = Number(stats?.easy || 0)
+    const cardsCovered = Array.isArray(coveredIds) ? coveredIds.length : 0
+    return {
+      again,
+      hard,
+      good,
+      easy,
+      cardsCovered,
+    }
+  }
 
   // Load next card on mount and after each review
   useEffect(() => {
-    loadNextCard()
-  }, [lecture.id])
+    initializeSession()
+  }, [lecture.id, user?.id])
 
-
-  const loadNextCard = async () => {
+  const applySavedSession = async (saved) => {
     setLoading(true)
+    const restoredActiveSessionCardIds = Array.isArray(saved.activeSessionCardIds)
+      ? saved.activeSessionCardIds
+      : null
+    const restoredSessionBatchMeta = saved.sessionBatchMeta || { isDefaultDailyBatch: false, size: 0 }
+    const restoredQueueIds = Array.isArray(saved.sessionQueueIds) ? saved.sessionQueueIds : []
+    setActiveSessionCardIds(restoredActiveSessionCardIds)
+    setSessionStats(saved.sessionStats || { again: 0, hard: 0, good: 0, easy: 0 })
+    setReviewedCardIds(Array.isArray(saved.reviewedCardIds) ? saved.reviewedCardIds : [])
+    setCycleCounts(saved.cycleCounts || { firstCycle: 0, secondCycle: 0, graduated: 0 })
+    setSessionBatchMeta(restoredSessionBatchMeta)
+    setSessionQueueIds(restoredQueueIds)
+    setIsFlipped(false)
+    setReviewStartTime(null)
+    setSessionComplete(false)
+    const restoredSessionLogId = saved.sessionLogId || null
+    assignSessionLogId(restoredSessionLogId)
+    sessionLogClosedRef.current = false
+    setResumePrompt(null)
+    allCardsRef.current = []
+    await loadNextCard({
+      activeSessionCardIdsOverride: restoredActiveSessionCardIds,
+      sessionBatchMetaOverride: restoredSessionBatchMeta,
+      queueOverride: restoredQueueIds,
+      sessionLogIdOverride: restoredSessionLogId,
+    })
+  }
+
+  const initializeSession = async () => {
+    if (Array.isArray(lecture?.notes?._flashcards) && lecture.notes._flashcards.length > 0) {
+      const { error: backfillError } = await backfillStructuredCardPayload(lecture.id, lecture.notes._flashcards)
+      if (backfillError) {
+        // Structured card payload backfill skipped - non-critical
+      }
+    }
+
+    if (!user?.id) {
+      const { data: allCards, error: fetchError } = await getFlashcardsByLecture(lecture.id)
+      if (fetchError) throw fetchError
+      allCardsRef.current = Array.isArray(allCards) ? allCards : []
+      await maybeStartOrPrompt(allCards)
+      return
+    }
+
+    const saved = loadPersistedSession({ userId: user.id, mode: sessionMode, scope: sessionScope })
+    if (
+      saved &&
+      Array.isArray(saved.activeSessionCardIds) &&
+      saved.activeSessionCardIds.length > 0 &&
+      !saved.sessionComplete
+    ) {
+      if (autoResumeFromLog) {
+        await applySavedSession(saved)
+        if (typeof onAutoResumeHandled === 'function') onAutoResumeHandled()
+      } else {
+        setResumePrompt(saved)
+      }
+      setLoading(false)
+      return
+    }
+    if (autoResumeFromLog && typeof onAutoResumeHandled === 'function') {
+      onAutoResumeHandled()
+    }
+
+    const { data: allCards, error: fetchError } = await getFlashcardsByLecture(lecture.id)
+    if (fetchError) {
+      setError(fetchError.message)
+      setLoading(false)
+      return
+    }
+    allCardsRef.current = Array.isArray(allCards) ? allCards : []
+    await maybeStartOrPrompt(allCards)
+  }
+
+  const maybeStartOrPrompt = async (allCards) => {
+    const cards = Array.isArray(allCards) ? allCards : []
+    allCardsRef.current = cards
+    const remainingNew = cards.filter((card) => card.state === 'new').length
+
+    if (remainingNew === 0) {
+      if (user?.id) {
+        clearPersistedSession({ userId: user.id, mode: sessionMode, scope: sessionScope })
+      }
+      setSessionComplete(true)
+      setLoading(false)
+      return
+    }
+
+    if (user?.id) {
+      const dailyState = readDailyLimitState(user.id, lecture.id)
+      const dailyDefaultDone = dailyState.date === getTodayKey() && dailyState.defaultBatchCompleted
+      if (dailyDefaultDone) {
+        setContinueCount(Math.min(remainingNew, DEFAULT_DAILY_NEW_CARDS))
+        setContinuePrompt({ remainingNew })
+        setLoading(false)
+        return
+      }
+    }
+
+    await loadNextCard({ allCardsOverride: cards })
+  }
+
+  const loadNextCard = async ({
+    allCardsOverride = null,
+    requestedBatchSize = null,
+    queueOverride = null,
+    activeSessionCardIdsOverride = null,
+    sessionBatchMetaOverride = null,
+    sessionLogIdOverride = null,
+    suppressLoading = false,
+  } = {}) => {
+    const shouldToggleLoading = !suppressLoading
+    if (shouldToggleLoading) setLoading(true)
     setError(null)
 
     try {
       // Get all flashcards for this lecture
-      const { data: allCards, error: fetchError } = await getFlashcardsByLecture(lecture.id)
+      let allCards = allCardsOverride
+      if (!Array.isArray(allCards) && Array.isArray(allCardsRef.current) && allCardsRef.current.length > 0) {
+        allCards = allCardsRef.current
+      }
+      if (!Array.isArray(allCards)) {
+        const { data, error: fetchError } = await getFlashcardsByLecture(lecture.id)
+        if (fetchError) throw fetchError
+        allCards = data || []
+      }
+      allCardsRef.current = allCards
 
-      if (fetchError) throw fetchError
+      const effectiveActiveSessionCardIds = Array.isArray(activeSessionCardIdsOverride)
+        ? activeSessionCardIdsOverride
+        : activeSessionCardIds
+      const effectiveSessionBatchMeta = sessionBatchMetaOverride || sessionBatchMeta
+      const effectiveSessionLogId = sessionLogIdOverride || sessionLogIdRef.current || sessionLogId
 
       // Check if we need to start a new session
-      if (activeSessionCardIds === null) {
-        // No active session - start a new batch of 20 new cards
+      if (effectiveActiveSessionCardIds === null) {
+        // No active session - start a new batch of new cards
         const newCards = allCards.filter(card => card.state === 'new')
 
         if (newCards.length === 0) {
           // No new cards left - session complete
+          if (user?.id) {
+            clearPersistedSession({ userId: user.id, mode: sessionMode, scope: sessionScope })
+          }
           setSessionComplete(true)
-          setLoading(false)
+          if (shouldToggleLoading) setLoading(false)
           return
         }
 
-        // Select first 20 new cards
-        const batchCards = newCards.slice(0, 20)
+        const desiredBatchSize = Number.isInteger(requestedBatchSize) && requestedBatchSize > 0
+          ? Math.min(requestedBatchSize, newCards.length)
+          : Math.min(DEFAULT_DAILY_NEW_CARDS, newCards.length)
+        const isDefaultDailyBatch = !(Number.isInteger(requestedBatchSize) && requestedBatchSize > 0)
+
+        // Select random new cards for this batch
+        const batchCards = shuffleCards(newCards).slice(0, desiredBatchSize)
         const batchIds = batchCards.map(c => c.id)
+
+        const initialQueue = shuffleCards(batchIds)
 
         // Store session card IDs
         setActiveSessionCardIds(batchIds)
+        setSessionBatchMeta({ isDefaultDailyBatch, size: desiredBatchSize })
+        setSessionQueueIds(initialQueue)
+        if (!effectiveSessionLogId) {
+          const { data: logRow } = await startStudySessionLog({
+            sourceType: 'lecture',
+            sessionMode: 'new',
+            lectureId: lecture.id,
+            filters: null,
+          })
+          assignSessionLogId(logRow?.id || null)
+          sessionLogClosedRef.current = false
+        }
 
         // Calculate cycle counts for this batch
         const firstCycle = batchCards.filter(c => (c.state === 'new' || c.state === 'learning') && (c.learning_step === 0 || !c.learning_step)).length
@@ -74,56 +486,53 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
           graduated,
         })
 
-        // Sort and get first card
-        const sortedCards = sortCards(batchCards)
-        setCurrentCard(sortedCards[0])
-        setLoading(false)
+        // First pass should be random
+        const firstCardId = initialQueue[0]
+        const firstCard = batchCards.find((card) => card.id === firstCardId) || pickRandomCard(batchCards)
+        setCurrentCard(firstCard)
+        if (shouldToggleLoading) setLoading(false)
         return
       }
 
       // Active session exists - get cards from this session that haven't graduated yet
       const sessionCards = allCards.filter(card =>
-        activeSessionCardIds.includes(card.id) && card.state !== 'review'
+        effectiveActiveSessionCardIds.includes(card.id) && card.state !== 'review'
       )
 
       // Check if all session cards have graduated
       if (sessionCards.length === 0) {
         // Session complete - clear session IDs to start new batch on next load
+        if (effectiveSessionBatchMeta.isDefaultDailyBatch && user?.id) {
+          markDailyDefaultBatchCompleted(user.id, lecture.id)
+        }
         setActiveSessionCardIds(null)
+        setSessionBatchMeta({ isDefaultDailyBatch: false, size: 0 })
+        setSessionQueueIds([])
+        if (user?.id) {
+          clearPersistedSession({ userId: user.id, mode: sessionMode, scope: sessionScope })
+        }
+        if (effectiveSessionLogId && !sessionLogClosedRef.current) {
+          sessionLogClosedRef.current = true
+          await closeStudySessionLog(effectiveSessionLogId, {
+            status: 'completed',
+            stats: getStatsSnapshot(),
+          })
+        }
         setSessionComplete(true)
-        setLoading(false)
+        if (shouldToggleLoading) setLoading(false)
         return
       }
 
-      // Filter out cards that were reviewed too recently (enforce minimum delay for "Again" cards)
-      const now = new Date()
-      const eligibleCards = sessionCards.filter(card => {
-        if (!card.last_reviewed_at) return true // Never reviewed, show immediately
-        const timeSinceReview = now - new Date(card.last_reviewed_at)
-        return timeSinceReview > 30000 // 30 seconds minimum delay
-      })
-
-      // If no eligible cards yet (all recently reviewed), show them anyway since they're the only ones left
-      // Sort by due_date (shortest interval remaining first)
-      if (eligibleCards.length === 0) {
-        // These are the only cards left - show them anyway, sorted by interval remaining
-        const sortedWaitingCards = sortCards(sessionCards)
-        setCurrentCard(sortedWaitingCards[0])
-
-        // Calculate cycle counts for display
-        const firstCycle = sessionCards.filter(c => (c.state === 'new' || c.state === 'learning') && (c.learning_step === 0 || !c.learning_step)).length
-        const secondCycle = sessionCards.filter(c => c.state === 'learning' && c.learning_step === 1).length
-        const graduated = allCards.filter(c => c.state === 'review').length
-
-        setCycleCounts({
-          firstCycle,
-          secondCycle,
-          graduated,
-        })
-
-        setLoading(false)
-        return
+      const queueSource = Array.isArray(queueOverride) ? queueOverride : sessionQueueIds
+      const activeIdSet = new Set(sessionCards.map((card) => card.id))
+      const normalizedQueue = queueSource.filter((id) => activeIdSet.has(id))
+      const missingIds = sessionCards
+        .map((card) => card.id)
+        .filter((id) => !normalizedQueue.includes(id))
+      if (missingIds.length > 0) {
+        normalizedQueue.push(...shuffleCards(missingIds))
       }
+      setSessionQueueIds(normalizedQueue)
 
       // Calculate cycle counts for active session cards only
       const firstCycle = sessionCards.filter(c => (c.state === 'new' || c.state === 'learning') && (c.learning_step === 0 || !c.learning_step)).length
@@ -136,42 +545,212 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
         graduated,
       })
 
-      // Sort and get next card
-      const sortedCards = sortCards(eligibleCards)
-      setCurrentCard(sortedCards[0])
-      setLoading(false)
+      const nextCardId = normalizedQueue[0]
+      const nextCard = sessionCards.find((card) => card.id === nextCardId) || sessionCards[0]
+      setCurrentCard(nextCard)
+      if (shouldToggleLoading) setLoading(false)
     } catch (err) {
-      console.error('Failed to load next card:', err)
+      // Failed to load next card
       setError(err.message)
-      setLoading(false)
+      if (shouldToggleLoading) setLoading(false)
     }
-  }
-
-  const sortCards = (cards) => {
-    const now = new Date()
-
-    return cards.sort((a, b) => {
-      const stepA = a.learning_step || 0
-      const stepB = b.learning_step || 0
-
-      // Sort by learning step first (step 0 before step 1)
-      if (stepA !== stepB) {
-        return stepA - stepB
-      }
-
-      // Within same step, calculate effective due date
-      // NEW cards (never reviewed) → treat as due NOW (not overdue)
-      // LEARNING cards (reviewed) → use actual due_date
-      const effectiveDueA = a.last_reviewed_at ? new Date(a.due_date) : now
-      const effectiveDueB = b.last_reviewed_at ? new Date(b.due_date) : now
-
-      // Sort by effective due date (most overdue first)
-      return effectiveDueA - effectiveDueB
-    })
   }
 
   // Calculate next intervals for button labels
   const nextIntervals = currentCard && isFlipped ? getNextIntervals(currentCard) : {}
+  const cardTags = getCardDisplayTags(currentCard)
+
+  const applyEditorCommand = (command, value = null) => {
+    if (!editBackRef.current) return
+    editBackRef.current.focus()
+    if (value === null) {
+      document.execCommand(command)
+    } else {
+      document.execCommand(command, false, value)
+    }
+    setTimeout(() => {
+      if (editBackRef.current) {
+        setEditingCardDraft((prev) => prev ? { ...prev, back: editBackRef.current.innerHTML } : prev)
+      }
+    }, 10)
+  }
+
+  const openEditModal = () => {
+    if (!currentCard) return
+    const contentTags = getInitialContentTags(currentCard)
+    const cardKind = inferCardKind(currentCard)
+    const occlusionData = getOcclusionData(currentCard)
+    const interpretationData = getInterpretationData(currentCard)
+    if (cardKind === 'occlusion') {
+      const parsedFront = extractImageAndQuestionFromFront(currentCard.front)
+      const label = occlusionData?.label || {}
+      setEditingOcclusionDraft({
+        questionText: occlusionData?.questionText || parsedFront.questionText || 'What is the masked structure?',
+        labelText: label.text || String(currentCard.back || '').trim(),
+        x: Number(label.x || 0),
+        y: Number(label.y || 0),
+        width: Number(label.width || 120),
+        height: Number(label.height || 60),
+        originalImage: occlusionData?.originalImage || parsedFront.imageDataUrl || '',
+        contentTags,
+      })
+      setEditingCardDraft(null)
+    } else if (cardKind === 'interpretation') {
+      const interpretation = interpretationData || {}
+      const parsedFront = extractImageAndQuestionFromFront(currentCard.front)
+      setEditingCardDraft({
+        front: normalizeInterpretationQuestion(interpretation.question || parsedFront.questionText || ''),
+        back: currentCard.back || interpretation.answer || '',
+        imageDataUrl: interpretation.imageDataUrl || parsedFront.imageDataUrl || '',
+        contentTags,
+      })
+      setEditingOcclusionDraft(null)
+    } else {
+      setEditingCardDraft({
+        front: currentCard.front || '',
+        back: currentCard.back || '',
+        contentTags,
+      })
+      setEditingOcclusionDraft(null)
+    }
+    setEditingCardKind(cardKind)
+    setDidEditTags(false)
+    setNewTagInput('')
+    setShowEditModal(true)
+  }
+
+  const closeEditModal = () => {
+    setShowEditModal(false)
+    setEditingCardDraft(null)
+    setEditingOcclusionDraft(null)
+    setEditingCardKind('text')
+    setDrawingOcclusionBox(null)
+    setDidEditTags(false)
+    setNewTagInput('')
+  }
+
+  const saveSessionEdit = async () => {
+    if (!currentCard) return
+    setEditSaving(true)
+
+    try {
+      if (editingCardKind === 'occlusion' && editingOcclusionDraft) {
+        const questionText = String(editingOcclusionDraft.questionText || '').trim()
+        const labelText = String(editingOcclusionDraft.labelText || '').trim()
+        const contentTags = Array.isArray(editingOcclusionDraft.contentTags) ? editingOcclusionDraft.contentTags : []
+        const label = {
+          id: 'manual',
+          x: Math.max(0, Number(editingOcclusionDraft.x || 0)),
+          y: Math.max(0, Number(editingOcclusionDraft.y || 0)),
+          width: Math.max(1, Number(editingOcclusionDraft.width || 1)),
+          height: Math.max(1, Number(editingOcclusionDraft.height || 1)),
+          text: labelText,
+        }
+        const maskedDataUrl = await createMaskedImage(editingOcclusionDraft.originalImage, label)
+        const updates = {
+          front: `<img src="${maskedDataUrl}" style="max-width:400px;"><br><br><br>${formatQuestionForFrontHtml(questionText)}`,
+          back: labelText,
+          occlusion_data: {
+            originalImage: editingOcclusionDraft.originalImage,
+            label,
+            questionText,
+          }
+        }
+        if (didEditTags) {
+          updates.content_tags = contentTags
+          updates.custom_user_tags = contentTags
+          updates.ai_tag_suggestions = null
+        }
+        const { data, error: updateError } = await updateFlashcard(currentCard.id, updates)
+        if (updateError) throw updateError
+        setCurrentCard((prev) => ({ ...prev, ...(data || updates) }))
+      } else if (editingCardDraft) {
+        const contentTags = Array.isArray(editingCardDraft.contentTags) ? editingCardDraft.contentTags : []
+        if (editingCardKind === 'interpretation') {
+          const question = String(editingCardDraft.front || '').trim()
+          const existingInterpretationData = getInterpretationData(currentCard) || {}
+          const updates = {
+            front: `<img src="${editingCardDraft.imageDataUrl}" style="max-width:400px;"><br><br><br>${formatQuestionForFrontHtml(question)}`,
+            back: editingCardDraft.back || '',
+            interpretation_data: {
+              ...existingInterpretationData,
+              imageDataUrl: editingCardDraft.imageDataUrl || existingInterpretationData.imageDataUrl || '',
+              question: normalizeInterpretationQuestion(question),
+              answer: stripHtmlTags(editingCardDraft.back || ''),
+            }
+          }
+          if (didEditTags) {
+            updates.content_tags = contentTags
+            updates.custom_user_tags = contentTags
+            updates.ai_tag_suggestions = null
+          }
+          const { data, error: updateError } = await updateFlashcard(currentCard.id, updates)
+          if (updateError) throw updateError
+          setCurrentCard((prev) => ({ ...prev, ...(data || updates) }))
+        } else {
+          const updates = {
+            front: editingCardDraft.front || '',
+            back: editingCardDraft.back || '',
+          }
+          if (didEditTags) {
+            updates.content_tags = contentTags
+            updates.custom_user_tags = contentTags
+            updates.ai_tag_suggestions = null
+          }
+          const { data, error: updateError } = await updateFlashcard(currentCard.id, updates)
+          if (updateError) throw updateError
+          setCurrentCard((prev) => ({ ...prev, ...(data || updates) }))
+        }
+      }
+      closeEditModal()
+    } catch {
+      toast.error('Failed to save flashcard changes. Please try again.')
+    } finally {
+      setEditSaving(false)
+    }
+  }
+
+  const persistCurrentSession = () => {
+    if (!user?.id) return
+    if (sessionComplete || !activeSessionCardIds || !currentCard) {
+      clearPersistedSession({ userId: user.id, mode: sessionMode, scope: sessionScope })
+      return
+    }
+
+    persistSession({
+      userId: user.id,
+      mode: sessionMode,
+      scope: sessionScope,
+      payload: {
+        lectureId: lecture.id,
+        activeSessionCardIds,
+        sessionBatchMeta,
+        sessionQueueIds,
+        currentCardId: currentCard.id,
+        isFlipped,
+        sessionStats,
+        reviewedCardIds,
+        cycleCounts,
+        reviewStartTime,
+        sessionComplete: false,
+        sessionLogId,
+      }
+    })
+  }
+
+  const pauseSessionIfActive = () => {
+    persistCurrentSession()
+    if (sessionComplete) return
+    if (!activeSessionCardIds || !currentCard) return
+    if (!sessionLogId || sessionLogClosedRef.current) return
+    sessionLogClosedRef.current = true
+    closeStudySessionLog(sessionLogId, {
+      status: 'paused',
+      stats: getStatsSnapshot(),
+    }).catch((error) => {
+      // Session log pause failed - non-critical
+    })
+  }
 
   const handleFlip = () => {
     if (!isFlipped) {
@@ -190,11 +769,30 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
       const timeMs = reviewStartTime ? Date.now() - reviewStartTime : null
 
       // Record review in database (updates due_date, learning_step, state, etc.)
-      const { error: reviewError } = await recordReview(currentCard.id, rating, timeMs)
+      const { data: updatedCard, error: reviewError } = await recordReview(currentCard.id, rating, {
+        reviewTimeMs: timeMs,
+        examDate: examDate
+      })
 
       if (reviewError) {
         throw reviewError
       }
+      if (updatedCard?.id) {
+        const nextAllCards = Array.isArray(allCardsRef.current) ? [...allCardsRef.current] : []
+        const idx = nextAllCards.findIndex((card) => card.id === updatedCard.id)
+        const merged = { ...currentCard, ...updatedCard }
+        if (idx >= 0) {
+          nextAllCards[idx] = { ...nextAllCards[idx], ...merged }
+        } else {
+          nextAllCards.push(merged)
+        }
+        allCardsRef.current = nextAllCards
+      }
+
+      const nextReviewedCardIds = reviewedCardIds.includes(currentCard.id)
+        ? reviewedCardIds
+        : [...reviewedCardIds, currentCard.id]
+      setReviewedCardIds(nextReviewedCardIds)
 
       // Update session stats
       const ratingKey = Object.keys(RATING).find(key => RATING[key] === rating).toLowerCase()
@@ -202,20 +800,204 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
         ...prev,
         [ratingKey]: prev[ratingKey] + 1,
       }))
+      if (sessionLogId && !sessionLogClosedRef.current) {
+        const projectedStats = {
+          ...sessionStats,
+          [ratingKey]: Number(sessionStats?.[ratingKey] || 0) + 1,
+        }
+        updateStudySessionLog(sessionLogId, getStatsSnapshot(projectedStats, nextReviewedCardIds)).catch((error) => {
+          // Session log update failed - non-critical
+        })
+      }
 
       // Reset UI state for next card
       setIsFlipped(false)
       setReviewStartTime(null)
       setSaving(false)
 
-      // Load next card (checks due dates and learning steps)
-      await loadNextCard()
+      const shouldRemainInSession = (updatedCard?.state || currentCard.state) !== 'review'
+      const nextQueue = (() => {
+        const currentIds = Array.isArray(sessionQueueIds) ? sessionQueueIds : []
+        const withoutCurrent = currentIds.filter((id) => id !== currentCard.id)
+        if (!shouldRemainInSession) return withoutCurrent
+        if (rating === RATING.AGAIN) {
+          const insertAt = Math.min(3, withoutCurrent.length)
+          return [
+            ...withoutCurrent.slice(0, insertAt),
+            currentCard.id,
+            ...withoutCurrent.slice(insertAt),
+          ]
+        }
+        if (rating === RATING.HARD) {
+          return [...withoutCurrent, currentCard.id]
+        }
+        return [...withoutCurrent, currentCard.id]
+      })()
+      setSessionQueueIds(nextQueue)
+
+      // Load next card from deterministic queue
+      await loadNextCard({
+        queueOverride: nextQueue,
+        allCardsOverride: allCardsRef.current,
+        suppressLoading: true,
+      })
     } catch (err) {
-      console.error('Failed to record review:', err)
-      alert('Failed to save review: ' + err.message)
+      toast.error('Failed to save review. Please try again.')
       setSaving(false)
     }
   }
+
+  const flashKeyboardRating = (rating) => {
+    if (keyboardFlashTimeoutRef.current) {
+      clearTimeout(keyboardFlashTimeoutRef.current)
+    }
+    setKeyboardFlashRating(rating)
+    keyboardFlashTimeoutRef.current = window.setTimeout(() => {
+      setKeyboardFlashRating(null)
+      keyboardFlashTimeoutRef.current = null
+    }, 140)
+  }
+
+  useEffect(() => {
+    if (loading || resumePrompt) return
+    persistCurrentSession()
+  }, [loading, resumePrompt, continuePrompt, activeSessionCardIds, currentCard, isFlipped, sessionStats, reviewedCardIds, cycleCounts, reviewStartTime, sessionComplete, sessionLogId, sessionBatchMeta, sessionQueueIds])
+
+  useEffect(() => {
+    if (loading || resumePrompt) return
+    const onBeforeUnload = (event) => {
+      pauseSessionIfActive()
+    }
+    const onPageHide = () => {
+      pauseSessionIfActive()
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        persistCurrentSession()
+      }
+    }
+    window.addEventListener('pagehide', onPageHide)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => {
+      window.removeEventListener('pagehide', onPageHide)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('beforeunload', onBeforeUnload)
+    }
+  }, [loading, resumePrompt, continuePrompt, activeSessionCardIds, currentCard, isFlipped, sessionStats, reviewedCardIds, cycleCounts, reviewStartTime, sessionComplete, sessionLogId, sessionBatchMeta, sessionQueueIds])
+
+  useEffect(() => {
+    return () => {
+      pauseSessionIfActive()
+    }
+  }, [sessionComplete, sessionLogId, activeSessionCardIds, currentCard, isFlipped, sessionStats, reviewedCardIds, cycleCounts, reviewStartTime, sessionBatchMeta, sessionQueueIds])
+
+  const handleResumeSaved = async () => {
+    if (!resumePrompt) return
+    await applySavedSession(resumePrompt)
+  }
+
+  const handleStartFresh = async () => {
+    setLoading(true)
+    if (sessionLogId && !sessionLogClosedRef.current) {
+      sessionLogClosedRef.current = true
+      await closeStudySessionLog(sessionLogId, {
+        status: 'paused',
+        stats: getStatsSnapshot(),
+      })
+    }
+    if (user?.id) {
+      clearPersistedSession({ userId: user.id, mode: sessionMode, scope: sessionScope })
+    }
+    setResumePrompt(null)
+    setContinuePrompt(null)
+    setActiveSessionCardIds(null)
+    setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
+    setReviewedCardIds([])
+    setCycleCounts({ firstCycle: 0, secondCycle: 0, graduated: 0 })
+    setSessionBatchMeta({ isDefaultDailyBatch: false, size: 0 })
+    setSessionQueueIds([])
+    setIsFlipped(false)
+    setReviewStartTime(null)
+    setSessionComplete(false)
+    assignSessionLogId(null)
+    allCardsRef.current = []
+    const { data: allCards, error: fetchError } = await getFlashcardsByLecture(lecture.id)
+    if (fetchError) {
+      setError(fetchError.message)
+      setLoading(false)
+      return
+    }
+    await maybeStartOrPrompt(allCards)
+  }
+
+  const handleContinueWithSlider = async () => {
+    setContinuePrompt(null)
+    setSessionComplete(false)
+    setActiveSessionCardIds(null)
+    setSessionBatchMeta({ isDefaultDailyBatch: false, size: 0 })
+    setSessionQueueIds([])
+    await loadNextCard({ requestedBatchSize: continueCount })
+  }
+
+  const handlePauseAndExit = () => {
+    pauseSessionIfActive()
+    onBack()
+  }
+
+  useEffect(() => {
+    return () => {
+      if (keyboardFlashTimeoutRef.current) {
+        clearTimeout(keyboardFlashTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    const isEditableTarget = (target) => {
+      if (!target) return false
+      const tag = target.tagName
+      return target.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+    }
+
+    const onKeyDown = (event) => {
+      if (isEditableTarget(event.target)) return
+      if (event.repeat) return
+      if (loading || sessionComplete || saving || keyboardRatePending || !currentCard) return
+
+      if (event.key === ' ') {
+        if (!isFlipped) {
+          event.preventDefault()
+          handleFlip()
+        }
+        return
+      }
+
+      if (!isFlipped) return
+
+      const key = event.key
+      if (!['1', '2', '3', '4'].includes(key)) return
+      event.preventDefault()
+
+      const ratingMap = {
+        '1': RATING.AGAIN,
+        '2': RATING.HARD,
+        '3': RATING.GOOD,
+        '4': RATING.EASY,
+      }
+
+      const rating = ratingMap[key]
+      flashKeyboardRating(rating)
+      setKeyboardRatePending(true)
+      window.setTimeout(async () => {
+        await handleRating(rating)
+        setKeyboardRatePending(false)
+      }, 120)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isFlipped, saving, keyboardRatePending, currentCard, loading, sessionComplete])
 
   const handleResetProgress = async () => {
     setResetting(true)
@@ -234,18 +1016,108 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
       // Reset UI state
       setIsFlipped(false)
       setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
+      setReviewedCardIds([])
       setSessionComplete(false)
       setActiveSessionCardIds(null) // Clear active session
+      setSessionBatchMeta({ isDefaultDailyBatch: false, size: 0 })
+      setSessionQueueIds([])
       setShowResetModal(false)
       setResetting(false)
+      if (user?.id) {
+        clearPersistedSession({ userId: user.id, mode: sessionMode, scope: sessionScope })
+        clearDailyLimitState(user.id, lecture.id)
+      }
+      assignSessionLogId(null)
+      allCardsRef.current = []
+      sessionLogClosedRef.current = false
 
       // Reload next card (will start new session)
       await loadNextCard()
     } catch (err) {
-      console.error('Failed to reset progress:', err)
-      alert('Failed to reset progress: ' + err.message)
+      toast.error('Failed to reset progress. Please try again.')
       setResetting(false)
     }
+  }
+
+  if (resumePrompt) {
+    return (
+      <div className="p-8 max-w-2xl mx-auto">
+        <div className="bg-surface rounded-2xl border border-divider p-8">
+          <h1 className="text-2xl font-bold text-primary mb-2">Resume Learning Session?</h1>
+          <p className="text-secondary mb-6">
+            Unfinished lecture session found from {formatSavedTime(resumePrompt.savedAt)}.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              onClick={handleResumeSaved}
+              className="px-4 py-3 bg-accent hover:bg-blue-600 text-white rounded-xl font-medium transition-colors"
+            >
+              Resume Session
+            </button>
+            <button
+              onClick={handleStartFresh}
+              className="px-4 py-3 bg-gray-100 hover:bg-gray-200 text-primary rounded-xl font-medium transition-colors"
+            >
+              Start New Session
+            </button>
+          </div>
+          <button
+            onClick={onBack}
+            className="mt-3 text-sm text-secondary hover:text-primary"
+          >
+            Back to Lecture
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (continuePrompt) {
+    return (
+      <div className="p-8 max-w-2xl mx-auto">
+        <div className="bg-surface rounded-2xl border border-divider p-8">
+          <h1 className="text-2xl font-bold text-primary mb-2">Daily New Cards Complete</h1>
+          <p className="text-secondary mb-4">
+            You have completed today&apos;s default {DEFAULT_DAILY_NEW_CARDS} new cards for this lecture.
+          </p>
+          <p className="text-sm text-secondary mb-4">
+            Continue with additional new cards from this lecture?
+          </p>
+          <div className="bg-gray-50 rounded-xl border border-divider p-4 mb-6">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-primary">Additional new cards</span>
+              <span className="text-sm text-secondary">{continueCount}</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={Math.max(1, continuePrompt.remainingNew)}
+              step={1}
+              value={continueCount}
+              onChange={(event) => setContinueCount(Number(event.target.value))}
+              className="w-full accent-blue-600"
+            />
+            <p className="text-xs text-secondary mt-2">
+              Remaining new cards in this lecture: {continuePrompt.remainingNew}
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              onClick={handleContinueWithSlider}
+              className="px-4 py-3 bg-accent hover:bg-blue-600 text-white rounded-xl font-medium transition-colors"
+            >
+              Continue
+            </button>
+            <button
+              onClick={onBack}
+              className="px-4 py-3 bg-gray-100 hover:bg-gray-200 text-primary rounded-xl font-medium transition-colors"
+            >
+              Back to Lecture
+            </button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   // Loading state
@@ -278,7 +1150,7 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
               <h3 className="font-semibold text-red-900 mb-1">Failed to load review queue</h3>
               <p className="text-sm text-red-700">{error}</p>
               <button
-                onClick={loadReviewQueue}
+                onClick={loadNextCard}
                 className="mt-3 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm transition-colors"
               >
                 Try Again
@@ -292,7 +1164,7 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
 
   // Session complete
   if (sessionComplete) {
-    const totalReviewed = sessionStats.again + sessionStats.hard + sessionStats.good + sessionStats.easy
+    const totalReviewed = reviewedCardIds.length
 
     return (
       <div className="min-h-screen bg-background">
@@ -301,7 +1173,7 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex items-center justify-between h-16">
               <button
-                onClick={onBack}
+                onClick={handlePauseAndExit}
                 className="flex items-center gap-2 text-secondary hover:text-primary transition-colors"
               >
                 <ArrowLeft className="w-4 h-4" />
@@ -370,7 +1242,7 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
 
             {/* Actions */}
             <button
-              onClick={onBack}
+              onClick={handlePauseAndExit}
               className="w-full px-6 py-3 bg-accent hover:bg-blue-600 rounded-xl font-medium text-white transition-colors"
             >
               Back to Lecture
@@ -381,179 +1253,587 @@ export function FlashcardReviewView({ lecture, module, onBack }) {
     )
   }
 
+  if (!currentCard) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 text-accent animate-spin mx-auto mb-4" />
+          <p className="text-secondary">Preparing session...</p>
+        </div>
+      </div>
+    )
+  }
+
 
   // Active review interface
   return (
-    <div className="min-h-screen bg-background">
+    <div className="p-8">
       {/* Header */}
-      <header className="bg-surface border-b border-divider sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <button
-              onClick={onBack}
-              className="flex items-center gap-2 text-secondary hover:text-primary transition-colors"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span className="text-sm">Back to Lecture</span>
-            </button>
-
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => setShowResetModal(true)}
-                className="flex items-center gap-2 px-3 py-1.5 text-secondary hover:text-primary hover:bg-gray-100 rounded-lg transition-colors"
-                title="Reset all progress for this lecture"
-              >
-                <RefreshCw className="w-4 h-4" />
-                <span className="text-sm">Reset Progress</span>
-              </button>
-              <div
-                className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium"
-                style={{ backgroundColor: `${module.color}15`, color: module.color }}
-              >
-                {module.abbreviation}
-              </div>
-              <div className="flex items-center gap-2">
-                <BookOpen className="w-4 h-4 text-secondary" />
-                <span className="text-sm font-medium text-primary">Review Session</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Cycle Progress */}
-          <div className="pb-4">
-            <div className="flex items-center justify-center gap-4">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-orange-500"></div>
-                <span className="text-xs text-secondary">
-                  First Cycle: <span className="font-medium text-primary">{cycleCounts.firstCycle}</span>
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                <span className="text-xs text-secondary">
-                  Second Cycle: <span className="font-medium text-primary">{cycleCounts.secondCycle}</span>
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                <span className="text-xs text-secondary">
-                  Graduated: <span className="font-medium text-primary">{cycleCounts.graduated}</span>
-                </span>
-              </div>
-            </div>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-4">
+          <button onClick={handlePauseAndExit} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+            <ArrowLeft className="w-5 h-5 text-secondary" />
+          </button>
+          <div>
+            <h1 className="text-xl font-bold text-primary">Study Session</h1>
+            <p className="text-sm text-secondary">{lecture.title}</p>
           </div>
         </div>
-      </header>
+      </div>
 
-      {/* Flashcard */}
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="space-y-6">
-          {/* Card State Badge */}
-          <div className="flex items-center justify-center gap-2">
-            <span className="inline-block px-3 py-1 bg-gray-100 rounded-full text-xs text-secondary">
-              {currentCard.state === 'new' && '✨ New Card'}
-              {currentCard.state === 'learning' && '📚 Learning'}
-              {currentCard.state === 'review' && '🔄 Review'}
-              {currentCard.state === 'relearning' && '🔁 Relearning'}
+      {/* Cycle progress */}
+      <div className="flex items-center justify-center gap-4 mb-6">
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+          <span className="text-xs text-secondary">
+            First Cycle: <span className="font-medium text-primary">{cycleCounts.firstCycle}</span>
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+          <span className="text-xs text-secondary">
+            Second Cycle: <span className="font-medium text-primary">{cycleCounts.secondCycle}</span>
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 rounded-full bg-green-500"></div>
+          <span className="text-xs text-secondary">
+            Graduated: <span className="font-medium text-primary">{cycleCounts.graduated}</span>
+          </span>
+        </div>
+      </div>
+
+      {/* Card */}
+      <div className="max-w-2xl mx-auto">
+        <div
+          onClick={handleFlip}
+          className="bg-surface rounded-2xl border border-divider p-8 min-h-[300px] cursor-pointer hover:shadow-lg transition-shadow"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-700">
+              {formatCardStateLabel(currentCard.state)}
             </span>
             {currentCard.lapse_count > 0 && (
-              <span className="inline-block px-3 py-1 bg-orange-100 rounded-full text-xs text-orange-700">
+              <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-orange-100 text-orange-700">
                 Lapses: {currentCard.lapse_count}
               </span>
             )}
+            <button
+              onClick={(event) => {
+                event.stopPropagation()
+                openEditModal()
+              }}
+              className="ml-auto inline-flex items-center justify-center w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 text-secondary hover:text-primary transition-colors"
+              title="Edit this flashcard"
+            >
+              <Edit2 className="w-3.5 h-3.5" />
+            </button>
           </div>
 
-          {/* Card */}
-          <div
-            onClick={handleFlip}
-            className="bg-surface rounded-2xl p-12 shadow-sm border border-divider cursor-pointer hover:shadow-md transition-shadow min-h-[400px] flex items-center justify-center"
-          >
-            <div className="text-center w-full">
-              {!isFlipped ? (
-                <>
-                  <p className="text-sm text-secondary mb-4 uppercase tracking-wide">Question</p>
-                  <div
-                    className="text-2xl text-primary font-medium leading-relaxed"
-                    dangerouslySetInnerHTML={{ __html: currentCard.front }}
-                  />
-                  <p className="text-sm text-secondary mt-8">Click to reveal answer</p>
-                </>
-              ) : (
-                <>
-                  <p className="text-sm text-secondary mb-4 uppercase tracking-wide">Answer</p>
-                  <div
-                    className="text-2xl text-primary font-medium leading-relaxed"
-                    dangerouslySetInnerHTML={{ __html: currentCard.back }}
-                  />
-                </>
-              )}
-            </div>
+          <div className="mb-6">
+            <div className="text-xs text-secondary uppercase tracking-wide mb-2">Question</div>
+            <div
+              className="text-lg text-primary"
+              dangerouslySetInnerHTML={{ __html: sanitizeHtml(currentCard.front) }}
+            />
           </div>
 
-          {/* Action Buttons - 4-button SRS system */}
           {isFlipped && (
-            <div className="grid grid-cols-4 gap-3">
-              <button
-                onClick={() => handleRating(RATING.AGAIN)}
-                disabled={saving}
-                className="flex flex-col items-center justify-center gap-2 px-4 py-4 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-medium text-white transition-colors"
-              >
-                <RotateCcw className="w-5 h-5" />
-                <span className="text-sm">Again</span>
-                <span className="text-xs opacity-75">{nextIntervals.again || '?'}</span>
-              </button>
-
-              <button
-                onClick={() => handleRating(RATING.HARD)}
-                disabled={saving}
-                className="flex flex-col items-center justify-center gap-2 px-4 py-4 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-medium text-white transition-colors"
-              >
-                <MinusCircle className="w-5 h-5" />
-                <span className="text-sm">Hard</span>
-                <span className="text-xs opacity-75">{nextIntervals.hard || '?'}</span>
-              </button>
-
-              <button
-                onClick={() => handleRating(RATING.GOOD)}
-                disabled={saving}
-                className="flex flex-col items-center justify-center gap-2 px-4 py-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-medium text-white transition-colors"
-              >
-                <Check className="w-5 h-5" />
-                <span className="text-sm">Good</span>
-                <span className="text-xs opacity-75">{nextIntervals.good || '?'}</span>
-              </button>
-
-              <button
-                onClick={() => handleRating(RATING.EASY)}
-                disabled={saving}
-                className="flex flex-col items-center justify-center gap-2 px-4 py-4 bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-medium text-white transition-colors"
-              >
-                <Zap className="w-5 h-5" />
-                <span className="text-sm">Easy</span>
-                <span className="text-xs opacity-75">{nextIntervals.easy || '?'}</span>
-              </button>
+            <div className="border-t border-divider pt-6">
+              <div className="text-xs text-secondary uppercase tracking-wide mb-2">Answer</div>
+              <div
+                className="text-lg text-primary"
+                dangerouslySetInnerHTML={{ __html: sanitizeHtml(currentCard.back) }}
+              />
             </div>
           )}
 
-          {/* Keyboard shortcuts hint */}
-          {isFlipped && (
-            <div className="text-center">
-              <p className="text-xs text-secondary">
-                Tip: Use keyboard shortcuts 1, 2, 3, 4 for faster reviews
-              </p>
+          {!isFlipped && (
+            <div className="text-center text-secondary text-sm mt-8">
+              Click to reveal answer
             </div>
           )}
 
-          {/* Tags */}
-          {currentCard.tags && (
-            <div className="text-center">
-              <span className="inline-block px-3 py-1 bg-gray-100 rounded-full text-xs text-secondary">
-                {currentCard.tags}
+          <div className="border-t border-divider pt-5 mt-10">
+            <div className="flex flex-wrap gap-2 mb-2">
+              <span
+                className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
+                style={{ backgroundColor: `${module?.color || '#6B7280'}15`, color: module?.color || '#6B7280' }}
+              >
+                {(module?.abbreviation || module?.name || 'Unknown')} - {lecture?.title || 'Unknown'}
               </span>
             </div>
-          )}
+            <div className="flex flex-wrap gap-2">
+              {cardTags.map((tag) => (
+                <span key={tag} className="inline-flex items-center px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 text-xs rounded-full">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
-      </main>
+
+        {isFlipped && (
+          <div className="grid grid-cols-4 gap-3 mt-6">
+            <button
+              onClick={() => handleRating(RATING.AGAIN)}
+              disabled={saving || keyboardRatePending}
+              className={`flex flex-col items-center gap-1 px-4 py-3 border border-red-200 rounded-xl transition-colors disabled:opacity-50 ${
+                keyboardFlashRating === RATING.AGAIN ? 'bg-red-100' : 'bg-red-50 hover:bg-red-100'
+              }`}
+            >
+              <span className="text-sm font-medium text-red-700">Again</span>
+              <span className="text-xs text-red-600">{nextIntervals.again || '?'}</span>
+            </button>
+            <button
+              onClick={() => handleRating(RATING.HARD)}
+              disabled={saving || keyboardRatePending}
+              className={`flex flex-col items-center gap-1 px-4 py-3 border border-orange-200 rounded-xl transition-colors disabled:opacity-50 ${
+                keyboardFlashRating === RATING.HARD ? 'bg-orange-100' : 'bg-orange-50 hover:bg-orange-100'
+              }`}
+            >
+              <span className="text-sm font-medium text-orange-700">Hard</span>
+              <span className="text-xs text-orange-600">{nextIntervals.hard || '?'}</span>
+            </button>
+            <button
+              onClick={() => handleRating(RATING.GOOD)}
+              disabled={saving || keyboardRatePending}
+              className={`flex flex-col items-center gap-1 px-4 py-3 border border-green-200 rounded-xl transition-colors disabled:opacity-50 ${
+                keyboardFlashRating === RATING.GOOD ? 'bg-green-100' : 'bg-green-50 hover:bg-green-100'
+              }`}
+            >
+              <span className="text-sm font-medium text-green-700">Good</span>
+              <span className="text-xs text-green-600">{nextIntervals.good || '?'}</span>
+            </button>
+            <button
+              onClick={() => handleRating(RATING.EASY)}
+              disabled={saving || keyboardRatePending}
+              className={`flex flex-col items-center gap-1 px-4 py-3 border border-blue-200 rounded-xl transition-colors disabled:opacity-50 ${
+                keyboardFlashRating === RATING.EASY ? 'bg-blue-100' : 'bg-blue-50 hover:bg-blue-100'
+              }`}
+            >
+              <span className="text-sm font-medium text-blue-700">Easy</span>
+              <span className="text-xs text-blue-600">{nextIntervals.easy || '?'}</span>
+            </button>
+          </div>
+        )}
+      </div>
+
+      {showEditModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-surface rounded-2xl p-6 max-w-3xl w-full shadow-xl border border-divider max-h-[90vh] overflow-y-auto">
+            <div className="mb-4">
+              <h2 className="text-xl font-bold text-primary">Edit Flashcard</h2>
+            </div>
+
+            {editingCardKind === 'occlusion' && editingOcclusionDraft ? (
+              <div className="space-y-5">
+                <p className="text-sm text-secondary">
+                  Edit the occlusion box, label, and question:
+                </p>
+                <div className="grid lg:grid-cols-2 gap-6">
+                  <div>
+                    <div
+                      ref={occlusionEditorRef}
+                      className="relative inline-block border border-divider rounded-lg overflow-hidden cursor-crosshair"
+                      onMouseDown={(e) => {
+                        if (!drawingOcclusionBox) return
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        const x = ((e.clientX - rect.left) / rect.width) * 100
+                        const y = ((e.clientY - rect.top) / rect.height) * 100
+                        setDrawingOcclusionBox({ x, y, width: 0, height: 0, isDrawing: true })
+                      }}
+                      onMouseMove={(e) => {
+                        if (!drawingOcclusionBox?.isDrawing) return
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        const currentX = ((e.clientX - rect.left) / rect.width) * 100
+                        const currentY = ((e.clientY - rect.top) / rect.height) * 100
+                        setDrawingOcclusionBox((prev) => ({
+                          ...prev,
+                          width: currentX - prev.x,
+                          height: currentY - prev.y,
+                        }))
+                      }}
+                      onMouseUp={() => {
+                        if (!drawingOcclusionBox?.isDrawing) return
+                        const box = {
+                          x: drawingOcclusionBox.width < 0 ? drawingOcclusionBox.x + drawingOcclusionBox.width : drawingOcclusionBox.x,
+                          y: drawingOcclusionBox.height < 0 ? drawingOcclusionBox.y + drawingOcclusionBox.height : drawingOcclusionBox.y,
+                          width: Math.abs(drawingOcclusionBox.width),
+                          height: Math.abs(drawingOcclusionBox.height),
+                        }
+                        if (box.width > 1 && box.height > 1) {
+                          setEditingOcclusionDraft((prev) => ({
+                            ...prev,
+                            x: box.x,
+                            y: box.y,
+                            width: box.width,
+                            height: box.height,
+                          }))
+                        }
+                        setDrawingOcclusionBox(null)
+                      }}
+                      onMouseLeave={() => {
+                        if (drawingOcclusionBox?.isDrawing) {
+                          setDrawingOcclusionBox(null)
+                        }
+                      }}
+                    >
+                      <img
+                        src={editingOcclusionDraft.originalImage}
+                        alt="Editing"
+                        className="w-full h-auto"
+                        draggable={false}
+                      />
+
+                      {!drawingOcclusionBox && editingOcclusionDraft.width > 0 && (
+                        <div
+                          className="absolute border-2 border-orange-500 bg-orange-500/20"
+                          style={{
+                            left: `${editingOcclusionDraft.x}%`,
+                            top: `${editingOcclusionDraft.y}%`,
+                            width: `${editingOcclusionDraft.width}%`,
+                            height: `${editingOcclusionDraft.height}%`,
+                            cursor: 'move',
+                          }}
+                        >
+                          <div className="absolute -top-6 left-0 bg-orange-500 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
+                            {editingOcclusionDraft.labelText}
+                          </div>
+                        </div>
+                      )}
+
+                      {drawingOcclusionBox && (
+                        <div
+                          className="absolute border-2 border-dashed border-blue-500 bg-blue-500/10"
+                          style={{
+                            left: `${drawingOcclusionBox.width < 0 ? drawingOcclusionBox.x + drawingOcclusionBox.width : drawingOcclusionBox.x}%`,
+                            top: `${drawingOcclusionBox.height < 0 ? drawingOcclusionBox.y + drawingOcclusionBox.height : drawingOcclusionBox.y}%`,
+                            width: `${Math.abs(drawingOcclusionBox.width)}%`,
+                            height: `${Math.abs(drawingOcclusionBox.height)}%`,
+                          }}
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="bg-gray-50 rounded-lg p-4 border border-divider space-y-4">
+                      <div>
+                        <label className="text-sm font-medium text-primary block mb-2">Label Text</label>
+                        <input
+                          type="text"
+                          value={editingOcclusionDraft.labelText}
+                          onChange={(e) => {
+                            setEditingOcclusionDraft((prev) => ({
+                              ...prev,
+                              labelText: e.target.value,
+                            }))
+                          }}
+                          className="w-full text-sm border border-divider rounded px-3 py-2"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-sm font-medium text-primary block mb-2">Question Text</label>
+                        <input
+                          type="text"
+                          value={editingOcclusionDraft.questionText}
+                          onChange={(e) => {
+                            setEditingOcclusionDraft((prev) => ({
+                              ...prev,
+                              questionText: e.target.value,
+                            }))
+                          }}
+                          className="w-full text-sm border border-divider rounded px-3 py-2"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-sm font-medium text-primary block mb-2">Occlusion Box</label>
+                        <button
+                          onClick={() => {
+                            if (drawingOcclusionBox) {
+                              setDrawingOcclusionBox(null)
+                            } else {
+                              setEditingOcclusionDraft((prev) => ({
+                                ...prev,
+                                x: 0,
+                                y: 0,
+                                width: 0,
+                                height: 0,
+                              }))
+                              setDrawingOcclusionBox({})
+                            }
+                          }}
+                          className={`w-full px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                            drawingOcclusionBox
+                              ? 'bg-red-600 hover:bg-red-700 text-white'
+                              : 'bg-orange-600 hover:bg-orange-700 text-white'
+                          }`}
+                        >
+                          {drawingOcclusionBox ? 'Cancel Redraw' : 'Redraw Box'}
+                        </button>
+                        {drawingOcclusionBox !== null && !drawingOcclusionBox.x && (
+                          <p className="text-xs text-secondary mt-2">Click and drag on the image to draw a new box</p>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-xs text-secondary">Topic Tags</label>
+                        <div className="flex flex-wrap gap-1.5 min-h-[32px] p-2 bg-white border border-divider rounded-lg">
+                          {editingOcclusionDraft.contentTags?.map((tag, tagIdx) => (
+                            <span
+                              key={`${tag}-${tagIdx}`}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 text-xs rounded-full"
+                            >
+                              {tag}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDidEditTags(true)
+                                  setEditingOcclusionDraft((prev) => ({
+                                    ...prev,
+                                    contentTags: prev.contentTags.filter((_, i) => i !== tagIdx)
+                                  }))
+                                }}
+                                className="w-3.5 h-3.5 flex items-center justify-center hover:bg-blue-100 rounded-full"
+                              >
+                                <X className="w-2.5 h-2.5" />
+                              </button>
+                            </span>
+                          ))}
+                          <input
+                            type="text"
+                            value={newTagInput}
+                            onChange={(e) => setNewTagInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && newTagInput.trim()) {
+                                e.preventDefault()
+                                const newTag = newTagInput.trim().toLowerCase()
+                                if (!editingOcclusionDraft.contentTags?.includes(newTag)) {
+                                  setDidEditTags(true)
+                                  setEditingOcclusionDraft((prev) => ({
+                                    ...prev,
+                                    contentTags: [...(prev.contentTags || []), newTag]
+                                  }))
+                                }
+                                setNewTagInput('')
+                              }
+                            }}
+                            className="flex-1 min-w-[100px] bg-transparent border-none outline-none text-sm placeholder:text-gray-400"
+                            placeholder="Type tag and press Enter..."
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex gap-2 justify-end">
+                  <button
+                    onClick={closeEditModal}
+                    className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-primary rounded-lg text-sm font-medium transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={saveSessionEdit}
+                    disabled={drawingOcclusionBox !== null || editSaving}
+                    className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
+                  >
+                    Save Changes
+                  </button>
+                </div>
+              </div>
+            ) : (
+              editingCardDraft && (
+                <div className="space-y-2">
+                  {editingCardKind === 'interpretation' && editingCardDraft.imageDataUrl && (
+                    <div className="mb-2">
+                      <img
+                        src={editingCardDraft.imageDataUrl}
+                        alt="Interpretation"
+                        style={{ maxWidth: '400px' }}
+                        className="rounded-lg border border-divider"
+                      />
+                    </div>
+                  )}
+
+                  {editingCardKind === 'interpretation' ? (
+                    <textarea
+                      value={editingCardDraft.front || ''}
+                      onChange={(e) => setEditingCardDraft((prev) => ({ ...prev, front: e.target.value }))}
+                      className="w-full bg-white border border-divider rounded-lg px-3 py-2 text-sm min-h-[84px]"
+                      placeholder="Question"
+                      rows={4}
+                    />
+                  ) : (
+                    <input
+                      type="text"
+                      value={editingCardDraft.front || ''}
+                      onChange={(e) => setEditingCardDraft((prev) => ({ ...prev, front: e.target.value }))}
+                      className="w-full bg-white border border-divider rounded-lg px-3 py-2 text-sm"
+                      placeholder="Front"
+                    />
+                  )}
+
+                  <div className="flex flex-wrap gap-1 p-2 bg-gray-50 rounded-lg border border-divider">
+                    <div className="text-xs text-secondary w-full mb-1">Format answer:</div>
+                    <button
+                      type="button"
+                      onClick={() => applyEditorCommand('bold')}
+                      className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs font-bold"
+                    >
+                      B
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyEditorCommand('italic')}
+                      className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs italic"
+                    >
+                      I
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyEditorCommand('underline')}
+                      className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs underline"
+                    >
+                      U
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyEditorCommand('insertUnorderedList')}
+                      className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs"
+                      title="Bullet point"
+                    >
+                      •
+                    </button>
+                    <span className="border-l border-divider mx-1"></span>
+                    {ESSENTIAL_SYMBOLS.map((symbol) => (
+                      <button
+                        key={symbol}
+                        type="button"
+                        onClick={() => applyEditorCommand('insertText', symbol)}
+                        className="px-2 py-1 bg-white hover:bg-gray-100 border border-divider rounded text-xs"
+                      >
+                        {symbol}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div
+                    ref={(el) => {
+                      if (!el) return
+                      editBackRef.current = el
+                      if (el.innerHTML !== (editingCardDraft.back || '')) {
+                        el.innerHTML = editingCardDraft.back || ''
+                      }
+                    }}
+                    contentEditable
+                    suppressContentEditableWarning
+                    onInput={(e) => {
+                      const html = e.currentTarget.innerHTML
+                      setEditingCardDraft((prev) => ({ ...prev, back: html }))
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Tab') {
+                        e.preventDefault()
+                        if (e.shiftKey) {
+                          document.execCommand('outdent')
+                        } else {
+                          document.execCommand('indent')
+                        }
+                      }
+                    }}
+                    data-placeholder="Back"
+                    className="w-full bg-white border border-divider rounded-lg px-3 py-2 text-sm min-h-[100px] focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent"
+                    style={{ whiteSpace: 'pre-wrap' }}
+                  />
+
+                  <div className="space-y-2">
+                    <label className="text-xs text-secondary">Topic Tags</label>
+                    <div className="flex flex-wrap gap-1.5 min-h-[32px] p-2 bg-gray-50 border border-divider rounded-lg">
+                      {editingCardDraft.contentTags?.map((tag, tagIdx) => (
+                        <span
+                          key={`${tag}-${tagIdx}`}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 text-xs rounded-full"
+                        >
+                          {tag}
+                          <button
+                            type="button"
+                                    onClick={() => {
+                                      setDidEditTags(true)
+                                      setEditingCardDraft((prev) => ({
+                                        ...prev,
+                                        contentTags: prev.contentTags.filter((_, i) => i !== tagIdx)
+                              }))
+                            }}
+                            className="w-3.5 h-3.5 flex items-center justify-center hover:bg-blue-100 rounded-full"
+                          >
+                            <X className="w-2.5 h-2.5" />
+                          </button>
+                        </span>
+                      ))}
+                      <input
+                        type="text"
+                        value={newTagInput}
+                        onChange={(e) => setNewTagInput(e.target.value)}
+                        onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && newTagInput.trim()) {
+                                    e.preventDefault()
+                                    const newTag = newTagInput.trim().toLowerCase()
+                                    if (!editingCardDraft.contentTags?.includes(newTag)) {
+                                      setDidEditTags(true)
+                                      setEditingCardDraft((prev) => ({
+                                        ...prev,
+                                        contentTags: [...(prev.contentTags || []), newTag]
+                              }))
+                            }
+                            setNewTagInput('')
+                          }
+                        }}
+                        className="flex-1 min-w-[100px] bg-transparent border-none outline-none text-sm placeholder:text-gray-400"
+                        placeholder="Type tag and press Enter..."
+                      />
+                    </div>
+                  </div>
+                </div>
+              )
+            )}
+
+            {editingCardKind !== 'occlusion' && (
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={closeEditModal}
+                disabled={editSaving}
+                className="px-2.5 py-1.5 bg-gray-200 hover:bg-gray-300 disabled:opacity-50 rounded text-sm flex items-center gap-1"
+              >
+                <X className="w-3.5 h-3.5" />
+                Cancel
+              </button>
+              <button
+                onClick={saveSessionEdit}
+                disabled={editSaving}
+                className="px-2.5 py-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded text-sm flex items-center gap-1"
+              >
+                {editSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    Save
+                  </>
+                )}
+              </button>
+            </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Reset Progress Modal */}
       {showResetModal && (

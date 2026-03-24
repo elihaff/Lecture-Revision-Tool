@@ -55,7 +55,7 @@ export const CONFIG = {
   EASY_BONUS_MULTIPLIER: 1.3,
 
   // Ease adjustments
-  HARD_EASE_PENALTY: -0.15,
+  HARD_EASE_PENALTY: -0.10,
   EASY_EASE_BONUS: 0.15,
   AGAIN_EASE_PENALTY: -0.2,
 
@@ -64,6 +64,15 @@ export const CONFIG = {
 
   // New cards per day
   NEW_CARDS_PER_DAY: 20,
+
+  // ============================================================
+  // EXAM MODE SETTINGS
+  // ============================================================
+  // examDate is now passed dynamically, not hardcoded
+  EXAM_INTERVAL_CAP_MULTIPLIER: 0.3,    // maxInterval = daysUntilExam × this (0.3 = ~3-4 reviews, sustainable for large decks)
+  EARLY_REVIEW_EASE_CAP: 2.2,           // Cap ease for early reviews
+  EARLY_REVIEW_THRESHOLD: 3,            // Apply cap until this many repetitions
+  FIRST_REVIEW_INTERVAL: 4,             // Days for first review after graduation (was 6)
 }
 
 // ============================================================
@@ -74,13 +83,20 @@ export const CONFIG = {
  * Calculate next review using SM-2 with learning steps
  * @param {Object} card - Current card state
  * @param {number} rating - User rating (1-4)
- * @param {number} reviewTimeMs - Time taken
+ * @param {Object} options - Optional settings
+ * @param {number} options.reviewTimeMs - Time taken in milliseconds
+ * @param {string} options.examDate - ISO date string for exam (affects max interval)
  * @returns {Object} { updatedCard, reviewLog }
  */
-export function calculateNextReview(card, rating, reviewTimeMs = null) {
+export function calculateNextReview(card, rating, options = {}) {
+  const { reviewTimeMs = null, examDate = null } = options
+
   if (rating < RATING.AGAIN || rating > RATING.EASY) {
     throw new Error(`Invalid rating: ${rating}`)
   }
+
+  // Calculate effective max interval based on exam date
+  const maxInterval = getEffectiveMaxInterval(examDate)
 
   const {
     ease_factor = CONFIG.STARTING_EASE,
@@ -216,35 +232,45 @@ export function calculateNextReview(card, rating, reviewTimeMs = null) {
       // Hard - stay in review with small interval increase
       newInterval = Math.min(
         interval_days * CONFIG.HARD_INTERVAL_MULTIPLIER,
-        CONFIG.MAXIMUM_INTERVAL
+        maxInterval
       )
       newEaseFactor = Math.max(CONFIG.MINIMUM_EASE, ease_factor + CONFIG.HARD_EASE_PENALTY)
       newRepetitions += 1
     }
     else if (rating === RATING.GOOD) {
-      // Normal SM-2 progression
+      // Normal SM-2 progression (with exam mode adjustments)
       if (repetitions === 0) {
         newInterval = CONFIG.MINIMUM_INTERVAL
       } else if (repetitions === 1) {
-        newInterval = 6
+        newInterval = CONFIG.FIRST_REVIEW_INTERVAL
       } else {
+        // Apply early review ease cap ONLY when in exam mode
+        const inExamMode = examDate && calculateDaysUntilExam(examDate) > 0
+        const effectiveEase = (inExamMode && repetitions <= CONFIG.EARLY_REVIEW_THRESHOLD)
+          ? Math.min(ease_factor, CONFIG.EARLY_REVIEW_EASE_CAP)
+          : ease_factor
         newInterval = Math.min(
-          interval_days * ease_factor,
-          CONFIG.MAXIMUM_INTERVAL
+          interval_days * effectiveEase,
+          maxInterval
         )
       }
       newRepetitions += 1
     }
     else if (rating === RATING.EASY) {
-      // Easy - bonus interval
+      // Easy - bonus interval (with exam mode adjustments)
       if (repetitions === 0) {
         newInterval = CONFIG.GRADUATING_INTERVAL_EASY_LATER
       } else if (repetitions === 1) {
-        newInterval = 6 * CONFIG.EASY_BONUS_MULTIPLIER
+        newInterval = CONFIG.FIRST_REVIEW_INTERVAL * CONFIG.EASY_BONUS_MULTIPLIER
       } else {
+        // Apply early review ease cap ONLY when in exam mode
+        const inExamMode = examDate && calculateDaysUntilExam(examDate) > 0
+        const effectiveEase = (inExamMode && repetitions <= CONFIG.EARLY_REVIEW_THRESHOLD)
+          ? Math.min(ease_factor, CONFIG.EARLY_REVIEW_EASE_CAP)
+          : ease_factor
         newInterval = Math.min(
-          interval_days * ease_factor * CONFIG.EASY_BONUS_MULTIPLIER,
-          CONFIG.MAXIMUM_INTERVAL
+          interval_days * effectiveEase * CONFIG.EASY_BONUS_MULTIPLIER,
+          maxInterval
         )
       }
       newRepetitions += 1
@@ -318,6 +344,42 @@ function minutesToDays(minutes) {
  */
 function daysToMinutes(days) {
   return days * 24 * 60
+}
+
+/**
+ * Calculate days until exam date
+ * @param {string|null} examDate - ISO date string or null
+ * @returns {number|null} Days until exam, or null if no valid future date
+ */
+function calculateDaysUntilExam(examDate) {
+  if (!examDate) return null
+
+  const exam = new Date(examDate)
+  const now = new Date()
+
+  // Normalize to start of day
+  now.setHours(0, 0, 0, 0)
+  exam.setHours(0, 0, 0, 0)
+
+  const diffMs = exam - now
+  const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24))
+
+  return diffDays > 0 ? diffDays : null
+}
+
+/**
+ * Get effective max interval based on exam date
+ * @param {string|null} examDate - ISO date string or null
+ * @returns {number} Maximum interval in days
+ */
+function getEffectiveMaxInterval(examDate) {
+  if (examDate) {
+    const daysUntil = calculateDaysUntilExam(examDate)
+    if (daysUntil && daysUntil > 0) {
+      return Math.min(CONFIG.MAXIMUM_INTERVAL, daysUntil * CONFIG.EXAM_INTERVAL_CAP_MULTIPLIER)
+    }
+  }
+  return CONFIG.MAXIMUM_INTERVAL
 }
 
 /**

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { X, Search, ChevronLeft, ChevronRight, Image, FileImage, Link } from 'lucide-react'
 
 export function ImagePickerModal({
@@ -9,6 +9,8 @@ export function ImagePickerModal({
   existingImages,
   onSelectSlide,
   onSelectExisting,
+  onUploadImages,
+  uploadingImages = false,
   currentKey,
   notes,
   getSectionImage,
@@ -20,6 +22,7 @@ export function ImagePickerModal({
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [previewSize, setPreviewSize] = useState('large')
+  const uploadInputRef = useRef(null)
 
   // Filter slide thumbnails by search query (exclude uploaded images)
   const slideThumbnails = thumbnails.filter(thumb => !thumb.id?.startsWith('uploaded-'))
@@ -234,6 +237,36 @@ export function ImagePickerModal({
           </div>
         )}
 
+        {/* Uploaded mode controls */}
+        {activeTab === 'uploaded' && (
+          <div className="px-6 py-3 border-b border-gray-100 flex items-center justify-between">
+            <p className="text-sm text-gray-600">Upload additional images from your device.</p>
+            <div>
+              <input
+                type="file"
+                ref={uploadInputRef}
+                onChange={async (e) => {
+                  const files = e.target.files
+                  if (files && files.length > 0 && onUploadImages) {
+                    await onUploadImages(files)
+                  }
+                  e.target.value = ''
+                }}
+                accept="image/*"
+                multiple
+                className="hidden"
+              />
+              <button
+                onClick={() => uploadInputRef.current?.click()}
+                disabled={uploadingImages}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white transition-colors"
+              >
+                {uploadingImages ? 'Uploading...' : 'Upload Images'}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Content */}
         <div className="flex-1 overflow-hidden flex">
           {/* Thumbnail grid */}
@@ -353,7 +386,7 @@ export function ImagePickerModal({
                 ))}
                 {uploadedImages.length === 0 && (
                   <div className="col-span-3 text-center py-8 text-gray-500">
-                    No images uploaded yet. Use "Add Images" to upload images from your device.
+                    No uploaded images yet.
                   </div>
                 )}
               </div>

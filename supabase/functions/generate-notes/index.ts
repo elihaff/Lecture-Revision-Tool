@@ -21,61 +21,8 @@ interface GeneratedNoteSection {
   pointLevels?: number[]
 }
 
-function normalizePointLevels(rawLevels: unknown, pointsLength: number) {
-  const input = Array.isArray(rawLevels) ? rawLevels : []
-  const normalized = Array.from({ length: pointsLength }, (_, idx) => {
-    const raw = Number(input[idx] ?? 0)
-    if (!Number.isFinite(raw)) return 0
-    return Math.max(0, Math.floor(raw))
-  })
-
-  for (let i = 1; i < normalized.length; i++) {
-    normalized[i] = Math.min(normalized[i], normalized[i - 1] + 1)
-  }
-  return normalized
-}
-
-function inferPointLevels(points: string[]) {
-  const levels = Array(points.length).fill(0)
-  let activeParentIndex: number | null = null
-
-  const isHeaderLike = (text: string) => {
-    const clean = String(text || '').trim()
-    if (!clean) return false
-    if (clean.endsWith(':')) return true
-    const words = clean.split(/\s+/).filter(Boolean)
-    return words.length <= 5 && !/[.!?]$/.test(clean) && !clean.includes('→')
-  }
-
-  for (let i = 0; i < points.length; i++) {
-    const current = String(points[i] || '').trim()
-    if (!current) continue
-
-    if (isHeaderLike(current)) {
-      levels[i] = 0
-      activeParentIndex = i
-      continue
-    }
-
-    if (activeParentIndex !== null) {
-      const prev = String(points[i - 1] || '').trim()
-      const prevWasHeader = i - 1 === activeParentIndex || isHeaderLike(prev)
-      if (prevWasHeader || levels[i - 1] > 0) {
-        levels[i] = 1
-        continue
-      }
-    }
-
-    levels[i] = 0
-    activeParentIndex = null
-  }
-
-  return levels
-}
-
 function flattenGeneratedItems(
   rawItems: unknown,
-  level = 0,
   points: string[] = [],
   pointLevels: number[] = []
 ) {
@@ -88,7 +35,7 @@ function flattenGeneratedItems(
       const text = rawItem.trim()
       if (text) {
         points.push(text)
-        pointLevels.push(level)
+        pointLevels.push(0)
       }
       continue
     }
@@ -98,12 +45,13 @@ function flattenGeneratedItems(
     const text = String((rawItem as { text?: unknown }).text ?? '').trim()
     if (text) {
       points.push(text)
-      pointLevels.push(level)
+      pointLevels.push(0)
     }
 
     const children = (rawItem as { children?: unknown }).children
-    if (Array.isArray(children) && level < 6) {
-      flattenGeneratedItems(children, level + 1, points, pointLevels)
+    if (Array.isArray(children)) {
+      // Preserve child content but force flat bullet levels for AI-generated notes.
+      flattenGeneratedItems(children, points, pointLevels)
     }
   }
 
@@ -120,31 +68,13 @@ function normalizeGeneratedSections(rawSections: unknown) {
       : (Array.isArray(section?.points)
           ? section.points.map((p: unknown) => String(p ?? '').trim()).filter((p: string) => p.length > 0)
           : [])
-    const suppliedLevels = hasStructuredItems
-      ? normalizePointLevels(fromItems.pointLevels, points.length)
-      : normalizePointLevels(section?.pointLevels, points.length)
-    const inferredLevels = inferPointLevels(points)
-    const nonZeroSupplied = suppliedLevels.reduce((sum, lvl) => sum + (lvl > 0 ? 1 : 0), 0)
-    const nonZeroInferred = inferredLevels.reduce((sum, lvl) => sum + (lvl > 0 ? 1 : 0), 0)
-    const pointLevels = nonZeroSupplied >= nonZeroInferred ? suppliedLevels : inferredLevels
+    const pointLevels = Array(points.length).fill(0)
     return {
       section: String(section?.section || `${sectionIndex + 1}. Section`),
       points,
       pointLevels
     }
   })
-}
-
-function clampPointLevelJumps(levels: number[]) {
-  const normalized = levels.slice()
-  for (let i = 0; i < normalized.length; i++) {
-    const raw = Number(normalized[i] ?? 0)
-    normalized[i] = Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0
-    if (i > 0) {
-      normalized[i] = Math.min(normalized[i], normalized[i - 1] + 1)
-    }
-  }
-  return normalized
 }
 
 function normalizeSectionHeading(text: string) {
@@ -180,19 +110,18 @@ function mergeSectionIntoPrevious(
   if (!parent || !child) return false
 
   const mergedPoints = parent.points.slice()
-  const mergedLevels = clampPointLevelJumps(normalizePointLevels(parent.pointLevels, mergedPoints.length))
+  const mergedLevels = Array(mergedPoints.length).fill(0)
 
   mergedPoints.push(normalizeSectionHeading(child.section))
   mergedLevels.push(0)
 
-  const childLevels = clampPointLevelJumps(normalizePointLevels(child.pointLevels, child.points.length))
   for (let i = 0; i < child.points.length; i++) {
     mergedPoints.push(child.points[i])
-    mergedLevels.push(Math.max(1, childLevels[i] + 1))
+    mergedLevels.push(0)
   }
 
   parent.points = mergedPoints
-  parent.pointLevels = clampPointLevelJumps(mergedLevels)
+  parent.pointLevels = mergedLevels
   sections.splice(index, 1)
   return true
 }
@@ -214,7 +143,7 @@ function consolidateSections(
 ) {
   const sections = inputSections.map((section, idx) => {
     const points = Array.isArray(section?.points) ? section.points.filter(Boolean) : []
-    const pointLevels = clampPointLevelJumps(normalizePointLevels(section?.pointLevels, points.length))
+    const pointLevels = Array(points.length).fill(0)
     return {
       section: String(section?.section || `${idx + 1}. Section`),
       points,
@@ -248,119 +177,48 @@ function consolidateSections(
 }
 
 // Full notes generation prompt
-const NOTES_PROMPT = `You are to convert medical school lecture slides into concise revision notes.
+const NOTES_PROMPT = `You are generating exam-focused medical revision notes from lecture slides.
 
-Your goal is to create notes that are information-dense, easy to scan, and revision-friendly.
+GOAL
+Create concise, high-density notes that preserve all examinable content and the lecture's teaching order.
 
----
+MANDATORY CONTENT RULES
+1. Include all examinable definitions, mechanisms, pathways, structures, thresholds, contrasts, and clinically relevant distinctions present in the slides.
+2. Do not invent facts. If uncertain, omit.
+3. Remove filler, anecdotes, and presenter narration.
+4. Preserve causal and regulatory logic explicitly (use arrows).
 
-SECTION RULES
+STRUCTURE RULES
+1. Produce 8-14 major sections (concept clusters), in lecture order.
+2. Section titles should be concept-level (spider-diagram friendly), not micro-facts.
+3. Use flat bullets only (no nesting, no children arrays).
+4. Each bullet must be one standalone high-yield fact/mechanism step.
+5. Keep bullets short and scannable; split long ideas into multiple bullets.
 
-• Create 6–10 sections
-• Prefer around 7–8 sections where possible
-• Each section should represent a major concept cluster, major mechanism, major process, major theme, or major clinical/scientific category
-• Each section should be approximately aligned with a lecture learning objective
-• Section titles should represent the big concepts a student could place on a spider diagram to map the lecture
-• Do not create sections for tiny details or isolated facts
-• Preserve the lecture's pedagogical flow - sections should follow the order topics are presented
+STYLE RULES
+1. UK English spelling.
+2. Use precise medical terminology.
+3. No conversational tone or rhetorical questions.
+4. Use **asterisks** for key terms.
+5. Prefer explicit directional/causal notation:
+   - Cause -> Effect
+   - Up/down directional markers
+   - A vs B distinctions where exam-relevant
 
----
+QUALITY CHECK (before final output)
+1. Every learning objective is addressed.
+2. No key mechanism step or threshold is missing.
+3. Sections are major clusters, not fragmented trivia.
+4. Output is dense but readable for rapid revision.
 
-BULLET POINT RULES
+OUTPUT FORMAT (STRICT JSON ONLY)
+{"title":"Lecture Title","learningObjectives":["LO1","LO2"],"notes":[{"section":"1. Section Title","items":[{"text":"Bullet one"},{"text":"Bullet two"}]}]}
 
-• Use ONLY flat main bullet points - NO sub-bullets or nesting
-• Every bullet point should be at the same level
-• Each bullet should be a standalone, information-dense statement
-• Group related details by placing bullets consecutively within the same section
-• Keep bullets short and scannable
-
----
-
-VISUAL PROCESSING RULES
-
-• Keep sentences short and direct
-• Prefer compact phrases over prose
-• Use directional arrows consistently:
-
-Cause → Effect
-↓ / ↑ for decrease or increase
-⇄ for balance or reciprocity
-
-Examples:
-• ↓ insulin → ↑ lipolysis → ↑ ketogenesis → metabolic acidosis
-• ↑ T3/T4 → ↑ β-adrenergic receptor expression → ↑ heart rate
-• When describing regulation, always make directionality explicit
-• Avoid vague wording like "affects", "influences", or "involved in"
-
----
-
-CONTENT COMPLETENESS
-
-• Include all examinable mechanisms, structures, definitions, pathways, thresholds, and distinctions from the slides
-• Do not oversummarise at the expense of missing details
-• Preserve every causal link and logical step
-• Exclude anecdotal commentary, filler text, and slide narration
-
----
-
-LANGUAGE RULES
-
-• Use precise medical terminology
-• No rhetorical questions
-• No conversational tone
-• No redundancy
-• Use **asterisks** for key terms
-• Use UK English spelling
-
----
-
-FINAL VERIFICATION
-
-Before finishing, verify that:
-• Every learning objective is fully addressed
-• No mechanism, value, structure, or regulatory step from the slides is missing
-• Sections represent major concept clusters (6-10 sections)
-• All bullet points are flat with no nesting
-• Related bullets are grouped together within sections
-• Each bullet is information-dense and scannable
-• The notes can be skimmed rapidly and read slowly with full comprehension
-
-The final output should make the lecture easy to map as a spider diagram at section level, and easy to revise at bullet level.
-
----
-
-IMPORTANT: Return ONLY valid JSON in this exact format:
-{"title": "Lecture Title", "learningObjectives": ["LO1", "LO2"], "notes": [{"section": "1. Section Title", "items": [{"text": "First bullet point"}, {"text": "Second bullet point"}, {"text": "Third bullet point"}]}]}
-
-JSON FORMATTING RULES (CRITICAL):
-• Escape ALL backslashes (\\) as double backslash (\\\\)
-• Escape ALL double quotes (") inside content using backslash (\\")
-• Do NOT include actual newlines - keep each point on one line
-• Ensure every string is properly closed
-• All arrays must be properly closed with ]
-• The output must be valid, parseable JSON with double quotes only
-• Only use valid JSON escape sequences: \\\\ \\" \\n \\t
-
-STRUCTURE RULES:
-• Do NOT include bullet point characters (• or -) in item text - the UI adds those automatically
-• notes[].items[] contains all bullet points as a flat list
-• Each bullet object has ONLY a "text" property
-• Do NOT include "children" property
-• All bullets are at the same level - no nesting
-
-Example of correct structure:
-{
-  "section": "1. Diabetes Pathophysiology",
-  "items": [
-    {"text": "**Type 1 diabetes** → autoimmune β-cell destruction"},
-    {"text": "Absolute insulin deficiency"},
-    {"text": "Typically childhood/adolescent onset"},
-    {"text": "**Type 2 diabetes** → insulin resistance + β-cell dysfunction"},
-    {"text": "Relative insulin deficiency"},
-    {"text": "Progressive β-cell failure over time"},
-    {"text": "**Hyperglycaemia** results from ↓ glucose uptake + ↑ hepatic output"}
-  ]
-}`
+JSON RULES
+1. Return JSON only, no markdown.
+2. Escape quotes and backslashes correctly.
+3. Do not include bullet characters (-, bullet symbols) in item text.
+4. notes[].items[] objects must contain only "text".`
 
 serve(async (req) => {
   // Handle CORS preflight
@@ -477,7 +335,9 @@ serve(async (req) => {
     // Store the notes structure
     const notesData = {
       title: parsedResult.title || 'Untitled Lecture',
-      notes: consolidateSections(normalizeGeneratedSections(parsedResult.notes))
+      notes: consolidateSections(normalizeGeneratedSections(parsedResult.notes)),
+      _ai_nesting_policy: 'flat',
+      _notes_generated_by: 'ai',
     }
 
     // If lecture_id provided, save to database

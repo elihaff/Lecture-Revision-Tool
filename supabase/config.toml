@@ -45,7 +45,13 @@ double_confirm_changes = true
 enable_confirmations = false
 
 [functions.generate-flashcards]
-verify_jwt = true
+verify_jwt = false
+
+[functions.generate-notes]
+verify_jwt = false
 
 [functions.generate-interpretation]
 verify_jwt = true
+
+[functions.suggest-flashcard-tags]
+verify_jwt = false

@@ -1,17 +1,30 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { ArrowLeft, BookOpen, Target, TrendingUp, FileText, CheckCircle2, Circle, Upload, Loader2, AlertCircle, Eye, X, Trash2, FileUp, Layers } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { updateObjectiveCompletion, resetLectureNotes } from '../lib/lectureService'
+import { recomputeLectureProgress, resetLectureNotes } from '../lib/lectureService'
 import { generateAndSaveNotes } from '../lib/notesGenerator'
 import { generateFlashcardsFromNotes } from '../lib/flashcardsGenerator'
-import { NotesView } from './NotesView'
-import { FlashcardsView } from './FlashcardsView'
-import { LearnModeView } from './LearnModeView'
-import { FlashcardReviewView } from './FlashcardReviewView'
+import { syncLectureFlashcards } from '../lib/flashcardService'
+import { useToast } from './Toast'
 
-export function LectureView({ lecture: initialLecture, module, user, onBack }) {
+const NotesView = lazy(() => import('./NotesView').then((m) => ({ default: m.NotesView })))
+const FlashcardsView = lazy(() => import('./FlashcardsView').then((m) => ({ default: m.FlashcardsView })))
+const LearnModeView = lazy(() => import('./LearnModeView').then((m) => ({ default: m.LearnModeView })))
+const FlashcardReviewView = lazy(() => import('./FlashcardReviewView').then((m) => ({ default: m.FlashcardReviewView })))
+const MASTERED_INTERVAL_DAYS = 21
+
+function SubviewLoader() {
+  return (
+    <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center">
+      <Loader2 className="w-8 h-8 text-accent animate-spin" />
+    </div>
+  )
+}
+
+export function LectureView({ lecture: initialLecture, module, user, examDate, onBack }) {
+  const toast = useToast()
   const [lecture, setLecture] = useState(initialLecture)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [showNotes, setShowNotes] = useState(false)
   const [showFlashcards, setShowFlashcards] = useState(false)
   const [showLearnMode, setShowLearnMode] = useState(false)
@@ -28,28 +41,98 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
   const [slidesFile, setSlidesFile] = useState(null) // For existing mode: original slides PDF
   const [generatingFlashcards, setGeneratingFlashcards] = useState(false)
   const [importingFlashcards, setImportingFlashcards] = useState(false)
+  const [flashcardsCount, setFlashcardsCount] = useState(0)
+  const [flashcardStateCounts, setFlashcardStateCounts] = useState({
+    total: 0,
+    new: 0,
+    review: 0,
+    relearning: 0,
+    learning: 0,
+    mastered: 0,
+    other: 0,
+  })
   const fileInputRef = useRef(null)
   const slidesInputRef = useRef(null)
   const flashcardsCsvInputRef = useRef(null)
 
   useEffect(() => {
-    fetchLectureData()
+    setLecture(initialLecture)
+    setLoading(false)
+    fetchLectureData({ showLoading: false })
+    fetchFlashcardsCount(initialLecture.id)
   }, [initialLecture.id])
 
-  const fetchLectureData = async () => {
-    setLoading(true)
+  const fetchFlashcardsCount = async (lectureId = initialLecture.id) => {
+    const [{ count, error }, { data: rows, error: rowsError }] = await Promise.all([
+      supabase
+        .from('flashcards')
+        .select('id', { count: 'exact', head: true })
+        .eq('lecture_id', lectureId),
+      supabase
+        .from('flashcards')
+        .select('state, interval_days')
+        .eq('lecture_id', lectureId)
+    ])
+
+    if (error) {
+      setFlashcardsCount(0)
+    } else {
+      setFlashcardsCount(Number(count || 0))
+    }
+
+    if (rowsError) {
+      setFlashcardStateCounts({
+        total: Number(count || 0),
+        new: 0,
+        review: 0,
+        relearning: 0,
+        learning: 0,
+        mastered: 0,
+        other: 0,
+      })
+      return
+    }
+
+    const next = {
+      total: Number(count || 0),
+      new: 0,
+      review: 0,
+      relearning: 0,
+      learning: 0,
+      mastered: 0,
+      other: 0,
+    }
+
+    ;(rows || []).forEach((row) => {
+      const state = String(row?.state || '').toLowerCase()
+      if (state === 'new') next.new += 1
+      else if (state === 'review') {
+        next.review += 1
+        if (Number(row?.interval_days || 0) > MASTERED_INTERVAL_DAYS) {
+          next.mastered += 1
+        }
+      }
+      else if (state === 'relearning') next.relearning += 1
+      else if (state === 'learning') next.learning += 1
+      else next.other += 1
+    })
+
+    setFlashcardStateCounts(next)
+  }
+
+  const fetchLectureData = async ({ showLoading = false } = {}) => {
+    if (showLoading) setLoading(true)
     const { data, error } = await supabase
       .from('lectures')
       .select('*')
       .eq('id', initialLecture.id)
       .single()
 
-    if (error) {
-      console.error('Error fetching lecture:', error)
-    } else {
+    if (!error) {
       setLecture(data)
     }
-    setLoading(false)
+    await fetchFlashcardsCount(initialLecture.id)
+    if (showLoading) setLoading(false)
   }
 
   const getPhaseDisplay = (phase) => {
@@ -58,8 +141,9 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
         return { label: 'Learn', colour: 'text-accent', bgColour: 'bg-blue-50' }
       case 'memorise':
         return { label: 'Memorise', colour: 'text-purple-600', bgColour: 'bg-purple-50' }
-      case 'complete':
-        return { label: 'Complete', colour: 'text-success', bgColour: 'bg-green-50' }
+      case 'maintain':
+      case 'complete': // Legacy fallback
+        return { label: 'Maintain', colour: 'text-success', bgColour: 'bg-green-50' }
       default:
         return { label: 'Not Started', colour: 'text-secondary', bgColour: 'bg-gray-50' }
     }
@@ -79,11 +163,18 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
     return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
   }
 
-  const phaseInfo = getPhaseDisplay(lecture.phase)
   const learningObjectives = lecture.learning_objectives || []
-  const completedObjectives = learningObjectives.filter(obj => obj.completed).length
   const progress = lecture.progress || 0
-  const flashcardsCount = Array.isArray(lecture.notes?._flashcards) ? lecture.notes._flashcards.length : 0
+  const seenPercent = flashcardStateCounts.total > 0
+    ? Math.round(((flashcardStateCounts.total - flashcardStateCounts.new) / flashcardStateCounts.total) * 100)
+    : 0
+  const masteredPercent = flashcardStateCounts.total > 0
+    ? Math.round((flashcardStateCounts.mastered / flashcardStateCounts.total) * 100)
+    : 0
+  const liveDerivedPhase =
+    lecture.notes_generated && flashcardStateCounts.total > 0 && flashcardStateCounts.new === 0
+      ? 'maintain'
+      : lecture.phase
 
   const handleFileSelect = (e) => {
     const file = e.target.files?.[0]
@@ -154,7 +245,7 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
         .upload(slidesPath, file)
 
       if (uploadError) {
-        console.error('Failed to upload slides for storage:', uploadError)
+        // Slides upload failed - non-critical
         // Don't fail - continue without storing (image insertion won't work but notes will)
       } else {
         // Save the pdf_path to the lecture
@@ -176,6 +267,7 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
       )
 
       if (result.success) {
+        await recomputeLectureProgress(lecture.id)
         setUploadState('complete')
         // Reset form state
         setSelectedFile(null)
@@ -208,7 +300,7 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
       // Refresh session to ensure valid token
       const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession()
       if (refreshError) {
-        console.error('Session refresh error:', refreshError)
+        // Session refresh failed - non-critical
       }
 
       // Get user session for auth
@@ -220,7 +312,7 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
         throw new Error('Please sign in to convert notes')
       }
 
-      console.log('Using token:', accessToken?.substring(0, 20) + '...')
+      // Token available
 
       // Upload the slides PDF to storage for image extraction
       const slidesPath = `${userId}/${lecture.id}/slides.pdf`
@@ -262,9 +354,7 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
         }),
       })
 
-      console.log('Response status:', response.status)
       const responseText = await response.text()
-      console.log('Response body:', responseText)
 
       let result
       try {
@@ -301,6 +391,7 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
         throw new Error(`Failed to save: ${updateError.message}`)
       }
 
+      await recomputeLectureProgress(lecture.id)
       setUploadState('complete')
       setSelectedFile(null)
       setSlidesFile(null)
@@ -308,7 +399,7 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
       setShowNotes(true)
 
     } catch (error) {
-      console.error('Convert notes error:', error)
+      // Convert notes error
       setUploadError(error.message)
       setUploadState('error')
     }
@@ -322,14 +413,6 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
     }
   }
 
-  const handleObjectiveToggle = async (objectiveId, currentCompleted) => {
-    const result = await updateObjectiveCompletion(lecture.id, objectiveId, !currentCompleted)
-    if (result.success) {
-      // Refresh lecture data to get updated progress
-      await fetchLectureData()
-    }
-  }
-
   const handleResetNotes = async () => {
     setResetting(true)
     const result = await resetLectureNotes(lecture.id)
@@ -338,23 +421,13 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
       setShowNotes(false)
       await fetchLectureData()
     } else {
-      alert('Failed to reset: ' + result.error)
+      toast.error('Failed to reset. Please try again.')
     }
     setResetting(false)
   }
 
   const upsertFlashcards = async (cards) => {
-    const baseNotes = lecture.notes || { title: lecture.title, notes: [] }
-    const updatedNotes = {
-      ...baseNotes,
-      _flashcards: cards.length > 0 ? cards : undefined
-    }
-
-    const { error } = await supabase
-      .from('lectures')
-      .update({ notes: updatedNotes })
-      .eq('id', lecture.id)
-
+    const { error } = await syncLectureFlashcards(lecture.id, cards)
     if (error) {
       throw new Error(`Failed to save flashcards: ${error.message}`)
     }
@@ -391,7 +464,7 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
 
   const handleGenerateFlashcards = async () => {
     if (!lecture.notes_generated || !lecture.notes?.notes?.length) {
-      alert('Please generate notes first, then generate flashcards.')
+      toast.warn('Please generate notes first, then generate flashcards.')
       return
     }
 
@@ -403,10 +476,10 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
         moduleAbbreviation: module?.abbreviation || '',
       })
       await upsertFlashcards(cards)
-      alert(`Generated ${cards.length} flashcards`)
-    } catch (error) {
-      console.error('Flashcard generation failed:', error)
-      alert(`Failed to generate flashcards: ${error.message}`)
+      toast.success(`Generated ${cards.length} flashcards`)
+      setShowFlashcards(true)
+    } catch {
+      toast.error('Failed to generate flashcards. Please try again.')
     } finally {
       setGeneratingFlashcards(false)
     }
@@ -445,10 +518,9 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
       }
 
       await upsertFlashcards(imported)
-      alert(`Imported ${imported.length} flashcards`)
-    } catch (error) {
-      console.error('CSV import failed:', error)
-      alert(`CSV import failed: ${error.message}`)
+      toast.success(`Imported ${imported.length} flashcards`)
+    } catch {
+      toast.error('CSV import failed. Please check your file format.')
     } finally {
       setImportingFlashcards(false)
       e.target.value = ''
@@ -458,56 +530,73 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
   // Show LearnModeView if learning
   if (showLearnMode) {
     return (
-      <LearnModeView
-        lecture={lecture}
-        module={module}
-        onBack={async () => {
-          setShowLearnMode(false)
-          await fetchLectureData()
-        }}
-        onComplete={async () => {
-          await fetchLectureData()
-        }}
-      />
+      <Suspense fallback={<SubviewLoader />}>
+        <LearnModeView
+          lecture={lecture}
+          module={module}
+          onBack={async () => {
+            setShowLearnMode(false)
+            await fetchLectureData()
+          }}
+          onComplete={async () => {
+            await fetchLectureData()
+          }}
+        />
+      </Suspense>
     )
   }
 
   // Show NotesView if notes are being viewed
   if (showNotes) {
     return (
-      <NotesView
-        lecture={lecture}
-        module={module}
-        onBack={() => setShowNotes(false)}
-        onObjectiveToggle={async (objectiveId, currentCompleted) => {
-          await handleObjectiveToggle(objectiveId, currentCompleted)
+      <Suspense fallback={<SubviewLoader />}>
+        <NotesView
+          lecture={lecture}
+          module={module}
+          onBack={async () => {
+            await fetchLectureData()
+            setShowNotes(false)
+          }}
+        onOpenFlashcards={() => {
+          setShowNotes(false)
+          setShowFlashcards(true)
         }}
         onReset={async () => {
           setShowNotes(false)
           await fetchLectureData()
         }}
-      />
+        />
+      </Suspense>
     )
   }
 
   if (showFlashcards) {
     return (
-      <FlashcardsView
-        lecture={lecture}
-        module={module}
-        onBack={() => setShowFlashcards(false)}
-        onSaved={fetchLectureData}
-      />
+      <Suspense fallback={<SubviewLoader />}>
+        <FlashcardsView
+          lecture={lecture}
+          module={module}
+          onBack={() => setShowFlashcards(false)}
+          onSaved={fetchLectureData}
+        />
+      </Suspense>
     )
   }
 
   if (showFlashcardReview) {
     return (
-      <FlashcardReviewView
-        lecture={lecture}
-        module={module}
-        onBack={() => setShowFlashcardReview(false)}
-      />
+      <Suspense fallback={<SubviewLoader />}>
+        <FlashcardReviewView
+          lecture={lecture}
+          module={module}
+          user={user}
+          examDate={examDate}
+          onBack={async () => {
+            setShowFlashcardReview(false)
+            await fetchLectureData()
+          }}
+        />
+      </Suspense>
     )
   }
 
@@ -515,15 +604,14 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
     <div className="p-8">
       {/* Header */}
       <div className="mb-8">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-2 text-secondary hover:text-primary mb-4 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back to {module.name}
-        </button>
-
         <div className="flex items-center gap-4">
+          <button
+            onClick={onBack}
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            aria-label={`Back to ${module.name}`}
+          >
+            <ArrowLeft className="w-5 h-5 text-secondary" />
+          </button>
           <div
             className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium"
             style={{ backgroundColor: `${module.color}15`, color: module.color }}
@@ -550,24 +638,25 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                 Phase
               </div>
               <div className="space-y-3">
-                {['not_started', 'learn', 'memorise', 'complete'].map((phase) => {
+                {['not_started', 'learn', 'memorise', 'maintain'].map((phase) => {
                   const info = getPhaseDisplay(phase)
-                  const isActive = lecture.phase === phase
-                  const isPast = ['not_started', 'learn', 'memorise', 'complete'].indexOf(lecture.phase) >
-                                 ['not_started', 'learn', 'memorise', 'complete'].indexOf(phase)
+                  const currentPhase = liveDerivedPhase === 'complete' ? 'maintain' : liveDerivedPhase
+                  const phaseOrder = ['not_started', 'learn', 'memorise', 'maintain']
+                  const isActive = currentPhase === phase
+                  const isPast = phaseOrder.indexOf(currentPhase) > phaseOrder.indexOf(phase)
 
                   return (
                     <div key={phase} className="flex items-center gap-3">
                       {isActive ? (
-                        <div className={`w-5 h-5 rounded-full ${info.bgColour} flex items-center justify-center`}>
-                          <div className={`w-2.5 h-2.5 rounded-full bg-current ${info.colour}`} />
+                        <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center">
+                          <div className="w-2.5 h-2.5 rounded-full bg-accent" />
                         </div>
                       ) : isPast ? (
                         <CheckCircle2 className="w-5 h-5 text-success" />
                       ) : (
                         <Circle className="w-5 h-5 text-gray-300" />
                       )}
-                      <span className={`text-sm ${isActive ? info.colour + ' font-medium' : isPast ? 'text-secondary' : 'text-gray-400'}`}>
+                      <span className={`text-sm ${isActive ? 'text-accent font-medium' : isPast ? 'text-secondary' : 'text-gray-400'}`}>
                         {info.label}
                       </span>
                     </div>
@@ -598,6 +687,14 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                    progress === 100 ? 'Fully covered' :
                    'In progress'}
                 </p>
+                <div className="pt-2 border-t border-divider text-sm">
+                  <p className="text-secondary">
+                    Seen: <span className="text-primary font-medium">{seenPercent}%</span>
+                  </p>
+                  <p className="text-secondary">
+                    Mastered: <span className="text-primary font-medium">{masteredPercent}%</span>
+                  </p>
+                </div>
               </div>
             </div>
           </div>
@@ -609,11 +706,6 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                 <BookOpen className="w-4 h-4" />
                 Learning Objectives
               </div>
-              {learningObjectives.length > 0 && (
-                <span className="text-sm text-secondary">
-                  {completedObjectives}/{learningObjectives.length} completed
-                </span>
-              )}
             </div>
 
             {learningObjectives.length === 0 ? (
@@ -628,20 +720,15 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
             ) : (
               <div className="space-y-3">
                 {learningObjectives.map((objective, index) => (
-                  <button
+                  <div
                     key={objective.id || index}
-                    onClick={() => handleObjectiveToggle(objective.id, objective.completed)}
-                    className="flex items-start gap-3 p-3 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors w-full text-left"
+                    className="flex items-start gap-3 p-3 rounded-lg bg-gray-50 w-full text-left"
                   >
-                    {objective.completed ? (
-                      <CheckCircle2 className="w-5 h-5 text-success flex-shrink-0 mt-0.5" />
-                    ) : (
-                      <Circle className="w-5 h-5 text-gray-300 flex-shrink-0 mt-0.5" />
-                    )}
-                    <span className={`text-sm leading-relaxed ${objective.completed ? 'text-secondary line-through' : 'text-primary'}`}>
+                    <Circle className="w-5 h-5 text-gray-300 flex-shrink-0 mt-0.5" />
+                    <span className="text-sm leading-relaxed text-primary">
                       {objective.text}
                     </span>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -657,70 +744,33 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
 
               {uploadState === 'idle' && (
                 <div className="space-y-6">
-                  {/* Mode Toggle */}
-                  <div className="flex gap-2 p-1 bg-gray-100 rounded-lg">
-                    <button
-                      onClick={() => {
-                        setUploadMode('slides')
-                        setSlidesFile(null)
-                        setUploadError(null)
-                      }}
-                      className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                        uploadMode === 'slides'
-                          ? 'bg-white text-primary shadow-sm'
-                          : 'text-secondary hover:text-primary'
-                      }`}
-                    >
-                      <Upload className="w-4 h-4" />
-                      Generate from Slides
-                    </button>
-                    <button
-                      onClick={() => {
-                        setUploadMode('existing')
-                        setUploadError(null)
-                      }}
-                      className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                        uploadMode === 'existing'
-                          ? 'bg-white text-primary shadow-sm'
-                          : 'text-secondary hover:text-primary'
-                      }`}
-                    >
-                      <FileUp className="w-4 h-4" />
-                      Convert Existing Notes
-                    </button>
-                  </div>
-
                   {/* Description */}
                   <p className="text-sm text-secondary">
-                    {uploadMode === 'slides'
-                      ? 'Upload your lecture slides PDF and AI will generate concise revision notes.'
-                      : 'Upload your existing notes PDF to convert to editable format, plus the original lecture slides for image extraction.'}
+                    Upload your lecture slides PDF and AI will generate concise revision notes.
                   </p>
 
-                  {/* Learning Objectives Input - only for slides mode */}
-                  {uploadMode === 'slides' && (
-                    <div>
-                      <label className="block text-sm font-medium text-primary mb-2">
-                        Learning Objectives (Optional)
-                      </label>
-                      <textarea
-                        value={userLearningObjectives}
-                        onChange={(e) => setUserLearningObjectives(e.target.value)}
-                        placeholder="Enter learning objectives, one per line. Leave blank to auto-extract from the PDF."
-                        className="w-full h-32 px-4 py-3 bg-background border border-divider rounded-xl text-primary placeholder:text-secondary/50 focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent resize-none"
-                      />
-                      <p className="text-xs text-secondary mt-1">
-                        If provided, these will be used instead of AI-extracted objectives.
-                      </p>
-                    </div>
-                  )}
+                  {/* Learning Objectives Input */}
+                  <div>
+                    <label className="block text-sm font-medium text-primary mb-2">
+                      Learning Objectives (Optional)
+                    </label>
+                    <textarea
+                      value={userLearningObjectives}
+                      onChange={(e) => setUserLearningObjectives(e.target.value)}
+                      placeholder="Enter learning objectives, one per line. Leave blank to auto-extract from the PDF."
+                      className="w-full h-32 px-4 py-3 bg-background border border-divider rounded-xl text-primary placeholder:text-secondary/50 focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent resize-none"
+                    />
+                    <p className="text-xs text-secondary mt-1">
+                      If provided, these will be used instead of AI-extracted objectives.
+                    </p>
+                  </div>
 
                   {/* PDF Upload Area */}
                   <div className="space-y-4">
-                    {/* Notes/Slides PDF (primary file) */}
+                    {/* Lecture Slides PDF */}
                     <div>
                       <label className="block text-sm font-medium text-primary mb-2">
-                        {uploadMode === 'slides' ? 'Lecture Slides PDF' : '1. Existing Notes PDF'}
+                        Lecture Slides PDF
                       </label>
                       <input
                         ref={fileInputRef}
@@ -746,9 +796,7 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                             <Upload className="w-6 h-6 text-accent" />
                           </div>
                           <p className="text-primary font-medium mb-1">
-                            {uploadMode === 'slides'
-                              ? 'Drop your PDF here or click to browse'
-                              : 'Upload your existing notes PDF'}
+                            Drop your PDF here or click to browse
                           </p>
                           <p className="text-secondary text-sm">
                             Supports PDF files up to 10MB
@@ -781,65 +829,6 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                         </div>
                       )}
                     </div>
-
-                    {/* Slides PDF - only shown in 'existing' mode */}
-                    {uploadMode === 'existing' && (
-                      <div>
-                        <label className="block text-sm font-medium text-primary mb-2">
-                          2. Original Lecture Slides PDF
-                          <span className="text-secondary font-normal ml-2">(for image extraction)</span>
-                        </label>
-                        <input
-                          ref={slidesInputRef}
-                          type="file"
-                          accept=".pdf"
-                          onChange={handleSlidesFileSelect}
-                          className="hidden"
-                        />
-
-                        {!slidesFile ? (
-                          <div
-                            onClick={() => slidesInputRef.current?.click()}
-                            className="border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors border-divider hover:border-orange-400 hover:bg-orange-50"
-                          >
-                            <div className="inline-flex items-center justify-center w-10 h-10 bg-orange-50 rounded-xl mb-2">
-                              <FileUp className="w-5 h-5 text-orange-500" />
-                            </div>
-                            <p className="text-primary font-medium mb-1 text-sm">
-                              Upload original lecture slides
-                            </p>
-                            <p className="text-secondary text-xs">
-                              Required for inserting images from slides
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-3 p-4 bg-orange-50 rounded-xl border border-orange-200">
-                            <div className="flex-shrink-0 w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
-                              <FileText className="w-5 h-5 text-orange-600" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-primary truncate">
-                                {slidesFile.name}
-                              </p>
-                              <p className="text-xs text-secondary">
-                                {(slidesFile.size / 1024 / 1024).toFixed(2)} MB
-                              </p>
-                            </div>
-                            <button
-                              onClick={() => {
-                                setSlidesFile(null)
-                                if (slidesInputRef.current) {
-                                  slidesInputRef.current.value = ''
-                                }
-                              }}
-                              className="p-2 text-secondary hover:text-error hover:bg-red-50 rounded-lg transition-colors"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
 
                   {/* Inline Error Display */}
@@ -853,11 +842,11 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                   {/* Generate Button */}
                   <button
                     onClick={handleStartProcessing}
-                    disabled={!selectedFile || (uploadMode === 'existing' && !slidesFile)}
+                    disabled={!selectedFile}
                     className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-accent hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-xl font-medium text-white transition-colors"
                   >
                     <FileText className="w-5 h-5" />
-                    {uploadMode === 'slides' ? 'Generate Notes' : 'Convert Notes'}
+                    Generate Notes
                   </button>
                 </div>
               )}
@@ -924,8 +913,8 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                     onClick={() => setShowLearnMode(true)}
                     className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-medium text-white text-sm transition-colors"
                   >
-                    <BookOpen className="w-4 h-4" />
-                    Start Learning
+                    <FileText className="w-4 h-4" />
+                    Learn
                   </button>
                   <div className="flex gap-2">
                     <button
@@ -933,7 +922,7 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                       className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-accent hover:bg-blue-600 rounded-lg font-medium text-white text-sm transition-colors"
                     >
                       <Eye className="w-4 h-4" />
-                      View Notes
+                      View/Edit
                     </button>
                     <button
                       onClick={() => setShowResetConfirm(true)}
@@ -993,7 +982,7 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                     className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg font-medium text-white text-sm transition-colors"
                   >
                     <Layers className="w-4 h-4" />
-                    Start Review
+                    Memorise
                   </button>
                   <div className="flex gap-2">
                     <button
@@ -1007,16 +996,11 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                       onClick={async () => {
                         if (!confirm(`Delete all ${flashcardsCount} flashcard${flashcardsCount !== 1 ? 's' : ''}? This cannot be undone.`)) return
                         try {
-                          const baseNotes = lecture.notes || { title: lecture.title, notes: [] }
-                          const updatedNotes = { ...baseNotes, _flashcards: undefined }
-                          const { error } = await supabase
-                            .from('lectures')
-                            .update({ notes: updatedNotes })
-                            .eq('id', lecture.id)
+                          const { error } = await syncLectureFlashcards(lecture.id, [])
                           if (error) throw error
                           await fetchLectureData()
-                        } catch (error) {
-                          alert(`Failed to delete flashcards: ${error.message}`)
+                        } catch {
+                          toast.error('Failed to delete flashcards. Please try again.')
                         }
                       }}
                       className="inline-flex items-center justify-center gap-2 px-3 py-2 bg-gray-100 hover:bg-red-50 hover:text-red-600 rounded-lg text-secondary text-sm transition-colors"
@@ -1028,34 +1012,19 @@ export function LectureView({ lecture: initialLecture, module, user, onBack }) {
                 </div>
               ) : (
                 <>
-                  <div className="mt-4 flex gap-2">
+                  <div className="mt-4">
                     <button
                       onClick={handleGenerateFlashcards}
                       disabled={!lecture.notes_generated || generatingFlashcards}
-                      className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg font-medium text-white text-sm transition-colors"
+                      className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg font-medium text-white text-sm transition-colors"
                     >
                       {generatingFlashcards ? <Loader2 className="w-4 h-4 animate-spin" /> : <Layers className="w-4 h-4" />}
-                      {generatingFlashcards ? 'Generating...' : 'Generate'}
+                      {generatingFlashcards ? 'Generating...' : 'Generate Flashcards'}
                     </button>
-                    <button
-                      onClick={() => flashcardsCsvInputRef.current?.click()}
-                      disabled={importingFlashcards}
-                      className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg font-medium text-white text-sm transition-colors"
-                    >
-                      {importingFlashcards ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                      {importingFlashcards ? 'Importing...' : 'Import CSV'}
-                    </button>
-                    <input
-                      ref={flashcardsCsvInputRef}
-                      type="file"
-                      accept=".csv,text/csv"
-                      onChange={handleImportFlashcardsCsv}
-                      className="hidden"
-                    />
                   </div>
                   {!lecture.notes_generated && (
                     <p className="text-xs text-secondary mt-2">
-                      Generate requires notes first. CSV import works anytime.
+                      Generate notes first to create flashcards.
                     </p>
                   )}
                 </>

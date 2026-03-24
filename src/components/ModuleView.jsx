@@ -8,10 +8,13 @@ import { EditLectureModal } from './EditLectureModal'
 import { SubmoduleSection } from './SubmoduleSection'
 import { LectureView } from './LectureView'
 
-export function ModuleView({ module, user, onBack }) {
-  const [lectures, setLectures] = useState([])
-  const [submodules, setSubmodules] = useState([])
-  const [loading, setLoading] = useState(true)
+const moduleViewCache = new Map()
+
+export function ModuleView({ module, user, examDate, onBack }) {
+  const cachedModuleData = moduleViewCache.get(module.id)
+  const [lectures, setLectures] = useState(cachedModuleData?.lectures || [])
+  const [submodules, setSubmodules] = useState(cachedModuleData?.submodules || [])
+  const [loading, setLoading] = useState(!cachedModuleData)
   const [showCreateLectureModal, setShowCreateLectureModal] = useState(false)
   const [showCreateSubmoduleModal, setShowCreateSubmoduleModal] = useState(false)
   const [createLectureForSubmodule, setCreateLectureForSubmodule] = useState(null)
@@ -26,37 +29,46 @@ export function ModuleView({ module, user, onBack }) {
   const [unassignedDropIndex, setUnassignedDropIndex] = useState(null)
 
   useEffect(() => {
-    fetchData()
+    const hasCache = moduleViewCache.has(module.id)
+    fetchData({ showLoading: !hasCache })
   }, [module.id])
 
-  const fetchData = async () => {
-    setLoading(true)
+  const fetchData = async ({ showLoading = true } = {}) => {
+    if (showLoading) setLoading(true)
 
-    const { data: submodulesData, error: submodulesError } = await supabase
-      .from('submodules')
-      .select('*')
-      .eq('module_id', module.id)
-      .order('display_order', { ascending: true })
+    const [
+      { data: submodulesData, error: submodulesError },
+      { data: lecturesData, error: lecturesError }
+    ] = await Promise.all([
+      supabase
+        .from('submodules')
+        .select('*')
+        .eq('module_id', module.id)
+        .order('display_order', { ascending: true }),
+      supabase
+        .from('lectures')
+        .select('*')
+        .eq('module_id', module.id)
+        .order('display_order', { ascending: true })
+    ])
 
-    if (submodulesError) {
-      console.error('Error fetching submodules:', submodulesError)
-    } else {
-      setSubmodules(submodulesData || [])
+    const nextSubmodules = submodulesError ? submodules : (submodulesData || [])
+    const nextLectures = lecturesError ? lectures : (lecturesData || [])
+
+    if (!submodulesError) {
+      setSubmodules(nextSubmodules)
     }
 
-    const { data: lecturesData, error: lecturesError } = await supabase
-      .from('lectures')
-      .select('*')
-      .eq('module_id', module.id)
-      .order('display_order', { ascending: true })
-
-    if (lecturesError) {
-      console.error('Error fetching lectures:', lecturesError)
-    } else {
-      setLectures(lecturesData || [])
+    if (!lecturesError) {
+      setLectures(nextLectures)
     }
 
-    setLoading(false)
+    moduleViewCache.set(module.id, {
+      submodules: nextSubmodules,
+      lectures: nextLectures,
+    })
+
+    if (showLoading) setLoading(false)
   }
 
   const getLecturesForSubmodule = (submoduleId) => {
@@ -82,11 +94,14 @@ export function ModuleView({ module, user, onBack }) {
       .single()
 
     if (error) {
-      console.error('Error creating submodule:', error)
       return { error }
     }
 
     setSubmodules((prev) => [...prev, newSubmodule])
+    moduleViewCache.set(module.id, {
+      submodules: [...submodules, newSubmodule],
+      lectures,
+    })
     setShowCreateSubmoduleModal(false)
     return { data: newSubmodule }
   }
@@ -110,11 +125,14 @@ export function ModuleView({ module, user, onBack }) {
       .single()
 
     if (error) {
-      console.error('Error creating lecture:', error)
       return { error }
     }
 
     setLectures((prev) => [...prev, newLecture])
+    moduleViewCache.set(module.id, {
+      submodules,
+      lectures: [...lectures, newLecture],
+    })
     setShowCreateLectureModal(false)
     setCreateLectureForSubmodule(null)
     return { data: newLecture }
@@ -129,7 +147,6 @@ export function ModuleView({ module, user, onBack }) {
       .eq('id', submoduleId)
 
     if (error) {
-      console.error('Error deleting submodule:', error)
       return
     }
 
@@ -137,6 +154,10 @@ export function ModuleView({ module, user, onBack }) {
     setLectures((prev) =>
       prev.map((l) => l.submodule_id === submoduleId ? { ...l, submodule_id: null } : l)
     )
+    moduleViewCache.set(module.id, {
+      submodules: submodules.filter((s) => s.id !== submoduleId),
+      lectures: lectures.map((l) => l.submodule_id === submoduleId ? { ...l, submodule_id: null } : l),
+    })
   }
 
   const handleDeleteLecture = async (lectureId) => {
@@ -148,11 +169,14 @@ export function ModuleView({ module, user, onBack }) {
       .eq('id', lectureId)
 
     if (error) {
-      console.error('Error deleting lecture:', error)
       return
     }
 
     setLectures((prev) => prev.filter((l) => l.id !== lectureId))
+    moduleViewCache.set(module.id, {
+      submodules,
+      lectures: lectures.filter((l) => l.id !== lectureId),
+    })
   }
 
   const handleEditSubmodule = async (data) => {
@@ -162,13 +186,16 @@ export function ModuleView({ module, user, onBack }) {
       .eq('id', editingSubmodule.id)
 
     if (error) {
-      console.error('Error updating submodule:', error)
       return { error }
     }
 
     setSubmodules((prev) =>
       prev.map((s) => s.id === editingSubmodule.id ? { ...s, name: data.name } : s)
     )
+    moduleViewCache.set(module.id, {
+      submodules: submodules.map((s) => s.id === editingSubmodule.id ? { ...s, name: data.name } : s),
+      lectures,
+    })
     setEditingSubmodule(null)
     return {}
   }
@@ -180,13 +207,16 @@ export function ModuleView({ module, user, onBack }) {
       .eq('id', editingLecture.id)
 
     if (error) {
-      console.error('Error updating lecture:', error)
       return { error }
     }
 
     setLectures((prev) =>
       prev.map((l) => l.id === editingLecture.id ? { ...l, title: data.title } : l)
     )
+    moduleViewCache.set(module.id, {
+      submodules,
+      lectures: lectures.map((l) => l.id === editingLecture.id ? { ...l, title: data.title } : l),
+    })
     setEditingLecture(null)
     return {}
   }
@@ -252,6 +282,10 @@ export function ModuleView({ module, user, onBack }) {
 
     const updates = newSubmodules.map((s, i) => ({ id: s.id, display_order: i }))
     setSubmodules(newSubmodules.map((s, i) => ({ ...s, display_order: i })))
+    moduleViewCache.set(module.id, {
+      submodules: newSubmodules.map((s, i) => ({ ...s, display_order: i })),
+      lectures,
+    })
 
     for (const update of updates) {
       await supabase
@@ -280,6 +314,10 @@ export function ModuleView({ module, user, onBack }) {
 
     const updates = newSubmodules.map((s, i) => ({ id: s.id, display_order: i }))
     setSubmodules(newSubmodules.map((s, i) => ({ ...s, display_order: i })))
+    moduleViewCache.set(module.id, {
+      submodules: newSubmodules.map((s, i) => ({ ...s, display_order: i })),
+      lectures,
+    })
 
     for (const update of updates) {
       await supabase
@@ -306,6 +344,7 @@ export function ModuleView({ module, user, onBack }) {
 
   const handleLectureDrop = async (e, targetLecture, targetSubmoduleId) => {
     e.preventDefault()
+    setUnassignedDropIndex(null)
     if (!draggedLecture || draggedLecture.id === targetLecture?.id) {
       setDraggedLecture(null)
       return
@@ -344,6 +383,10 @@ export function ModuleView({ module, user, onBack }) {
     })
 
     setLectures(newLectures)
+    moduleViewCache.set(module.id, {
+      submodules,
+      lectures: newLectures,
+    })
 
     await supabase
       .from('lectures')
@@ -355,6 +398,7 @@ export function ModuleView({ module, user, onBack }) {
 
   const handleLectureDropAtIndex = async (e, targetSubmoduleId, targetIndex) => {
     e.preventDefault()
+    setUnassignedDropIndex(null)
     if (!draggedLecture) return
 
     const oldSubmoduleId = draggedLecture.submodule_id
@@ -406,6 +450,10 @@ export function ModuleView({ module, user, onBack }) {
     })
 
     setLectures(newLectures)
+    moduleViewCache.set(module.id, {
+      submodules,
+      lectures: newLectures,
+    })
 
     await supabase
       .from('lectures')
@@ -417,6 +465,7 @@ export function ModuleView({ module, user, onBack }) {
 
   const handleLectureDropToSubmodule = async (e, targetSubmoduleId) => {
     e.preventDefault()
+    setUnassignedDropIndex(null)
     if (!draggedLecture || draggedLecture.submodule_id === targetSubmoduleId) {
       setDraggedLecture(null)
       return
@@ -434,6 +483,14 @@ export function ModuleView({ module, user, onBack }) {
           : l
       )
     )
+    moduleViewCache.set(module.id, {
+      submodules,
+      lectures: lectures.map((l) =>
+        l.id === draggedLecture.id
+          ? { ...l, submodule_id: targetSubmoduleId, display_order: maxOrder + 1 }
+          : l
+      ),
+    })
 
     await supabase
       .from('lectures')
@@ -481,6 +538,7 @@ export function ModuleView({ module, user, onBack }) {
 
   const handleUnassignedDrop = async (e) => {
     e.preventDefault()
+    setUnassignedDropIndex(null)
     if (!draggedLecture || !draggedLecture.submodule_id) {
       setDraggedLecture(null)
       return
@@ -496,6 +554,14 @@ export function ModuleView({ module, user, onBack }) {
           : l
       )
     )
+    moduleViewCache.set(module.id, {
+      submodules,
+      lectures: lectures.map((l) =>
+        l.id === draggedLecture.id
+          ? { ...l, submodule_id: null, display_order: maxOrder + 1 }
+          : l
+      ),
+    })
 
     await supabase
       .from('lectures')
@@ -514,6 +580,7 @@ export function ModuleView({ module, user, onBack }) {
         lecture={selectedLecture}
         module={module}
         user={user}
+        examDate={examDate}
         onBack={() => setSelectedLecture(null)}
       />
     )
@@ -523,16 +590,15 @@ export function ModuleView({ module, user, onBack }) {
     <div className="p-8">
       {/* Header */}
       <div className="mb-8">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-2 text-secondary hover:text-primary mb-4 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back to modules
-        </button>
-
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
+            <button
+              onClick={onBack}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              aria-label="Back to modules"
+            >
+              <ArrowLeft className="w-5 h-5 text-secondary" />
+            </button>
             <div
               className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium"
               style={{ backgroundColor: `${module.color}15`, color: module.color }}
@@ -668,7 +734,7 @@ export function ModuleView({ module, user, onBack }) {
                 onDragOver={(e) => handleUnassignedDropZoneDragOver(e, 0)}
                 onDrop={(e) => handleUnassignedDropAtIndex(e, 0)}
                 className={`h-2 transition-all duration-150 rounded-full mx-1 ${
-                  unassignedDropIndex === 0 ? 'bg-accent h-1 my-1' : ''
+                  draggedLecture && unassignedDropIndex === 0 ? 'bg-accent h-1 my-1' : ''
                 }`}
               />
 
@@ -687,25 +753,20 @@ export function ModuleView({ module, user, onBack }) {
                     }`}
                   >
                     {/* Column 1: Drag handle - 40px fixed */}
-                    <div className="w-10 flex-shrink-0 flex justify-center pt-3">
+                    <div className="w-10 flex-shrink-0 flex items-center justify-center py-3">
                       <div className="text-secondary hover:text-primary">
                         <GripVertical className="w-4 h-4" />
                       </div>
                     </div>
 
-                    {/* Column 2: File icon - 24px fixed */}
-                    <div className="w-6 flex-shrink-0 pt-3">
-                      <FileText className="w-4 h-4 text-secondary" />
-                    </div>
-
-                    {/* Column 3: Lecture title - fixed max-width 400px, left-aligned, wraps to new line */}
+                    {/* Column 2: Lecture title - fixed max-width 400px, left-aligned, wraps to new line */}
                     <div className="w-[400px] flex-shrink py-3 pr-4">
                       <span className="text-primary leading-snug block">
                         {lecture.title}
                       </span>
                     </div>
 
-                    {/* Column 4: Action buttons - remaining space, right-aligned */}
+                    {/* Column 3: Action buttons - remaining space, right-aligned */}
                     <div className="flex-1 flex items-center justify-end gap-0.5 pr-2 pt-2.5 opacity-0 group-hover:opacity-100 transition-all">
                       <button
                         onClick={(e) => {
@@ -735,7 +796,7 @@ export function ModuleView({ module, user, onBack }) {
                     onDragOver={(e) => handleUnassignedDropZoneDragOver(e, index + 1)}
                     onDrop={(e) => handleUnassignedDropAtIndex(e, index + 1)}
                     className={`h-2 transition-all duration-150 rounded-full mx-1 ${
-                      unassignedDropIndex === index + 1 ? 'bg-accent h-1 my-1' : ''
+                      draggedLecture && unassignedDropIndex === index + 1 ? 'bg-accent h-1 my-1' : ''
                     }`}
                   />
                 </div>

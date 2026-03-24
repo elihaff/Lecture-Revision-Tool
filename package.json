@@ -1,12 +1,15 @@
 {
   "name": "lecture-revision-tool",
-  "version": "3.87.0",
+  "version": "5.85.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "release:deploy": "node scripts/release-and-deploy.mjs",
+    "test:review-srs": "node src/lib/testReviewSystemProgression.js",
+    "test:review-integration": "node src/lib/testReviewSystemIntegration.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",

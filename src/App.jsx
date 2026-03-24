@@ -1,17 +1,34 @@
-import { useState, useEffect } from 'react'
-import { LogOut, Loader2, Key, X } from 'lucide-react'
+import { useState, useEffect, lazy, Suspense } from 'react'
+import { LogOut, Loader2 } from 'lucide-react'
 import { useAuth } from './hooks/useAuth'
 import { Auth } from './components/Auth'
-import { Dashboard } from './components/Dashboard'
+import { supabase } from './lib/supabase'
+import { loadPersistedSession } from './lib/studySessionPersistence'
+import { ToastProvider } from './components/Toast'
+
+const Dashboard = lazy(() => import('./components/Dashboard').then((m) => ({ default: m.Dashboard })))
+const WheelDashboard = lazy(() => import('./components/WheelDashboard').then((m) => ({ default: m.WheelDashboard })))
+const StatsView = lazy(() => import('./components/StatsView').then((m) => ({ default: m.StatsView })))
+const SettingsView = lazy(() => import('./components/SettingsView').then((m) => ({ default: m.SettingsView })))
+const CustomStudyView = lazy(() => import('./components/CustomStudyView').then((m) => ({ default: m.CustomStudyView })))
+const GlobalReviewSession = lazy(() => import('./components/GlobalReviewSession').then((m) => ({ default: m.GlobalReviewSession })))
+const SessionLogView = lazy(() => import('./components/SessionLogView').then((m) => ({ default: m.SessionLogView })))
+const FlashcardReviewView = lazy(() => import('./components/FlashcardReviewView').then((m) => ({ default: m.FlashcardReviewView })))
+
+function ViewLoader() {
+  return (
+    <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center">
+      <Loader2 className="w-8 h-8 text-accent animate-spin" />
+    </div>
+  )
+}
 
 function App() {
-  const { user, loading, signIn, signUp, signOut, resetPasswordRequest, updatePassword } = useAuth()
-  const [showChangePassword, setShowChangePassword] = useState(false)
-  const [newPassword, setNewPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
-  const [passwordError, setPasswordError] = useState('')
-  const [passwordSuccess, setPasswordSuccess] = useState('')
+  const { user, loading, signIn, signUp, signOut, resetPasswordRequest, updatePassword, updateDisplayName } = useAuth()
+  const [currentView, setCurrentView] = useState('home') // 'home' | 'modules' | 'review' | 'custom-study' | 'session-log' | 'stats' | 'settings' | 'lecture-review'
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(false)
+  const [resumeLectureContext, setResumeLectureContext] = useState(null)
+  const [resumeTargetView, setResumeTargetView] = useState(null)
 
   // Detect password recovery session on mount and hash changes
   useEffect(() => {
@@ -27,38 +44,58 @@ function App() {
     return () => window.removeEventListener('hashchange', checkRecovery)
   }, [])
 
-  const handleChangePassword = async (e) => {
-    e.preventDefault()
-    setPasswordError('')
-    setPasswordSuccess('')
-
-    if (newPassword !== confirmPassword) {
-      setPasswordError('Passwords do not match')
-      return
-    }
-    if (newPassword.length < 6) {
-      setPasswordError('Password must be at least 6 characters')
-      return
-    }
-
-    const { error } = await updatePassword(newPassword)
-    if (error) {
-      setPasswordError(error.message)
-    } else {
-      setPasswordSuccess('Password updated successfully!')
-      setNewPassword('')
-      setConfirmPassword('')
-      setTimeout(() => {
-        setShowChangePassword(false)
-        setPasswordSuccess('')
-      }, 2000)
-    }
-  }
-
   const handlePasswordRecoveryComplete = () => {
     // Clear recovery state after successful password reset from email link
     setIsPasswordRecovery(false)
     window.location.hash = ''
+  }
+
+  const handleResumeFromSessionLog = async (row) => {
+    if (!row || !row.source_type) return
+    if (row.source_type === 'global') {
+      const saved = loadPersistedSession({ userId: user.id, mode: 'review-global', scope: 'global' })
+      if (!saved || saved.sessionComplete) return
+      setResumeTargetView('review')
+      setCurrentView('review')
+      return
+    }
+    if (row.source_type === 'custom') {
+      const saved = loadPersistedSession({ userId: user.id, mode: 'custom-study', scope: 'custom-study' })
+      if (!saved || saved.sessionComplete) return
+      setResumeTargetView('custom-study')
+      setCurrentView('custom-study')
+      return
+    }
+    if (row.source_type === 'lecture' && row.lecture_id) {
+      const saved = loadPersistedSession({ userId: user.id, mode: 'learn-lecture', scope: `lecture:${row.lecture_id}` })
+      if (!saved || saved.sessionComplete) return
+      const { data: lecture, error: lectureError } = await supabase
+        .from('lectures')
+        .select('id, title, module_id')
+        .eq('id', row.lecture_id)
+        .single()
+      if (lectureError || !lecture) {
+        setCurrentView('modules')
+        return
+      }
+
+      let module = null
+      if (lecture.module_id) {
+        const { data: moduleRow } = await supabase
+          .from('modules')
+          .select('id, name, abbreviation, color')
+          .eq('id', lecture.module_id)
+          .single()
+        module = moduleRow || null
+      }
+
+      setResumeLectureContext({ lecture, module })
+      setResumeTargetView('lecture-review')
+      setCurrentView('lecture-review')
+      return
+    }
+    setResumeTargetView(null)
+    setCurrentView('home')
   }
 
   // Show loading spinner while checking auth state
@@ -85,121 +122,117 @@ function App() {
 
   // Show dashboard if logged in
   return (
+    <ToastProvider>
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="bg-surface border-b border-divider">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            {/* Logo */}
-            <div className="flex items-center gap-3">
+            {/* Logo - clickable to go home */}
+            <button
+              onClick={() => setCurrentView('home')}
+              className="flex items-center gap-3 hover:opacity-80 transition-opacity"
+            >
               <span className="text-2xl">🧠</span>
               <div>
                 <span className="font-semibold text-primary">
-                  Medical Lecture Study Assistant
+                  Eli's Revision Tool
                 </span>
-                <span className="ml-2 text-xs text-secondary">v3.87</span>
+                <span className="ml-2 text-xs text-secondary">v5.85</span>
               </div>
-            </div>
+            </button>
 
             {/* User menu */}
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-secondary">{user.email}</span>
-              <button
-                onClick={() => setShowChangePassword(true)}
-                className="flex items-center gap-2 px-3 py-2 text-secondary hover:text-primary hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <Key className="w-4 h-4" />
-                <span className="text-sm">Change Password</span>
-              </button>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-secondary px-2">{user.email}</span>
               <button
                 onClick={signOut}
-                className="flex items-center gap-2 px-3 py-2 text-secondary hover:text-primary hover:bg-gray-100 rounded-lg transition-colors"
+                className="p-2 text-secondary hover:text-primary hover:bg-gray-100 rounded-lg transition-colors"
+                aria-label="Sign out"
               >
                 <LogOut className="w-4 h-4" />
-                <span className="text-sm">Sign out</span>
               </button>
             </div>
           </div>
         </div>
       </header>
 
-      {/* Change Password Modal */}
-      {showChangePassword && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-surface rounded-2xl p-6 max-w-md w-full shadow-xl border border-divider">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-primary">Change Password</h2>
-              <button
-                onClick={() => {
-                  setShowChangePassword(false)
-                  setPasswordError('')
-                  setPasswordSuccess('')
-                  setNewPassword('')
-                  setConfirmPassword('')
-                }}
-                className="text-secondary hover:text-primary"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleChangePassword} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-primary mb-2">
-                  New Password
-                </label>
-                <input
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full px-4 py-2 bg-background border border-divider rounded-lg focus:ring-2 focus:ring-accent/20 focus:border-accent transition-colors text-primary"
-                  placeholder="Enter new password"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-primary mb-2">
-                  Confirm Password
-                </label>
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="w-full px-4 py-2 bg-background border border-divider rounded-lg focus:ring-2 focus:ring-accent/20 focus:border-accent transition-colors text-primary"
-                  placeholder="Confirm new password"
-                  required
-                />
-              </div>
-
-              {passwordError && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
-                  {passwordError}
-                </div>
-              )}
-
-              {passwordSuccess && (
-                <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-600 text-sm">
-                  {passwordSuccess}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                className="w-full px-4 py-2 bg-accent hover:bg-blue-600 text-white rounded-lg font-medium transition-colors"
-              >
-                Update Password
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
       {/* Main content */}
       <main className="max-w-7xl mx-auto">
-        <Dashboard user={user} />
+        <Suspense fallback={<ViewLoader />}>
+          {currentView === 'home' && (
+            <WheelDashboard
+              user={user}
+              onNavigate={(view) => setCurrentView(view)}
+            />
+          )}
+          {currentView === 'modules' && (
+            <Dashboard
+              user={user}
+              onBack={() => setCurrentView('home')}
+            />
+          )}
+          {currentView === 'review' && (
+            <GlobalReviewSession
+              user={user}
+              autoResumeFromLog={resumeTargetView === 'review'}
+              onAutoResumeHandled={() => setResumeTargetView(null)}
+              onBack={() => setCurrentView('home')}
+            />
+          )}
+          {currentView === 'custom-study' && (
+            <CustomStudyView
+              user={user}
+              autoResumeFromLog={resumeTargetView === 'custom-study'}
+              onAutoResumeHandled={() => setResumeTargetView(null)}
+              onBack={() => setCurrentView('home')}
+            />
+          )}
+          {currentView === 'stats' && (
+            <StatsView
+              user={user}
+              onBack={() => setCurrentView('home')}
+            />
+          )}
+          {currentView === 'session-log' && (
+            <SessionLogView
+              user={user}
+              onBack={(action) => {
+                if (action?.action === 'resume') {
+                  handleResumeFromSessionLog(action.row)
+                  return
+                }
+                setCurrentView('home')
+              }}
+            />
+          )}
+          {currentView === 'lecture-review' && resumeLectureContext?.lecture && (
+            <FlashcardReviewView
+              lecture={resumeLectureContext.lecture}
+              module={resumeLectureContext.module}
+              user={user}
+              examDate={null}
+              autoResumeFromLog={resumeTargetView === 'lecture-review'}
+              onAutoResumeHandled={() => setResumeTargetView(null)}
+              onBack={() => {
+                setResumeLectureContext(null)
+                setResumeTargetView(null)
+                setCurrentView('session-log')
+              }}
+            />
+          )}
+          {currentView === 'settings' && (
+            <SettingsView
+              user={user}
+              onBack={() => setCurrentView('home')}
+              onUpdatePassword={updatePassword}
+              onUpdateDisplayName={updateDisplayName}
+            />
+          )}
+        </Suspense>
       </main>
     </div>
+    </ToastProvider>
   )
 }
 

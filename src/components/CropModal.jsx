@@ -49,14 +49,13 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
     }
 
     const img = new Image()
-    img.onerror = (e) => {
-      console.error('CropModal: Image failed to load', e)
+    img.onerror = () => {
+      // Image failed to load - non-critical
     }
     img.onload = () => {
       const canvas = canvasRef.current
       const overlay = overlayCanvasRef.current
       if (!canvas || !overlay) {
-        console.error('CropModal: Canvas refs not available')
         return
       }
 

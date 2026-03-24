@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Save, Plus, Upload, Download, Trash2, Edit2, Check, X, Loader2, EyeOff, MessageSquare, Image, Type } from 'lucide-react'
+import { ArrowLeft, Save, Plus, Upload, Download, Trash2, Edit2, Check, X, Loader2, EyeOff, MessageSquare, ImageIcon, Type, Layers } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { sanitizeHtml } from '../lib/htmlSanitizer'
+import { getCardDisplayTags, getFlashcardsByLecture, syncLectureFlashcards } from '../lib/flashcardService'
+import { useToast } from './Toast'
 
 function parseCsvLine(line) {
   const out = []
@@ -52,6 +55,97 @@ function tokenize(value) {
     .filter((w) => w.length >= 4 && !/^\d+$/.test(w))
 }
 
+function normalizeTagArray(value) {
+  if (!Array.isArray(value)) return []
+  const tags = value.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean)
+  return [...new Set(tags)].slice(0, 3)
+}
+
+function parseTagInput(input) {
+  return normalizeTagArray(
+    String(input || '')
+      .split(',')
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+  )
+}
+
+function normalizeSuggestedTagArray(value) {
+  if (!Array.isArray(value)) return []
+  const tags = value.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean)
+  return [...new Set(tags)].slice(0, 5)
+}
+
+function normalizeExportTagArray(value) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean))]
+  }
+  if (typeof value === 'string') {
+    const raw = value.trim()
+    if (!raw) return []
+    const parts = raw.includes(',') ? raw.split(',') : [raw]
+    return [...new Set(parts.map((part) => String(part || '').trim().toLowerCase()).filter(Boolean))]
+  }
+  return []
+}
+
+function extractAiSuggestionTags(aiTagSuggestions) {
+  let parsed = aiTagSuggestions
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed)
+    } catch {
+      parsed = null
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return []
+  if (parsed.status === 'ignored') return []
+  const camel = normalizeExportTagArray(parsed.contentTags)
+  const snake = normalizeExportTagArray(parsed.content_tags)
+  return [...new Set([...camel, ...snake])]
+}
+
+function getCardExportTags(card) {
+  const typeTag = card?.interpretationData
+    ? 'interpretation'
+    : card?.occlusionData
+      ? 'image occlusion'
+      : 'text'
+  const legacyTags = normalizeExportTagArray(card?.tags)
+  const contentTags = normalizeExportTagArray(card?.contentTags || card?.content_tags)
+  const customUserTags = normalizeExportTagArray(card?.customUserTags || card?.custom_user_tags)
+  const aiSuggestionTags = extractAiSuggestionTags(card?.aiTagSuggestions || card?.ai_tag_suggestions)
+  return [...new Set([typeTag, ...legacyTags, ...contentTags, ...customUserTags, ...aiSuggestionTags])]
+}
+
+function stripHtml(value) {
+  return String(value || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function mapDbCardToViewCard(card = {}) {
+  return {
+    ...card,
+    sectionIndex: Number.isInteger(card.section_index) ? card.section_index : null,
+    sectionKey: card.section_key || '',
+    sectionTitle: card.section_title || '',
+    sourcePointIndex: Number.isInteger(card.source_point_index) ? card.source_point_index : null,
+    sourcePointText: card.source_point_text || '',
+    sourceParentPointIndex: Number.isInteger(card.source_parent_point_index) ? card.source_parent_point_index : null,
+    sourceParentPointText: card.source_parent_point_text || '',
+    frontImages: Array.isArray(card.front_images) ? card.front_images : [],
+    backImages: Array.isArray(card.back_images) ? card.back_images : [],
+    contentTags: Array.isArray(card.content_tags) ? card.content_tags : [],
+    customUserTags: Array.isArray(card.custom_user_tags) ? card.custom_user_tags : [],
+    aiTagSuggestions: card.ai_tag_suggestions || null,
+    tagsLastSuggestedAt: card.tags_last_suggested_at || null,
+    occlusionData: card.occlusion_data || null,
+    interpretationData: card.interpretation_data || null,
+  }
+}
+
 function inferCardsSectionMetadata(cards, notes) {
   const sections = notes?.notes || []
   if (!sections.length) return cards
@@ -87,16 +181,45 @@ function inferCardsSectionMetadata(cards, notes) {
   })
 }
 
+const NOTES_IMAGE_BUCKET = 'lecture-pdfs'
+
+function normalizePointImageEntry(entry) {
+  if (!entry) return []
+  if (Array.isArray(entry)) return entry.filter((img) => img && typeof img === 'object')
+  if (typeof entry === 'object') return [entry]
+  return []
+}
+
+async function resolveImageSourceToDataUrl(src) {
+  if (!src || typeof src !== 'string') return null
+  if (src.startsWith('data:image/')) return src
+  if (!/^https?:\/\//i.test(src)) return null
+
+  const response = await fetch(src)
+  if (!response.ok) {
+    throw new Error(`Image fetch failed (${response.status})`)
+  }
+  const blob = await response.blob()
+
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : null)
+    reader.onerror = () => reject(new Error('Failed to convert image to base64'))
+    reader.readAsDataURL(blob)
+  })
+}
+
 export function FlashcardsView({ lecture, module, onBack, onSaved }) {
-  const [flashcards, setFlashcards] = useState(Array.isArray(lecture.notes?._flashcards) ? lecture.notes._flashcards : [])
+  const toast = useToast()
+  const [flashcards, setFlashcards] = useState([])
   const [hasChanges, setHasChanges] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [saveStatus, setSaveStatus] = useState('saved') // 'saved' | 'saving' | 'error'
   const [showAddCard, setShowAddCard] = useState(false)
   const [newCard, setNewCard] = useState({ front: '', back: '', tags: '' })
   const [expandedCards, setExpandedCards] = useState({})
-  const [editingCard, setEditingCard] = useState(null) // {index, front, back, tags}
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const [deleting, setDeleting] = useState(false)
+  const [editingCard, setEditingCard] = useState(null) // {index, front, back, tags, contentTags}
+  const [newTagInput, setNewTagInput] = useState('') // For adding new tags in edit mode
   const csvImportInputRef = useRef(null)
   const editCardBackRef = useRef(null)
   const newCardBackRef = useRef(null)
@@ -125,6 +248,18 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
 
   const [addCardMenuOpen, setAddCardMenuOpen] = useState(false)
   const [activeEditableImage, setActiveEditableImage] = useState(null) // { imgIndex, left, top }
+  const [aiTagEdits, setAiTagEdits] = useState({})
+  const [notesImages, setNotesImages] = useState([])
+  const [notesImagesLoading, setNotesImagesLoading] = useState(false)
+  const imageTagBackfillRef = useRef(null)
+  const notesSignedUrlCacheRef = useRef(new Map())
+  const saveInFlightRef = useRef(false)
+  const pendingSavePayloadRef = useRef(null)
+  const saveWaitersRef = useRef([])
+  const saveDebounceTimerRef = useRef(null)
+  const lastDebouncedPayloadRef = useRef(null)
+  const isMountedRef = useRef(true)
+  const exitingRef = useRef(false)
 
   const essentialSymbols = [
     { symbol: 'α' }, { symbol: 'β' }, { symbol: 'Δ' }, { symbol: 'μ' },
@@ -136,89 +271,159 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
     return String(section?.section || `Section ${sectionIndex + 1}`)
   }
 
-  // Get all images from notes for occlusion/attachment
-  const getAllNotesImages = () => {
-    const images = []
-    if (!lecture.notes) return images
+  const getAllNotesImages = () => notesImages
 
-    // Check for _pointImages object at the root level
-    if (lecture.notes._pointImages) {
-      Object.entries(lecture.notes._pointImages).forEach(([key, imageData]) => {
-        // Key format is typically "sectionIdx-pointIdx"
-        const [sectionIdx, pointIdx] = key.split('-').map(Number)
-        const safeSectionIdx = Number.isNaN(sectionIdx) ? 0 : sectionIdx
+  const getSignedUrlsMap = async (paths) => {
+    const now = Date.now()
+    const uniquePaths = [...new Set((paths || []).filter(Boolean))]
+    const urlsMap = {}
+    const missingPaths = []
 
-        images.push({
-          type: 'point-image',
-          sectionIndex: safeSectionIdx,
-          sectionKey: `section-${safeSectionIdx}`,
-          sectionTitle: getSectionTitle(safeSectionIdx),
-          pointIndex: pointIdx || 0,
-          image: imageData,
-          label: `Section ${safeSectionIdx + 1}, Point ${(pointIdx || 0) + 1}`
+    uniquePaths.forEach((path) => {
+      const cached = notesSignedUrlCacheRef.current.get(path)
+      if (cached && cached.expiresAt > now) {
+        urlsMap[path] = cached.url
+      } else {
+        missingPaths.push(path)
+      }
+    })
+
+    if (missingPaths.length > 0) {
+      const { data, error } = await supabase.storage
+        .from(NOTES_IMAGE_BUCKET)
+        .createSignedUrls(missingPaths, 60 * 60 * 24 * 7)
+
+      if (error) {
+        // Failed to create signed URLs - non-critical
+      } else {
+        ;(data || []).forEach((row) => {
+          if (!row?.path || !row?.signedUrl) return
+          urlsMap[row.path] = row.signedUrl
+          notesSignedUrlCacheRef.current.set(row.path, {
+            url: row.signedUrl,
+            expiresAt: now + (1000 * 60 * 60 * 24 * 6)
+          })
         })
-      })
+      }
     }
 
-    if (lecture.notes._sectionImages) {
-      Object.entries(lecture.notes._sectionImages).forEach(([sectionIndexRaw, imageData]) => {
-        const sectionIndex = Number(sectionIndexRaw)
-        if (Number.isNaN(sectionIndex)) return
-        images.push({
-          type: 'section-image',
-          sectionIndex,
-          sectionKey: `section-${sectionIndex}`,
-          sectionTitle: getSectionTitle(sectionIndex),
-          image: imageData,
-          label: `Section ${sectionIndex + 1}`
-        })
-      })
-    }
+    return urlsMap
+  }
 
-    // Also check for images embedded in HTML content
-    if (lecture.notes.notes) {
-      lecture.notes.notes.forEach((section, sIdx) => {
-        // Check for images embedded in section content as HTML
-        if (section.section) {
-          const sectionHtml = String(section.section)
-          const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/g
-          let match
-          while ((match = imgRegex.exec(sectionHtml)) !== null) {
-            images.push({
-              type: 'section-html',
-              sectionIndex: sIdx,
-              sectionKey: `section-${sIdx}`,
-              sectionTitle: getSectionTitle(sIdx),
-              image: { dataUrl: match[1] },
-              label: section.section.replace(/<[^>]+>/g, '').substring(0, 50)
+  useEffect(() => {
+    let cancelled = false
+
+    const loadNoteImages = async () => {
+      setNotesImagesLoading(true)
+      try {
+        const rawNotes = lecture?.notes || {}
+        const resolvedImages = []
+        const pendingImages = []
+        const paths = []
+
+        if (rawNotes._pointImages) {
+          Object.entries(rawNotes._pointImages).forEach(([key, imageData]) => {
+            const [sectionIdx, pointIdx] = key.split('-').map(Number)
+            const safeSectionIdx = Number.isNaN(sectionIdx) ? 0 : sectionIdx
+            const safePointIdx = Number.isNaN(pointIdx) ? 0 : pointIdx
+            const pointImages = normalizePointImageEntry(imageData)
+            pointImages.forEach((pointImage, pointImageIndex) => {
+              if (pointImage?.storagePath) paths.push(pointImage.storagePath)
+              pendingImages.push({
+                type: 'point-image',
+                sectionIndex: safeSectionIdx,
+                sectionKey: `section-${safeSectionIdx}`,
+                sectionTitle: getSectionTitle(safeSectionIdx),
+                pointIndex: safePointIdx,
+                label: `Section ${safeSectionIdx + 1}, Point ${safePointIdx + 1}${pointImages.length > 1 ? ` (Image ${pointImageIndex + 1})` : ''}`,
+                image: pointImage
+              })
             })
-          }
+          })
         }
 
-        // Check point images in HTML
-        if (section.points) {
-          section.points.forEach((point, pIdx) => {
-            const pointHtml = String(point)
-            const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/g
-            let match
-            while ((match = imgRegex.exec(pointHtml)) !== null) {
-              images.push({
-                type: 'point-html',
-                sectionIndex: sIdx,
-                sectionKey: `section-${sIdx}`,
-                sectionTitle: getSectionTitle(sIdx),
-                pointIndex: pIdx,
-                image: { dataUrl: match[1] },
-                label: pointHtml.replace(/<[^>]+>/g, '').substring(0, 50)
+        if (rawNotes._sectionImages) {
+          Object.entries(rawNotes._sectionImages).forEach(([sectionIndexRaw, imageData]) => {
+            const sectionIndex = Number(sectionIndexRaw)
+            if (Number.isNaN(sectionIndex)) return
+            const sectionImage = Array.isArray(imageData) ? imageData[0] : imageData
+            if (!sectionImage) return
+            if (sectionImage.storagePath) paths.push(sectionImage.storagePath)
+            pendingImages.push({
+              type: 'section-image',
+              sectionIndex,
+              sectionKey: `section-${sectionIndex}`,
+              sectionTitle: getSectionTitle(sectionIndex),
+              label: `Section ${sectionIndex + 1}`,
+              image: sectionImage
+            })
+          })
+        }
+
+        const signedUrls = await getSignedUrlsMap(paths)
+
+        pendingImages.forEach((entry) => {
+          const dataUrl = entry.image?.dataUrl || (entry.image?.storagePath ? signedUrls[entry.image.storagePath] : null)
+          if (!dataUrl) return
+          resolvedImages.push({
+            ...entry,
+            image: {
+              ...entry.image,
+              dataUrl
+            }
+          })
+        })
+
+        if (rawNotes.notes) {
+          rawNotes.notes.forEach((section, sIdx) => {
+            if (section.section) {
+              const sectionHtml = String(section.section)
+              const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/g
+              let match
+              while ((match = imgRegex.exec(sectionHtml)) !== null) {
+                resolvedImages.push({
+                  type: 'section-html',
+                  sectionIndex: sIdx,
+                  sectionKey: `section-${sIdx}`,
+                  sectionTitle: getSectionTitle(sIdx),
+                  image: { dataUrl: match[1] },
+                  label: section.section.replace(/<[^>]+>/g, '').substring(0, 50)
+                })
+              }
+            }
+
+            if (section.points) {
+              section.points.forEach((point, pIdx) => {
+                const pointHtml = String(point)
+                const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/g
+                let match
+                while ((match = imgRegex.exec(pointHtml)) !== null) {
+                  resolvedImages.push({
+                    type: 'point-html',
+                    sectionIndex: sIdx,
+                    sectionKey: `section-${sIdx}`,
+                    sectionTitle: getSectionTitle(sIdx),
+                    pointIndex: pIdx,
+                    image: { dataUrl: match[1] },
+                    label: pointHtml.replace(/<[^>]+>/g, '').substring(0, 50)
+                  })
+                }
               })
             }
           })
         }
-      })
+
+        if (!cancelled) setNotesImages(resolvedImages)
+      } finally {
+        if (!cancelled) setNotesImagesLoading(false)
+      }
     }
 
-    return images
-  }
+    loadNoteImages()
+    return () => {
+      cancelled = true
+    }
+  }, [lecture.id, lecture.notes])
 
   const getSuggestedImagesForCard = (card) => {
     const allImages = getAllNotesImages()
@@ -258,23 +463,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
     setFlashcards(updatedFlashcards)
     setCardImagePickerOpen(false)
     setImagePickerCardIndex(null)
-
-    try {
-      const baseNotes = lecture.notes || { title: lecture.title, notes: [] }
-      const updatedNotes = {
-        ...baseNotes,
-        _flashcards: updatedFlashcards.length > 0 ? updatedFlashcards : undefined,
-      }
-      const { error } = await supabase
-        .from('lectures')
-        .update({ notes: updatedNotes })
-        .eq('id', lecture.id)
-      if (error) throw new Error(error.message)
-      if (onSaved) onSaved()
-    } catch (error) {
-      console.error('Attach image failed:', error)
-      alert(`Failed to attach image: ${error.message}`)
-    }
+    await persistFlashcards(updatedFlashcards, { immediate: true, errorPrefix: 'Failed to attach image' })
   }
 
   const removeEditableImageByIndex = (imgIndex) => {
@@ -338,72 +527,361 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
   }
 
   useEffect(() => {
-    const cards = Array.isArray(lecture.notes?._flashcards) ? lecture.notes._flashcards : []
-    setFlashcards(inferCardsSectionMetadata(cards, lecture.notes))
+    return () => {
+      isMountedRef.current = false
+      if (saveDebounceTimerRef.current) {
+        clearTimeout(saveDebounceTimerRef.current)
+        saveDebounceTimerRef.current = null
+      }
+    }
+  }, [])
+
+  const flushQueuedSaves = async () => {
+    if (saveInFlightRef.current) return
+    saveInFlightRef.current = true
+
+    try {
+      while (pendingSavePayloadRef.current) {
+        const payload = pendingSavePayloadRef.current
+        pendingSavePayloadRef.current = null
+
+        const { error } = await syncLectureFlashcards(lecture.id, payload)
+        if (error) throw error
+      }
+
+      if (isMountedRef.current) {
+        setHasChanges(false)
+        setSaveStatus('saved')
+      }
+      if (onSaved) onSaved()
+
+      const waiters = saveWaitersRef.current.splice(0)
+      waiters.forEach(({ resolve }) => resolve())
+    } catch (error) {
+      if (isMountedRef.current) {
+        setSaveStatus('error')
+      }
+      const waiters = saveWaitersRef.current.splice(0)
+      waiters.forEach(({ reject }) => reject(error))
+    } finally {
+      saveInFlightRef.current = false
+      if (pendingSavePayloadRef.current) {
+        flushQueuedSaves()
+      }
+    }
+  }
+
+  const enqueueFlashcardsSave = (cardsPayload) => {
+    if (isMountedRef.current) {
+      setSaveStatus('saving')
+      setHasChanges(true)
+    }
+    pendingSavePayloadRef.current = cardsPayload
+    const waitForFlush = new Promise((resolve, reject) => {
+      saveWaitersRef.current.push({ resolve, reject })
+    })
+    flushQueuedSaves()
+    return waitForFlush
+  }
+
+  const scheduleFlashcardsSave = (cardsPayload, immediate = false) => {
+    lastDebouncedPayloadRef.current = cardsPayload
+    if (immediate) {
+      if (saveDebounceTimerRef.current) {
+        clearTimeout(saveDebounceTimerRef.current)
+        saveDebounceTimerRef.current = null
+      }
+      return enqueueFlashcardsSave(cardsPayload)
+    }
+
+    if (isMountedRef.current) {
+      setHasChanges(true)
+      setSaveStatus('saving')
+    }
+    if (saveDebounceTimerRef.current) {
+      clearTimeout(saveDebounceTimerRef.current)
+    }
+    saveDebounceTimerRef.current = setTimeout(() => {
+      const payload = lastDebouncedPayloadRef.current
+      saveDebounceTimerRef.current = null
+      if (payload) enqueueFlashcardsSave(payload)
+    }, 900)
+    return Promise.resolve()
+  }
+
+  const waitForPendingSaves = async () => {
+    if (saveDebounceTimerRef.current) {
+      clearTimeout(saveDebounceTimerRef.current)
+      saveDebounceTimerRef.current = null
+      if (lastDebouncedPayloadRef.current) {
+        await enqueueFlashcardsSave(lastDebouncedPayloadRef.current)
+      }
+    }
+    if (!saveInFlightRef.current && !pendingSavePayloadRef.current) return
+    await new Promise((resolve, reject) => {
+      saveWaitersRef.current.push({ resolve, reject })
+    })
+  }
+
+  const persistFlashcards = async (updatedFlashcards, options = {}) => {
+    const { immediate = true } = options
+    try {
+      await scheduleFlashcardsSave(updatedFlashcards, immediate)
+    } catch (error) {
+      toast.error('Failed to save flashcards. Please try again.')
+      if (isMountedRef.current) {
+        setSaveStatus('error')
+      }
+      throw error
+    }
+  }
+
+  const handleBack = async () => {
+    if (exitingRef.current) return
+    exitingRef.current = true
+    if (isMountedRef.current) {
+      setSaving(true)
+      setSaveStatus('saving')
+    }
+
+    try {
+      await waitForPendingSaves()
+      if (onBack) await onBack()
+    } catch {
+      toast.error('Could not save your changes. Please try again.')
+      exitingRef.current = false
+    } finally {
+      if (isMountedRef.current) {
+        setSaving(false)
+      }
+    }
+  }
+
+  useEffect(() => {
+    let isCancelled = false
+    if (saveDebounceTimerRef.current) {
+      clearTimeout(saveDebounceTimerRef.current)
+      saveDebounceTimerRef.current = null
+    }
+    pendingSavePayloadRef.current = null
+    lastDebouncedPayloadRef.current = null
+    saveWaitersRef.current = []
+    saveInFlightRef.current = false
+    exitingRef.current = false
+
+    setFlashcards([])
     setHasChanges(false)
+    setSaveStatus('saving')
+    imageTagBackfillRef.current = null
+
+    ;(async () => {
+      const { data: tableCards, error: fetchError } = await getFlashcardsByLecture(lecture.id)
+      if (fetchError) {
+        // Failed to fetch flashcards
+        if (!isCancelled) {
+          setSaveStatus('error')
+        }
+        return
+      }
+
+      let cardsForView = Array.isArray(tableCards) ? tableCards : []
+
+      // One-time compatibility migration for legacy JSON-backed lectures.
+      if (cardsForView.length === 0 && Array.isArray(lecture.notes?._flashcards) && lecture.notes._flashcards.length > 0) {
+        const { error: migrateError } = await syncLectureFlashcards(lecture.id, lecture.notes._flashcards)
+        if (migrateError) {
+          // Migration failed - non-critical
+        } else {
+          const { data: migratedCards } = await getFlashcardsByLecture(lecture.id)
+          cardsForView = Array.isArray(migratedCards) ? migratedCards : []
+        }
+      }
+
+      if (!isCancelled) {
+        const mappedCards = cardsForView.map(mapDbCardToViewCard)
+        setFlashcards(inferCardsSectionMetadata(mappedCards, lecture.notes))
+        setHasChanges(false)
+        setSaveStatus('saved')
+      }
+    })()
+
+    return () => {
+      isCancelled = true
+    }
   }, [lecture.id])
 
-  const defaultTags = () => {
-    const modulePart = module?.abbreviation ? `${module.abbreviation}_` : ''
-    return `Day2 ${modulePart}${titleTag(lecture.title)}`.trim()
+  const buildTagInputFromCard = (card, index = 0) => {
+    const occlusionLabel = stripHtml(card?.occlusionData?.label?.text || '')
+    const interpretationQuestion = stripHtml(card?.interpretationData?.question || '')
+    const interpretationAnswer = stripHtml(card?.interpretationData?.answer || '')
+    const sourcePointText = stripHtml(card?.sourcePointText || card?.source_point_text || occlusionLabel || interpretationQuestion || '')
+    return {
+      index,
+      front: stripHtml(card?.front || interpretationQuestion || ''),
+      back: stripHtml(card?.back || interpretationAnswer || ''),
+      section_title: String(card?.sectionTitle || card?.section_title || ''),
+      source_point_text: sourcePointText,
+    }
   }
+
+  const suggestTopicTagsForCards = async (cardsToTag) => {
+    if (!Array.isArray(cardsToTag) || cardsToTag.length === 0) return {}
+    try {
+      const payloadCards = cardsToTag
+        .map((card, index) => buildTagInputFromCard(card, index))
+        .filter((card) => card.front && card.back)
+
+      if (payloadCards.length === 0) return {}
+
+      const { data, error } = await supabase.functions.invoke('suggest-flashcard-tags', {
+        body: { cards: payloadCards }
+      })
+
+      if (error) throw error
+      const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : []
+      const byIndex = {}
+      suggestions.forEach((item) => {
+        const idx = Number(item?.index)
+        if (!Number.isInteger(idx)) return
+        byIndex[idx] = {
+          contentTags: normalizeSuggestedTagArray(item?.content_tags || item?.contentTags),
+          confidence: Number(item?.confidence) || 0.5,
+        }
+      })
+      return byIndex
+    } catch (error) {
+      // Topic tag suggestion failed - non-critical
+      return {}
+    }
+  }
+
+  const applySuggestedTopicTagsToCards = (cardsToTag, suggestionsByIndex) => {
+    return cardsToTag.map((card, index) => {
+      const suggestion = suggestionsByIndex[index]
+      if (!suggestion || !Array.isArray(suggestion.contentTags) || suggestion.contentTags.length === 0) {
+        return card
+      }
+      return {
+        ...card,
+        contentTags: suggestion.contentTags,
+        aiTagSuggestions: {
+          contentTags: suggestion.contentTags,
+          confidenceContent: suggestion.confidence,
+          status: 'accepted',
+          acceptedAt: new Date().toISOString(),
+        },
+      }
+    })
+  }
+
+  useEffect(() => {
+    if (imageTagBackfillRef.current === lecture.id) return
+    if (!Array.isArray(flashcards) || flashcards.length === 0) {
+      imageTagBackfillRef.current = lecture.id
+      return
+    }
+
+    const missingIndices = flashcards
+      .map((card, index) => ({ card, index }))
+      .filter(({ card }) => {
+        const isImageCard = !!card?.occlusionData || !!card?.interpretationData
+        if (!isImageCard) return false
+        const hasContentTags = Array.isArray(card?.contentTags) && card.contentTags.length > 0
+        const hasAiSuggestions = Array.isArray(card?.aiTagSuggestions?.contentTags) && card.aiTagSuggestions.contentTags.length > 0
+        return !hasContentTags && !hasAiSuggestions
+      })
+
+    imageTagBackfillRef.current = lecture.id
+    if (missingIndices.length === 0) return
+
+    ;(async () => {
+      const cardsToTag = missingIndices.map(({ card }) => card)
+      const suggestionsByIndex = await suggestTopicTagsForCards(cardsToTag)
+      if (!Object.keys(suggestionsByIndex).length) return
+
+      const taggedSubset = applySuggestedTopicTagsToCards(cardsToTag, suggestionsByIndex)
+      const updated = [...flashcards]
+      missingIndices.forEach(({ index }, i) => {
+        updated[index] = taggedSubset[i]
+      })
+      setFlashcards(updated)
+      await saveFlashcardsNow(updated, 'Failed to backfill topic tags for image cards')
+    })()
+  }, [lecture.id, flashcards])
 
   const saveFlashcards = async () => {
     setSaving(true)
     try {
-      const baseNotes = lecture.notes || { title: lecture.title, notes: [] }
-      const updatedNotes = {
-        ...baseNotes,
-        _flashcards: flashcards.length > 0 ? flashcards : undefined,
-      }
-
-      const { error } = await supabase
-        .from('lectures')
-        .update({ notes: updatedNotes })
-        .eq('id', lecture.id)
-
-      if (error) {
-        throw new Error(error.message)
-      }
-
-      setHasChanges(false)
-      if (onSaved) onSaved()
+      await persistFlashcards(flashcards, { immediate: true, errorPrefix: 'Failed to save flashcards' })
     } catch (error) {
-      console.error('Save flashcards failed:', error)
-      alert(`Failed to save flashcards: ${error.message}`)
+      // Save failed
     } finally {
       setSaving(false)
     }
   }
 
-  const handleDeleteAllFlashcards = async () => {
-    setDeleting(true)
-    try {
-      const baseNotes = lecture.notes || { title: lecture.title, notes: [] }
-      const updatedNotes = {
-        ...baseNotes,
-        _flashcards: undefined,
+  const saveFlashcardsNow = async (updatedFlashcards, errorPrefix = 'Failed to save') => {
+    await persistFlashcards(updatedFlashcards, { immediate: true, errorPrefix })
+  }
+
+  useEffect(() => {
+    const nextEdits = {}
+    let hasNew = false
+    flashcards.forEach((card, index) => {
+      if (card?.aiTagSuggestions?.status === 'pending' && !aiTagEdits[index]) {
+        const suggestion = card.aiTagSuggestions || {}
+        nextEdits[index] = {
+          contentTagsInput: Array.isArray(suggestion.contentTags) ? suggestion.contentTags.join(', ') : '',
+        }
+        hasNew = true
       }
-
-      const { error } = await supabase
-        .from('lectures')
-        .update({ notes: updatedNotes })
-        .eq('id', lecture.id)
-
-      if (error) {
-        throw new Error(error.message)
-      }
-
-      setFlashcards([])
-      setHasChanges(false)
-      setShowDeleteConfirm(false)
-      if (onSaved) onSaved()
-    } catch (error) {
-      console.error('Delete flashcards failed:', error)
-      alert(`Failed to delete flashcards: ${error.message}`)
-    } finally {
-      setDeleting(false)
+    })
+    if (hasNew) {
+      setAiTagEdits((prev) => ({ ...prev, ...nextEdits }))
     }
+  }, [flashcards, aiTagEdits])
+
+  const acceptAiSuggestions = async (index) => {
+    const card = flashcards[index]
+    if (!card?.aiTagSuggestions) return
+
+    const edit = aiTagEdits[index]
+    const suggested = card.aiTagSuggestions
+    const contentTags = edit
+      ? parseTagInput(edit.contentTagsInput)
+      : normalizeTagArray(suggested.contentTags)
+
+    const updated = [...flashcards]
+    updated[index] = {
+      ...card,
+      contentTags,
+      aiTagSuggestions: {
+        ...suggested,
+        status: 'accepted',
+        acceptedAt: new Date().toISOString(),
+      },
+    }
+
+    setFlashcards(updated)
+    await saveFlashcardsNow(updated, 'Failed to accept AI tag suggestions')
+  }
+
+  const ignoreAiSuggestions = async (index) => {
+    const card = flashcards[index]
+    if (!card?.aiTagSuggestions) return
+
+    const updated = [...flashcards]
+    updated[index] = {
+      ...card,
+      aiTagSuggestions: {
+        ...card.aiTagSuggestions,
+        status: 'ignored',
+        ignoredAt: new Date().toISOString(),
+      },
+    }
+
+    setFlashcards(updated)
+    await saveFlashcardsNow(updated, 'Failed to ignore AI tag suggestions')
   }
 
   const exportCsv = () => {
@@ -414,7 +892,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
         .map((card) => {
           const front = String(card.front || '').replace(/"/g, '""')
           const back = String(card.back || '').replace(/"/g, '""')
-          const tags = String(card.tags || '').replace(/"/g, '""')
+          const tags = getCardExportTags(card).join(', ').replace(/"/g, '""')
           return `"${front}","${back}","${tags}"`
         })
         .join('\n')
@@ -423,7 +901,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${titleTag(lecture.title)}_anki.csv`
+    a.download = `${titleTag(lecture.title)}_flashcards.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -450,7 +928,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
         const cells = parseCsvLine(lines[i])
         const front = String(cells[0] || '').trim()
         const back = String(cells[1] || '').trim()
-        const tags = String(cells[2] || defaultTags()).trim()
+        const tags = String(cells[2] || '').trim()
         if (!front || !back) continue
         imported.push({ front, back, tags })
       }
@@ -458,12 +936,11 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
       if (!imported.length) throw new Error('No valid flashcards found in CSV')
 
       setFlashcards(imported)
-      setHasChanges(true)
+      await persistFlashcards(imported, { immediate: true })
       setEditingCard(null)
-      alert(`Imported ${imported.length} flashcards`)
-    } catch (error) {
-      console.error('CSV import failed:', error)
-      alert(`CSV import failed: ${error.message}`)
+      toast.success(`Imported ${imported.length} flashcards`)
+    } catch {
+      toast.error('CSV import failed. Please check your file format.')
     } finally {
       e.target.value = ''
     }
@@ -476,38 +953,24 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
       {
         front: newCard.front.trim(),
         back: newCard.back.trim(),
-        tags: (newCard.tags || defaultTags()).trim(),
+        tags: (newCard.tags || '').trim(),
       },
     ]
 
     setFlashcards(updatedFlashcards)
     setNewCard({ front: '', back: '', tags: '' })
     setShowAddCard(false)
-
-    // Save immediately
-    try {
-      const baseNotes = lecture.notes || { title: lecture.title, notes: [] }
-      const updatedNotes = {
-        ...baseNotes,
-        _flashcards: updatedFlashcards,
-      }
-
-      const { error } = await supabase
-        .from('lectures')
-        .update({ notes: updatedNotes })
-        .eq('id', lecture.id)
-
-      if (error) throw new Error(error.message)
-
-      if (onSaved) onSaved()
-    } catch (error) {
-      console.error('Save flashcard failed:', error)
-      alert(`Failed to save: ${error.message}`)
-    }
+    await persistFlashcards(updatedFlashcards, { immediate: true, errorPrefix: 'Failed to save flashcard' })
   }
 
   const startEditCard = (index) => {
     const card = flashcards[index]
+    let initialContentTags = []
+    if (Array.isArray(card.contentTags)) {
+      initialContentTags = [...card.contentTags]
+    } else if (card.aiTagSuggestions?.contentTags?.length > 0) {
+      initialContentTags = [...card.aiTagSuggestions.contentTags]
+    }
 
     // Check if this is an occlusion card
     if (card.occlusionData) {
@@ -515,17 +978,21 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
         index,
         originalImage: card.occlusionData.originalImage,
         label: { ...card.occlusionData.label },
-        questionText: card.occlusionData.questionText || 'What is the masked structure?'
+        questionText: card.occlusionData.questionText || 'What is the masked structure?',
+        contentTags: initialContentTags,
       })
       setOcclusionModalOpen(true)
       setOcclusionStep('edit-card')
+      setNewTagInput('')
     } else {
       setEditingCard({
         index,
         front: card.front || '',
         back: card.back || '',
-        tags: card.tags || defaultTags(),
+        tags: card.tags || '',
+        contentTags: initialContentTags,
       })
+      setNewTagInput('')
       setActiveEditableImage(null)
       setExpandedCards((prev) => ({ ...prev, [index]: true }))
     }
@@ -533,17 +1000,25 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
 
   const saveEditCard = async () => {
     if (!editingCard) return
-    const { index, front, back, tags } = editingCard
+    const { index, front, back, tags, contentTags } = editingCard
     const updatedFlashcards = flashcards.map((card, i) => {
       if (i !== index) return card
       const nextBack = back.trim()
       const existingAnswerImages = Array.isArray(card.answerImages) ? card.answerImages : []
       const syncedAnswerImages = existingAnswerImages.filter((img) => nextBack.includes(img.dataUrl))
+
+      // Mark AI suggestions as accepted if we're saving tags
+      const updatedAiTagSuggestions = card.aiTagSuggestions?.status === 'pending'
+        ? { ...card.aiTagSuggestions, status: 'accepted', acceptedAt: new Date().toISOString() }
+        : card.aiTagSuggestions
+
       return {
         ...card,
         front: front.trim(),
         back: nextBack,
         tags: tags.trim(),
+        contentTags: Array.isArray(contentTags) ? contentTags : [],
+        aiTagSuggestions: updatedAiTagSuggestions,
         answerImages: syncedAnswerImages.length > 0 ? syncedAnswerImages : undefined
       }
     })
@@ -551,60 +1026,20 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
     setFlashcards(updatedFlashcards)
     setEditingCard(null)
     setActiveEditableImage(null)
-
-    // Save immediately
-    try {
-      const baseNotes = lecture.notes || { title: lecture.title, notes: [] }
-      const updatedNotes = {
-        ...baseNotes,
-        _flashcards: updatedFlashcards.length > 0 ? updatedFlashcards : undefined,
-      }
-
-      const { error } = await supabase
-        .from('lectures')
-        .update({ notes: updatedNotes })
-        .eq('id', lecture.id)
-
-      if (error) throw new Error(error.message)
-
-      setHasChanges(false)
-      if (onSaved) onSaved()
-    } catch (error) {
-      console.error('Save flashcard failed:', error)
-      alert(`Failed to save: ${error.message}`)
-    }
+    await persistFlashcards(updatedFlashcards, { immediate: true, errorPrefix: 'Failed to save flashcard' })
   }
 
   const deleteCard = async (index) => {
     const updatedFlashcards = flashcards.filter((_, i) => i !== index)
     setFlashcards(updatedFlashcards)
-
-    // Save immediately
-    try {
-      const baseNotes = lecture.notes || { title: lecture.title, notes: [] }
-      const updatedNotes = {
-        ...baseNotes,
-        _flashcards: updatedFlashcards.length > 0 ? updatedFlashcards : undefined,
-      }
-
-      const { error } = await supabase
-        .from('lectures')
-        .update({ notes: updatedNotes })
-        .eq('id', lecture.id)
-
-      if (error) throw new Error(error.message)
-
-      if (onSaved) onSaved()
-    } catch (error) {
-      console.error('Delete flashcard failed:', error)
-      alert(`Failed to delete: ${error.message}`)
-    }
+    await persistFlashcards(updatedFlashcards, { immediate: true, errorPrefix: 'Failed to delete flashcard' })
   }
 
   // Create masked image with one label covered
   const createMaskedImage = (imageDataUrl, labelToMask) => {
-    return new Promise((resolve) => {
-      const img = new Image()
+    return new Promise((resolve, reject) => {
+      const img = new window.Image()
+      img.crossOrigin = 'anonymous'
       img.onload = () => {
         const canvas = document.createElement('canvas')
         canvas.width = img.width
@@ -626,6 +1061,9 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
 
         resolve(canvas.toDataURL('image/jpeg', 0.9))
       }
+      img.onerror = () => {
+        reject(new Error('Failed to load image for occlusion rendering'))
+      }
       img.src = imageDataUrl
     })
   }
@@ -636,7 +1074,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
 
     const enabledLabels = detectedLabels.filter(l => l.enabled)
     if (enabledLabels.length === 0) {
-      alert('Please enable at least one label to generate cards.')
+      toast.warn('Please enable at least one label to generate cards.')
       return
     }
 
@@ -644,27 +1082,35 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
     setOcclusionStep('generating')
 
     try {
+      const sourceDataUrl = await resolveImageSourceToDataUrl(selectedOcclusionImage.image.dataUrl)
+      if (!sourceDataUrl) {
+        throw new Error('Could not load selected image data')
+      }
+
       // Generate cards - one per enabled label (no AI explanations)
       const newCards = []
       for (const label of enabledLabels) {
-        const maskedDataUrl = await createMaskedImage(selectedOcclusionImage.image.dataUrl, label)
+        const maskedDataUrl = await createMaskedImage(sourceDataUrl, label)
 
         newCards.push({
           front: `<img src="${maskedDataUrl}" style="max-width:400px;"><br><br>What is the masked structure?`,
-          back: `<b>${label.text}</b><br><br><img src="${selectedOcclusionImage.image.dataUrl}" style="max-width:300px;">`,
+          back: `<b>${label.text}</b>`,
           sectionIndex: selectedOcclusionImage.sectionIndex,
           sectionKey: selectedOcclusionImage.sectionKey,
           sectionTitle: selectedOcclusionImage.sectionTitle,
           occlusionData: {
-            originalImage: selectedOcclusionImage.image.dataUrl,
+            originalImage: sourceDataUrl,
             label: { x: label.x, y: label.y, width: label.width, height: label.height, text: label.text },
             questionText: 'What is the masked structure?'
           }
         })
       }
 
-      setFlashcards(prev => [...prev, ...newCards])
-      setHasChanges(true)
+      const suggested = await suggestTopicTagsForCards(newCards)
+      const taggedNewCards = applySuggestedTopicTagsToCards(newCards, suggested)
+      const updatedFlashcards = [...flashcards, ...taggedNewCards]
+      setFlashcards(updatedFlashcards)
+      await persistFlashcards(updatedFlashcards, { immediate: true })
 
       // Close modal
       setOcclusionModalOpen(false)
@@ -672,10 +1118,9 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
       setSelectedOcclusionImage(null)
       setDetectedLabels([])
 
-      alert(`Generated ${newCards.length} occlusion cards!`)
-    } catch (error) {
-      console.error('Error generating occlusion cards:', error)
-      alert('Failed to generate cards: ' + error.message)
+      toast.success(`Generated ${taggedNewCards.length} occlusion cards!`)
+    } catch {
+      toast.error('Failed to generate cards. Please try again.')
     } finally {
       setOcclusionProcessing(false)
     }
@@ -684,50 +1129,33 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
   // Save edited occlusion card
   const saveOcclusionCardEdit = async () => {
     if (!editingOcclusionCard) return
-    const { index, originalImage, label, questionText } = editingOcclusionCard
+    const { index, originalImage, label, questionText, contentTags } = editingOcclusionCard
 
     const maskedDataUrl = await createMaskedImage(originalImage, label)
 
-    const updated = [...flashcards]
-    updated[index] = {
-      ...updated[index],
+    const updatedCard = {
+      ...flashcards[index],
       front: `<img src="${maskedDataUrl}" style="max-width:400px;"><br><br>${questionText}`,
-      back: `<b>${label.text}</b><br><br><img src="${originalImage}" style="max-width:300px;">`,
+      back: `<b>${label.text}</b>`,
+      contentTags: Array.isArray(contentTags) ? contentTags : [],
+      customUserTags: Array.isArray(contentTags) ? contentTags : [],
+      aiTagSuggestions: null,
       occlusionData: {
         originalImage,
         label: { ...label },
         questionText
       }
     }
+    const updated = [...flashcards]
+    updated[index] = updatedCard
     setFlashcards(updated)
     setEditingOcclusionCard(null)
-
-    // Save immediately
-    try {
-      const baseNotes = lecture.notes || { title: lecture.title, notes: [] }
-      const updatedNotes = {
-        ...baseNotes,
-        _flashcards: updated,
-      }
-
-      const { error } = await supabase
-        .from('lectures')
-        .update({ notes: updatedNotes })
-        .eq('id', lecture.id)
-
-      if (error) throw new Error(error.message)
-
-      if (onSaved) onSaved()
-    } catch (error) {
-      console.error('Save occlusion card failed:', error)
-      alert(`Failed to save: ${error.message}`)
-    }
+    await persistFlashcards(updated, { immediate: true, errorPrefix: 'Failed to save occlusion card' })
   }
 
   // Generate interpretation card from selected image
   const generateInterpretationCard = async (imageData) => {
     if (!imageData) {
-      console.error('No image data provided')
       return
     }
 
@@ -742,16 +1170,14 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
         throw new Error('Please sign in')
       }
 
-      console.log('Calling generate-interpretation edge function...')
-      console.log('Access token:', accessToken ? 'Present' : 'Missing')
-
       // Extract media type from data URL (e.g., "data:image/png;base64,...")
-      const dataUrl = imageData.image.dataUrl
+      const dataUrl = await resolveImageSourceToDataUrl(imageData.image.dataUrl)
+      if (!dataUrl) {
+        throw new Error('Could not load selected image data')
+      }
       const mediaTypeMatch = dataUrl.match(/^data:(image\/[a-z]+);base64,/)
       const mediaType = mediaTypeMatch ? mediaTypeMatch[1] : 'image/jpeg'
       const base64Data = dataUrl.split(',')[1]
-
-      console.log('Detected media type:', mediaType)
 
       // Primary path: Supabase client invoke
       const { data: result, error } = await supabase.functions.invoke('generate-interpretation', {
@@ -760,8 +1186,6 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
           media_type: mediaType
         }
       })
-
-      console.log('Primary invoke response:', { result, error })
 
       if (!error && result?.question) {
         // Success - use result
@@ -775,7 +1199,6 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
       }
 
       // Fallback path: direct fetch (same pattern used by flashcards generation)
-      console.log('Primary failed, trying fallback fetch...')
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
       const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
       const functionUrl = `${supabaseUrl}/functions/v1/generate-interpretation`
@@ -794,7 +1217,6 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
       })
 
       const fallbackResult = await response.json().catch(() => ({}))
-      console.log('Fallback response:', { fallbackResult, status: response.status })
 
       if (!response.ok || !fallbackResult?.question) {
         const baseError =
@@ -810,9 +1232,8 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
         imageDataUrl: imageData.image.dataUrl
       })
       setInterpretationStep('confirm')
-    } catch (error) {
-      console.error('Error generating interpretation card:', error)
-      alert('Failed to generate card: ' + (error.message || JSON.stringify(error)))
+    } catch {
+      toast.error('Failed to generate interpretation card. Please try again.')
       setInterpretationStep('select')
     } finally {
       setInterpretationProcessing(false)
@@ -836,7 +1257,11 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
       }
     }
 
-    const updatedFlashcards = [...flashcards, newCard]
+    const taggedCard = applySuggestedTopicTagsToCards(
+      [newCard],
+      await suggestTopicTagsForCards([newCard])
+    )[0]
+    const updatedFlashcards = [...flashcards, taggedCard]
     setFlashcards(updatedFlashcards)
 
     // Reset modal
@@ -844,33 +1269,17 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
     setInterpretationStep('select')
     setSelectedInterpretationImage(null)
     setInterpretationCard(null)
-
-    // Save immediately
-    try {
-      const baseNotes = lecture.notes || { title: lecture.title, notes: [] }
-      const updatedNotes = {
-        ...baseNotes,
-        _flashcards: updatedFlashcards,
-      }
-
-      const { error } = await supabase
-        .from('lectures')
-        .update({ notes: updatedNotes })
-        .eq('id', lecture.id)
-
-      if (error) throw new Error(error.message)
-
-      if (onSaved) onSaved()
-    } catch (error) {
-      console.error('Save interpretation card failed:', error)
-      alert(`Failed to save: ${error.message}`)
-    }
+    await persistFlashcards(updatedFlashcards, { immediate: true, errorPrefix: 'Failed to save interpretation card' })
   }
 
   const openOcclusionFromMenu = () => {
+    if (notesImagesLoading) {
+      toast.info('Images are still loading. Please wait a moment.')
+      return
+    }
     const imageCount = getAllNotesImages().length
     if (imageCount === 0) {
-      alert('No images found in your notes. Images must be added to your lecture notes before creating image-based flashcards.')
+      toast.warn('No images found in your notes. Add images to your lecture notes first.')
       return
     }
     setAddCardMenuOpen(false)
@@ -879,9 +1288,13 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
   }
 
   const openInterpretationFromMenu = () => {
+    if (notesImagesLoading) {
+      toast.info('Images are still loading. Please wait a moment.')
+      return
+    }
     const imageCount = getAllNotesImages().length
     if (imageCount === 0) {
-      alert('No images found in your notes. Images must be added to your lecture notes before creating image-based flashcards.')
+      toast.warn('No images found in your notes. Add images to your lecture notes first.')
       return
     }
     setAddCardMenuOpen(false)
@@ -897,13 +1310,25 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
       <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-divider">
         <div className="max-w-4xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
-            <button
-              onClick={onBack}
-              className="flex items-center gap-2 text-secondary hover:text-primary transition-colors"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              Back to lecture
-            </button>
+            <div className="flex items-center gap-4">
+              <button
+                onClick={handleBack}
+                disabled={saving || exitingRef.current}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-label={`Back to ${module?.name || 'module'}`}
+              >
+                <ArrowLeft className="w-5 h-5 text-secondary" />
+              </button>
+              {module && (
+                <div
+                  className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium"
+                  style={{ backgroundColor: `${module.color}15`, color: module.color }}
+                >
+                  {module.abbreviation}
+                </div>
+              )}
+              <h1 className="text-2xl font-bold text-primary">{lecture.title}</h1>
+            </div>
 
             <div className="flex items-center gap-2">
               {flashcards.length > 0 ? (
@@ -916,13 +1341,6 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                     Export CSV
                   </button>
 
-                  <button
-                    onClick={() => setShowDeleteConfirm(true)}
-                    className="flex items-center justify-center gap-2 px-3 py-2 bg-gray-100 hover:bg-red-50 hover:text-red-600 rounded-lg text-secondary text-sm transition-colors"
-                    title="Delete all flashcards"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
                 </>
               ) : (
                 <>
@@ -956,6 +1374,12 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
       </div>
 
       <div className="max-w-4xl mx-auto px-6 py-8">
+        <div className="mb-4 text-sm">
+          <span className={saveStatus === 'error' ? 'text-red-600' : 'text-secondary'}>
+            {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'error' ? 'Save failed' : 'Saved'}
+          </span>
+        </div>
+
         {showAddCard && (
           <div className="bg-surface rounded-xl border border-divider p-4 mb-5">
             <h3 className="font-semibold text-primary mb-3">Add New Card</h3>
@@ -1108,7 +1532,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                 type="text"
                 value={newCard.tags}
                 onChange={(e) => setNewCard((prev) => ({ ...prev, tags: e.target.value }))}
-                placeholder={`Tags (default: ${defaultTags()})`}
+                placeholder="Tags (optional)"
                 className="w-full bg-white border border-divider rounded-lg px-3 py-2 text-sm"
               />
               <div className="flex gap-2 justify-end">
@@ -1176,7 +1600,15 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
           </div>
 
           {flashcards.length === 0 ? (
-            <p className="text-sm text-secondary py-8 text-center">No flashcards yet. Generate or import from the lecture screen.</p>
+            <div className="text-center py-12">
+              <div className="inline-flex items-center justify-center w-14 h-14 bg-gray-100 rounded-2xl mb-4">
+                <Layers className="w-7 h-7 text-secondary" />
+              </div>
+              <h3 className="text-lg font-semibold text-primary mb-2">No flashcards yet</h3>
+              <p className="text-sm text-secondary max-w-sm mx-auto">
+                Generate flashcards from your lecture notes, or import them using the buttons above.
+              </p>
+            </div>
           ) : (
             <div className="space-y-3">
               {flashcards.map((card, index) => (
@@ -1372,12 +1804,58 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                               </button>
                             )}
                           </div>
+                          {/* Content Tags - Editable Bubbles */}
+                          <div className="space-y-2">
+                            <label className="text-xs text-secondary">Topic Tags</label>
+                            <div className="flex flex-wrap gap-1.5 min-h-[32px] p-2 bg-gray-50 border border-divider rounded-lg">
+                              {editingCard.contentTags?.map((tag, tagIdx) => (
+                                <span
+                                  key={tagIdx}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 text-xs rounded-full"
+                                >
+                                  {tag}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingCard((prev) => ({
+                                        ...prev,
+                                        contentTags: prev.contentTags.filter((_, i) => i !== tagIdx)
+                                      }))
+                                    }}
+                                    className="w-3.5 h-3.5 flex items-center justify-center hover:bg-blue-100 rounded-full"
+                                  >
+                                    <X className="w-2.5 h-2.5" />
+                                  </button>
+                                </span>
+                              ))}
+                              <input
+                                type="text"
+                                value={newTagInput}
+                                onChange={(e) => setNewTagInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && newTagInput.trim()) {
+                                    e.preventDefault()
+                                    const newTag = newTagInput.trim().toLowerCase()
+                                    if (!editingCard.contentTags?.includes(newTag)) {
+                                      setEditingCard((prev) => ({
+                                        ...prev,
+                                        contentTags: [...(prev.contentTags || []), newTag]
+                                      }))
+                                    }
+                                    setNewTagInput('')
+                                  }
+                                }}
+                                className="flex-1 min-w-[100px] bg-transparent border-none outline-none text-sm placeholder:text-gray-400"
+                                placeholder="Type tag and press Enter..."
+                              />
+                            </div>
+                          </div>
+
+                          {/* Legacy Tags (hidden but preserved) */}
                           <input
-                            type="text"
+                            type="hidden"
                             value={editingCard.tags}
                             onChange={(e) => setEditingCard((prev) => ({ ...prev, tags: e.target.value }))}
-                            className="w-full bg-white border border-divider rounded-lg px-3 py-2 text-sm"
-                            placeholder="Tags"
                           />
                           <div className="flex justify-end gap-2">
                             <button
@@ -1398,15 +1876,41 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                         <>
                           <div className="mb-3 pb-3 border-b border-divider">
                             <p className="text-xs text-secondary mb-1">Q:</p>
-                            <div className="text-sm text-primary" dangerouslySetInnerHTML={{ __html: card.front }} />
+                            <div className="text-sm text-primary" dangerouslySetInnerHTML={{ __html: sanitizeHtml(card.front) }} />
                           </div>
                           <div>
                             <p className="text-xs text-secondary mb-1">A:</p>
-                            <p className="text-sm text-primary" dangerouslySetInnerHTML={{ __html: card.back }} />
+                            <p
+                              className="text-sm text-primary"
+                              dangerouslySetInnerHTML={{
+                                __html: card.occlusionData?.label?.text
+                                  ? `<b>${card.occlusionData.label.text}</b>`
+                                  : sanitizeHtml(card.back)
+                              }}
+                            />
                           </div>
-                          <div className="flex justify-between items-center mt-3">
-                            <p className="text-xs text-secondary">Tags: {card.tags || '-'}</p>
-                            <div className="flex gap-2">
+                          <div className="flex justify-between items-start mt-3">
+                            <div className="flex-1 mr-4">
+                              <p className="text-xs text-secondary mb-1">Tags:</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {(() => {
+                                  const displayTags = getCardDisplayTags(card)
+                                  if (displayTags.length === 0) {
+                                    return <span className="text-xs text-secondary">-</span>
+                                  }
+
+                                  return displayTags.map((tag, tagIdx) => (
+                                    <span
+                                      key={tagIdx}
+                                      className="inline-flex items-center px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 text-xs rounded-full"
+                                    >
+                                      {tag}
+                                    </span>
+                                  ))
+                                })()}
+                              </div>
+                            </div>
+                            <div className="flex gap-2 flex-shrink-0">
                               <button
                                 onClick={() => startEditCard(index)}
                                 className="p-2 bg-gray-200 hover:bg-gray-300 rounded text-sm"
@@ -1422,7 +1926,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                                 className="p-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded text-sm"
                                 title="Add image to answer"
                               >
-                                <Image className="w-3.5 h-3.5" />
+                                <ImageIcon className="w-3.5 h-3.5" />
                               </button>
                               <button
                                 onClick={() => deleteCard(index)}
@@ -1488,44 +1992,6 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
             {pickerImages.length === 0 && (
               <p className="text-sm text-secondary py-6 text-center">No images found in notes.</p>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Delete Confirmation Modal */}
-      {showDeleteConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-surface rounded-xl border border-divider p-6 max-w-md w-full">
-            <h3 className="text-lg font-semibold text-primary mb-2">Delete All Flashcards?</h3>
-            <p className="text-sm text-secondary mb-6">
-              This will permanently delete all {flashcards.length} flashcard{flashcards.length !== 1 ? 's' : ''}. This action cannot be undone.
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setShowDeleteConfirm(false)}
-                disabled={deleting}
-                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 disabled:bg-gray-50 text-primary rounded-lg text-sm font-medium transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteAllFlashcards}
-                disabled={deleting}
-                className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
-              >
-                {deleting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Deleting...
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-4 h-4" />
-                    Delete All
-                  </>
-                )}
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -1913,6 +2379,52 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                         {drawingOcclusionBox !== null && !drawingOcclusionBox.x && (
                           <p className="text-xs text-secondary mt-2">Click and drag on the image to draw a new box</p>
                         )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-xs text-secondary">Topic Tags</label>
+                        <div className="flex flex-wrap gap-1.5 min-h-[32px] p-2 bg-white border border-divider rounded-lg">
+                          {editingOcclusionCard.contentTags?.map((tag, tagIdx) => (
+                            <span
+                              key={`${tag}-${tagIdx}`}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 text-xs rounded-full"
+                            >
+                              {tag}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingOcclusionCard((prev) => ({
+                                    ...prev,
+                                    contentTags: prev.contentTags.filter((_, i) => i !== tagIdx)
+                                  }))
+                                }}
+                                className="w-3.5 h-3.5 flex items-center justify-center hover:bg-blue-100 rounded-full"
+                              >
+                                <X className="w-2.5 h-2.5" />
+                              </button>
+                            </span>
+                          ))}
+                          <input
+                            type="text"
+                            value={newTagInput}
+                            onChange={(e) => setNewTagInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && newTagInput.trim()) {
+                                e.preventDefault()
+                                const newTag = newTagInput.trim().toLowerCase()
+                                if (!editingOcclusionCard.contentTags?.includes(newTag)) {
+                                  setEditingOcclusionCard((prev) => ({
+                                    ...prev,
+                                    contentTags: [...(prev.contentTags || []), newTag]
+                                  }))
+                                }
+                                setNewTagInput('')
+                              }
+                            }}
+                            className="flex-1 min-w-[100px] bg-transparent border-none outline-none text-sm placeholder:text-gray-400"
+                            placeholder="Type tag and press Enter..."
+                          />
+                        </div>
                       </div>
                     </div>
 

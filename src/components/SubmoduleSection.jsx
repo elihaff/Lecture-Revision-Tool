@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, GripVertical, FileText, Trash2, Plus, Pencil, BookOpen } from 'lucide-react'
+import { ChevronDown, ChevronRight, GripVertical, Trash2, Plus, Pencil, BookOpen } from 'lucide-react'
 
 export function SubmoduleSection({
   submodule,
@@ -210,7 +210,7 @@ export function SubmoduleSection({
                 onDragLeave={handleLectureDropZoneDragLeave}
                 onDrop={(e) => handleLectureDropAtPosition(e, 0)}
                 className={`h-2 transition-all duration-150 rounded-full mx-1 ${
-                  lectureDropIndex === 0 ? 'bg-accent h-1 my-1' : ''
+                  draggedLecture && lectureDropIndex === 0 ? 'bg-accent h-1 my-1' : ''
                 }`}
               />
 
@@ -229,6 +229,7 @@ export function SubmoduleSection({
                     }}
                     onDrop={(e) => {
                       e.stopPropagation()
+                      setLectureDropIndex(null)
                       onLectureDrop(e, lecture, submodule.id)
                     }}
                     className={`group flex items-start bg-surface rounded-lg border transition-all cursor-pointer hover:shadow-sm min-h-[44px] ${
@@ -238,25 +239,20 @@ export function SubmoduleSection({
                     }`}
                   >
                     {/* Column 1: Drag handle - 40px fixed */}
-                    <div className="w-10 flex-shrink-0 flex justify-center pt-3">
+                    <div className="w-10 flex-shrink-0 flex items-center justify-center py-3">
                       <div className="text-secondary hover:text-primary">
                         <GripVertical className="w-4 h-4" />
                       </div>
                     </div>
 
-                    {/* Column 2: File icon - 24px fixed */}
-                    <div className="w-6 flex-shrink-0 pt-3">
-                      <FileText className="w-4 h-4 text-secondary" />
-                    </div>
-
-                    {/* Column 3: Lecture title - fixed max-width 400px, left-aligned, wraps to new line */}
+                    {/* Column 2: Lecture title - fixed max-width 400px, left-aligned, wraps to new line */}
                     <div className="w-[400px] flex-shrink py-3 pr-4">
                       <span className="text-primary leading-snug block">
                         {lecture.title}
                       </span>
                     </div>
 
-                    {/* Column 4: Action buttons - remaining space, right-aligned */}
+                    {/* Column 3: Action buttons - remaining space, right-aligned */}
                     <div className="flex-1 flex items-center justify-end gap-0.5 pr-2 pt-2.5 opacity-0 group-hover:opacity-100 transition-all">
                       <button
                         onClick={(e) => {
@@ -287,7 +283,7 @@ export function SubmoduleSection({
                     onDragLeave={handleLectureDropZoneDragLeave}
                     onDrop={(e) => handleLectureDropAtPosition(e, index + 1)}
                     className={`h-2 transition-all duration-150 rounded-full mx-1 ${
-                      lectureDropIndex === index + 1 ? 'bg-accent h-1 my-1' : ''
+                      draggedLecture && lectureDropIndex === index + 1 ? 'bg-accent h-1 my-1' : ''
                     }`}
                   />
                 </div>

@@ -1,13 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
-import { Plus, BookOpen, Loader2 } from 'lucide-react'
+import { Plus, BookOpen, Loader2, ArrowLeft } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { migrateAllFlashcards } from '../lib/flashcardService'
+import { getUserSettings, setExamDate } from '../lib/userSettingsService'
 import { ModuleCard } from './ModuleCard'
 import { CreateModuleModal } from './CreateModuleModal'
 import { EditModuleModal } from './EditModuleModal'
 import { ModuleView } from './ModuleView'
+import { ExamDatePicker } from './ExamDatePicker'
 
-export function Dashboard({ user }) {
+const dashboardCache = {
+  modules: null,
+  lectureCounts: null,
+  examDate: null,
+}
+
+export function Dashboard({ user, onBack }) {
   const [modules, setModules] = useState([])
   const [lectureCounts, setLectureCounts] = useState({})
   const [loading, setLoading] = useState(true)
@@ -16,37 +23,53 @@ export function Dashboard({ user }) {
   const [selectedModule, setSelectedModule] = useState(null)
   const [draggedModule, setDraggedModule] = useState(null)
   const [dropIndex, setDropIndex] = useState(null)
+  const [examDate, setExamDateState] = useState(null)
+  const [examDateLoading, setExamDateLoading] = useState(true)
   const dragCounter = useRef(0)
-  const migrationAttempted = useRef(false)
 
   // Fetch modules on mount
   useEffect(() => {
-    fetchModules()
+    if (dashboardCache.modules) {
+      setModules(dashboardCache.modules)
+      setLectureCounts(dashboardCache.lectureCounts || {})
+      setLoading(false)
+      fetchModules({ showLoading: false })
+      return
+    }
+    fetchModules({ showLoading: true })
   }, [])
 
-  // Auto-migrate flashcards from JSONB to table (runs once on mount)
+  // Fetch exam date on mount
   useEffect(() => {
-    const runMigration = async () => {
-      if (migrationAttempted.current) return
-      migrationAttempted.current = true
-
-      console.log('Checking for flashcards to migrate...')
-      const { totalMigrated, lecturesMigrated, error } = await migrateAllFlashcards()
-
-      if (error) {
-        console.error('Flashcard migration error:', error)
-      } else if (totalMigrated > 0) {
-        console.log(`✅ Migrated ${totalMigrated} flashcards from ${lecturesMigrated} lectures`)
-      } else {
-        console.log('No flashcards to migrate')
-      }
+    if (dashboardCache.examDate !== null) {
+      setExamDateState(dashboardCache.examDate)
+      setExamDateLoading(false)
     }
 
-    runMigration()
+    const fetchExamDate = async () => {
+      const { data, error } = await getUserSettings()
+      if (!error && data) {
+        setExamDateState(data.exam_date)
+        dashboardCache.examDate = data.exam_date || null
+      }
+      setExamDateLoading(false)
+    }
+    fetchExamDate()
   }, [])
 
-  const fetchModules = async () => {
-    setLoading(true)
+  // Handle exam date save
+  const handleExamDateSave = async (newDate) => {
+    setExamDateLoading(true)
+    const { error } = await setExamDate(newDate)
+    if (!error) {
+      setExamDateState(newDate)
+      dashboardCache.examDate = newDate
+    }
+    setExamDateLoading(false)
+  }
+
+  const fetchModules = async ({ showLoading = true } = {}) => {
+    if (showLoading) setLoading(true)
 
     // Fetch modules with ordering
     const { data: modulesData, error: modulesError } = await supabase
@@ -56,12 +79,13 @@ export function Dashboard({ user }) {
       .order('created_at', { ascending: false })
 
     if (modulesError) {
-      console.error('Error fetching modules:', modulesError)
-      setLoading(false)
+      if (showLoading) setLoading(false)
       return
     }
 
-    setModules(modulesData || [])
+    const nextModules = modulesData || []
+    setModules(nextModules)
+    dashboardCache.modules = nextModules
 
     // Fetch lecture counts for each module
     if (modulesData && modulesData.length > 0) {
@@ -75,10 +99,14 @@ export function Dashboard({ user }) {
           counts[lecture.module_id] = (counts[lecture.module_id] || 0) + 1
         })
         setLectureCounts(counts)
+        dashboardCache.lectureCounts = counts
       }
+    } else {
+      setLectureCounts({})
+      dashboardCache.lectureCounts = {}
     }
 
-    setLoading(false)
+    if (showLoading) setLoading(false)
   }
 
   const handleCreateModule = async (moduleData) => {
@@ -99,11 +127,11 @@ export function Dashboard({ user }) {
       .single()
 
     if (error) {
-      console.error('Error creating module:', error)
       return { error }
     }
 
     setModules((prev) => [...prev, data])
+    dashboardCache.modules = [...(dashboardCache.modules || modules), data]
     setShowCreateModal(false)
     return { data }
   }
@@ -119,11 +147,11 @@ export function Dashboard({ user }) {
       .eq('id', moduleId)
 
     if (error) {
-      console.error('Error deleting module:', error)
       return
     }
 
     setModules((prev) => prev.filter((m) => m.id !== moduleId))
+    dashboardCache.modules = (dashboardCache.modules || modules).filter((m) => m.id !== moduleId)
   }
 
   const handleEditModule = async (moduleData) => {
@@ -137,7 +165,6 @@ export function Dashboard({ user }) {
       .eq('id', editingModule.id)
 
     if (error) {
-      console.error('Error updating module:', error)
       return { error }
     }
 
@@ -147,6 +174,11 @@ export function Dashboard({ user }) {
           ? { ...m, name: moduleData.name, abbreviation: moduleData.abbreviation, color: moduleData.color }
           : m
       )
+    )
+    dashboardCache.modules = (dashboardCache.modules || modules).map((m) =>
+      m.id === editingModule.id
+        ? { ...m, name: moduleData.name, abbreviation: moduleData.abbreviation, color: moduleData.color }
+        : m
     )
     setEditingModule(null)
     return {}
@@ -224,6 +256,7 @@ export function Dashboard({ user }) {
     // Update display_order
     const updatedModules = newModules.map((m, i) => ({ ...m, display_order: i }))
     setModules(updatedModules)
+    dashboardCache.modules = updatedModules
 
     // Update in database
     for (const m of updatedModules) {
@@ -243,9 +276,10 @@ export function Dashboard({ user }) {
       <ModuleView
         module={selectedModule}
         user={user}
+        examDate={examDate}
         onBack={() => {
           setSelectedModule(null)
-          fetchModules() // Refresh counts when coming back
+          fetchModules({ showLoading: false }) // Refresh counts when coming back
         }}
       />
     )
@@ -255,19 +289,37 @@ export function Dashboard({ user }) {
     <div className="p-8">
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
-        <div>
+        <div className="flex items-center gap-3">
+          {onBack && (
+            <button
+              onClick={onBack}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              aria-label="Back to home"
+            >
+              <ArrowLeft className="w-5 h-5 text-secondary" />
+            </button>
+          )}
+          <div>
           <h1 className="text-2xl font-bold text-primary">Your Modules</h1>
           <p className="text-secondary mt-1">
             Organise your lectures by module
           </p>
+          </div>
         </div>
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-accent hover:bg-blue-600 rounded-xl font-medium text-white transition-colors"
-        >
-          <Plus className="w-5 h-5" />
-          New Module
-        </button>
+        <div className="flex items-center gap-4">
+          <ExamDatePicker
+            examDate={examDate}
+            onSave={handleExamDateSave}
+            loading={examDateLoading}
+          />
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-accent hover:bg-blue-600 rounded-xl font-medium text-white transition-colors"
+          >
+            <Plus className="w-5 h-5" />
+            New Module
+          </button>
+        </div>
       </div>
 
       {/* Content */}

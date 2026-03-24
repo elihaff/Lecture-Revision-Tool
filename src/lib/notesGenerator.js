@@ -21,8 +21,7 @@ async function callNotesFunction({
   anonKey,
   body
 }) {
-  // Note: The generate-notes function is deployed with slug 'swift-api'
-  const endpoint = 'swift-api'
+  const endpoint = 'generate-notes'
 
   const response = await fetch(`${supabaseUrl}/functions/v1/${endpoint}`, {
     method: 'POST',
@@ -94,7 +93,6 @@ export async function generateNotesFromPdf(pdfFile, userLearningObjectives = '',
       data: result.data
     }
   } catch (error) {
-    console.error('Generate notes error:', error)
     return {
       success: false,
       error: error.message
@@ -148,7 +146,6 @@ export async function generateAndSaveNotes(pdfFile, lectureId, userLearningObjec
 
     return { success: true }
   } catch (error) {
-    console.error('Generate and save notes error:', error)
     return {
       success: false,
       error: error.message

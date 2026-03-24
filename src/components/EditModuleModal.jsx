@@ -11,7 +11,6 @@ const COLORS = [
   '#FFCC00', // yellow
   '#34C759', // green
   '#00C7BE', // teal
-  '#5AC8FA', // light blue
 ]
 
 export function EditModuleModal({ module, onClose, onSave }) {

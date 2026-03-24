@@ -1,5 +1,133 @@
 import { supabase } from './supabase'
 
+const PROGRESS_MATURE_INTERVAL_DAYS = 21
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value))
+}
+
+/**
+ * Recompute lecture phase/progress from actual learning + flashcard SRS state.
+ *
+ * Phase rules:
+ * - not_started: notes not generated
+ * - learn: notes generated, Learn Mode not completed
+ * - memorise: at least one NEW flashcard remains
+ * - maintain: NEW flashcards are fully graduated
+ *
+ * Progress rules:
+ * - 100% only when all lecture flashcards are in REVIEW with mature intervals (>=21d)
+ * - Otherwise, progress reflects graduation + long-term maturity trajectory.
+ */
+export async function recomputeLectureProgress(lectureId, options = {}) {
+  const { markLearnCompleted = false } = options
+
+  try {
+    const { data: lecture, error: lectureError } = await supabase
+      .from('lectures')
+      .select('id, notes_generated, phase')
+      .eq('id', lectureId)
+      .single()
+
+    if (lectureError || !lecture) {
+      throw new Error(lectureError?.message || 'Lecture not found')
+    }
+
+    const notesGenerated = lecture.notes_generated === true
+
+    const { data: cards, error: cardsError } = await supabase
+      .from('flashcards')
+      .select('state, interval_days')
+      .eq('lecture_id', lectureId)
+
+    if (cardsError) {
+      throw new Error(cardsError.message)
+    }
+
+    const totalCards = cards?.length || 0
+    const newCards = (cards || []).filter((card) => card.state === 'new').length
+    const reviewCards = (cards || []).filter((card) => card.state === 'review').length
+    const relearningCards = (cards || []).filter((card) => card.state === 'relearning').length
+    const matureReviewCards = (cards || []).filter((card) =>
+      card.state === 'review' && Number(card.interval_days || 0) >= PROGRESS_MATURE_INTERVAL_DAYS
+    ).length
+
+    const legacyLearnComplete =
+      lecture.phase === 'memorise' ||
+      lecture.phase === 'maintain' ||
+      lecture.phase === 'complete'
+    const learnCompleted = markLearnCompleted || legacyLearnComplete
+
+    let phase = 'not_started'
+    if (notesGenerated) {
+      if (totalCards > 0 && newCards === 0) {
+        phase = 'maintain'
+      } else if (totalCards > 0) {
+        phase = 'memorise'
+      } else {
+        phase = learnCompleted ? 'memorise' : 'learn'
+      }
+    }
+
+    let progress = 0
+    if (!notesGenerated) {
+      progress = 0
+    } else {
+      const graduatedRatio = totalCards > 0 ? (totalCards - newCards) / totalCards : 0
+      const matureRatio = totalCards > 0 ? matureReviewCards / totalCards : 0
+      const relearningRatio = totalCards > 0 ? relearningCards / totalCards : 0
+
+      const longTermComplete =
+        totalCards > 0 &&
+        reviewCards === totalCards &&
+        relearningCards === 0 &&
+        matureReviewCards === totalCards
+
+      if (longTermComplete) {
+        progress = 100
+      } else if (!learnCompleted) {
+        // Keep progress early while user is still in Learn phase.
+        progress = clamp(Math.round(5 + 20 * graduatedRatio), 5, 35)
+      } else {
+        // Main long-term trajectory: graduation + maturity, with relearning penalty.
+        const weighted = 20 + 50 * graduatedRatio + 30 * matureRatio - 10 * relearningRatio
+        progress = clamp(Math.round(weighted), 20, 99)
+      }
+    }
+
+    const { error: updateError } = await supabase
+      .from('lectures')
+      .update({
+        phase,
+        progress,
+      })
+      .eq('id', lectureId)
+
+    if (updateError) {
+      throw new Error(updateError.message)
+    }
+
+    return {
+      success: true,
+      data: {
+        lecture_id: lectureId,
+        phase,
+        progress,
+        total_cards: totalCards,
+        new_cards: newCards,
+        review_cards: reviewCards,
+        relearning_cards: relearningCards,
+        mature_review_cards: matureReviewCards,
+      }
+    }
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message,
+    }
+  }
+}
+
 /**
  * Upload a PDF file and process it with AI to extract learning objectives
  * @param {File} file - The PDF file to upload
@@ -85,7 +213,6 @@ export async function uploadAndProcessLecture(file, lectureId, userId, onProgres
       learning_objectives: result.learning_objectives,
     }
   } catch (error) {
-    console.error('Upload and process error:', error)
     return {
       success: false,
       error: error.message,
@@ -118,25 +245,11 @@ export async function updateObjectiveCompletion(lectureId, objectiveId, complete
       obj.id === objectiveId ? { ...obj, completed } : obj
     )
 
-    // Calculate progress percentage
-    const completedCount = updatedObjectives.filter((obj) => obj.completed).length
-    const progress = objectives.length > 0
-      ? Math.round((completedCount / objectives.length) * 100)
-      : 0
-
-    // Determine phase based on progress
-    let phase = 'learn'
-    if (progress === 100) {
-      phase = 'memorise'
-    }
-
-    // Update the lecture
+    // Update the lecture objective payload only.
     const { error: updateError } = await supabase
       .from('lectures')
       .update({
         learning_objectives: updatedObjectives,
-        progress,
-        phase,
       })
       .eq('id', lectureId)
 
@@ -146,7 +259,6 @@ export async function updateObjectiveCompletion(lectureId, objectiveId, complete
 
     return { success: true }
   } catch (error) {
-    console.error('Update objective error:', error)
     return {
       success: false,
       error: error.message,
@@ -180,7 +292,6 @@ export async function resetLectureNotes(lectureId) {
 
     return { success: true }
   } catch (error) {
-    console.error('Reset lecture error:', error)
     return {
       success: false,
       error: error.message,

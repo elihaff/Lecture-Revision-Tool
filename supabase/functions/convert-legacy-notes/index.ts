@@ -127,27 +127,31 @@ serve(async (req) => {
       throw new Error('Invalid or expired token')
     }
 
-    const { notes_path } = await req.json()
+    const { notes_path, pdf_base64: directPdfBase64 } = await req.json()
 
-    if (!notes_path) {
-      throw new Error('No notes path provided')
+    let pdf_base64 = String(directPdfBase64 || '').trim()
+
+    if (!pdf_base64) {
+      if (!notes_path) {
+        throw new Error('No notes_path or pdf_base64 provided')
+      }
+
+      const { data: pdfData, error: downloadError } = await supabase.storage
+        .from('lecture-pdfs')
+        .download(notes_path)
+
+      if (downloadError || !pdfData) {
+        throw new Error('Failed to download PDF')
+      }
+
+      const arrayBuffer = await pdfData.arrayBuffer()
+      const uint8Array = new Uint8Array(arrayBuffer)
+      let binary = ''
+      for (let i = 0; i < uint8Array.length; i++) {
+        binary += String.fromCharCode(uint8Array[i])
+      }
+      pdf_base64 = btoa(binary)
     }
-
-    const { data: pdfData, error: downloadError } = await supabase.storage
-      .from('lecture-pdfs')
-      .download(notes_path)
-
-    if (downloadError || !pdfData) {
-      throw new Error('Failed to download PDF')
-    }
-
-    const arrayBuffer = await pdfData.arrayBuffer()
-    const uint8Array = new Uint8Array(arrayBuffer)
-    let binary = ''
-    for (let i = 0; i < uint8Array.length; i++) {
-      binary += String.fromCharCode(uint8Array[i])
-    }
-    const pdf_base64 = btoa(binary)
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',

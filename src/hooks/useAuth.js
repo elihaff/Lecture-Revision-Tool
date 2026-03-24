@@ -61,6 +61,16 @@ export function useAuth() {
     return { data, error }
   }
 
+  const updateDisplayName = async (displayName) => {
+    const { data, error } = await supabase.auth.updateUser({
+      data: { display_name: displayName }
+    })
+    if (!error && data?.user) {
+      setUser(data.user)
+    }
+    return { data, error }
+  }
+
   return {
     user,
     session,
@@ -70,5 +80,6 @@ export function useAuth() {
     signOut,
     resetPasswordRequest,
     updatePassword,
+    updateDisplayName,
   }
 }
