@@ -1,10 +1,13 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { X, Search, ChevronLeft, ChevronRight, Image, FileImage, Link } from 'lucide-react'
+import { stripHtml } from '../lib/htmlSanitizer'
 
 export function ImagePickerModal({
   isOpen,
   onClose,
   thumbnails,
+  pdfPageCount = 0,
+  loadSlideThumbnail = null,
   thumbnailsLoading,
   existingImages,
   onSelectSlide,
@@ -14,15 +17,25 @@ export function ImagePickerModal({
   currentKey,
   notes,
   getSectionImage,
+  getPointImages,
   getPointImage,
-  getPointImageKey
+  getPointImageKey,
+  getFigureNumberByKey
 }) {
   const [activeTab, setActiveTab] = useState('slides')
   const [slidesSelectionMode, setSlidesSelectionMode] = useState('slides') // 'slides' | 'link-existing'
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [previewSize, setPreviewSize] = useState('large')
+  const [visibleSlideCount, setVisibleSlideCount] = useState(12)
+  const [lazySlidesByPage, setLazySlidesByPage] = useState({})
+  const [loadingPages, setLoadingPages] = useState({})
+  const [failedPages, setFailedPages] = useState({})
   const uploadInputRef = useRef(null)
+  const slidesScrollRef = useRef(null)
+  const lazySlidesByPageRef = useRef({})
+  const loadingPagesRef = useRef({})
+  const failedPagesRef = useRef({})
 
   // Filter slide thumbnails by search query (exclude uploaded images)
   const slideThumbnails = thumbnails.filter(thumb => !thumb.id?.startsWith('uploaded-'))
@@ -34,40 +47,51 @@ export function ImagePickerModal({
   // Get uploaded images only
   const uploadedImages = thumbnails.filter(thumb => thumb.id?.startsWith('uploaded-'))
 
-  const availableExistingImages = (() => {
+  const availableExistingImages = useMemo(() => {
     const allImages = []
     let figNum = 1
     const sections = notes?.notes || []
+    const shouldExcludeKey = (key) => key === currentKey || key.startsWith(`${currentKey}::`)
 
     sections.forEach((section, sIdx) => {
       const sectionImg = getSectionImage ? getSectionImage(sIdx) : null
       if (sectionImg) {
+        const sectionKey = `section-${sIdx}`
+        const canonicalFigNum = getFigureNumberByKey ? getFigureNumberByKey(sectionKey) : null
         allImages.push({
-          key: `section-${sIdx}`,
+          key: sectionKey,
           image: sectionImg,
-          figNum: figNum++,
-          label: String(section.section || 'Section'),
+          figNum: canonicalFigNum ?? figNum++,
+          label: stripHtml(String(section.section || 'Section')).replace(/\s+/g, ' ').trim(),
           type: 'section'
         })
       }
 
       const points = section.points || []
       points.forEach((point, pIdx) => {
-        const pointImg = getPointImage ? getPointImage(sIdx, pIdx) : null
-        if (pointImg) {
+        const pointImgs = getPointImages
+          ? getPointImages(sIdx, pIdx)
+          : (() => {
+            const single = getPointImage ? getPointImage(sIdx, pIdx) : null
+            return single ? [single] : []
+          })()
+        pointImgs.forEach((pointImg, pointImageIndex) => {
+          const pointKeyBase = getPointImageKey ? getPointImageKey(sIdx, pIdx) : `${sIdx}-${pIdx}`
+          const pointKey = `${pointKeyBase}::${pointImageIndex}`
+          const canonicalFigNum = getFigureNumberByKey ? getFigureNumberByKey(pointKey) : null
           allImages.push({
-            key: getPointImageKey ? getPointImageKey(sIdx, pIdx) : `${sIdx}-${pIdx}`,
+            key: pointKey,
             image: pointImg,
-            figNum: figNum++,
-            label: String(point || '').replace(/<[^>]+>/g, ' ').trim(),
+            figNum: canonicalFigNum ?? figNum++,
+            label: stripHtml(String(point || '')).replace(/\s+/g, ' ').trim(),
             type: 'point'
           })
-        }
+        })
       })
     })
 
-    return allImages.filter((img) => img.key !== currentKey)
-  })()
+    return allImages.filter((img) => !shouldExcludeKey(img.key))
+  }, [notes, getSectionImage, getPointImages, getPointImage, getPointImageKey, getFigureNumberByKey, currentKey])
 
   // Reset selection when modal opens or thumbnails change
   useEffect(() => {
@@ -76,15 +100,186 @@ export function ImagePickerModal({
       setSlidesSelectionMode('slides')
       setSelectedIndex(0)
       setSearchQuery('')
+      setVisibleSlideCount(12)
+      setLazySlidesByPage({})
+      setLoadingPages({})
+      setFailedPages({})
+      lazySlidesByPageRef.current = {}
+      loadingPagesRef.current = {}
+      failedPagesRef.current = {}
     }
   }, [isOpen])
+
+  useEffect(() => {
+    lazySlidesByPageRef.current = lazySlidesByPage
+  }, [lazySlidesByPage])
+
+  useEffect(() => {
+    loadingPagesRef.current = loadingPages
+  }, [loadingPages])
+
+  useEffect(() => {
+    failedPagesRef.current = failedPages
+  }, [failedPages])
+
+  const loadSlideWithTimeout = useCallback((pageNum, timeoutMs = 15000) => {
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const timeoutId = setTimeout(() => {
+        if (settled) return
+        settled = true
+        reject(new Error('Thumbnail load timeout'))
+      }, timeoutMs)
+
+      Promise.resolve(loadSlideThumbnail(pageNum))
+        .then((result) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timeoutId)
+          resolve(result || null)
+        })
+        .catch((error) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timeoutId)
+          reject(error)
+        })
+    })
+  }, [loadSlideThumbnail])
+
+  const triggerLoadPage = useCallback(async (pageNum) => {
+    if (!loadSlideThumbnail) return null
+    if (!pageNum) return null
+    if (lazySlidesByPageRef.current[pageNum]) return lazySlidesByPageRef.current[pageNum]
+    if (loadingPagesRef.current[pageNum]) return null
+
+    loadingPagesRef.current = { ...loadingPagesRef.current, [pageNum]: true }
+    setLoadingPages((prev) => (prev[pageNum] ? prev : { ...prev, [pageNum]: true }))
+
+    if (failedPagesRef.current[pageNum]) {
+      const nextFailed = { ...failedPagesRef.current }
+      delete nextFailed[pageNum]
+      failedPagesRef.current = nextFailed
+      setFailedPages(nextFailed)
+    }
+
+    try {
+      const loaded = await loadSlideWithTimeout(pageNum)
+      if (!loaded) {
+        throw new Error('Slide thumbnail unavailable')
+      }
+      lazySlidesByPageRef.current = { ...lazySlidesByPageRef.current, [pageNum]: loaded }
+      setLazySlidesByPage((prev) => ({ ...prev, [pageNum]: loaded }))
+      return loaded
+    } catch {
+      failedPagesRef.current = { ...failedPagesRef.current, [pageNum]: true }
+      setFailedPages((prev) => ({ ...prev, [pageNum]: true }))
+      return null
+    } finally {
+      const nextLoading = { ...loadingPagesRef.current }
+      delete nextLoading[pageNum]
+      loadingPagesRef.current = nextLoading
+      setLoadingPages((prev) => {
+        if (!prev[pageNum]) return prev
+        const next = { ...prev }
+        delete next[pageNum]
+        return next
+      })
+    }
+  }, [loadSlideThumbnail, loadSlideWithTimeout])
+
+  const allSlidePages = useMemo(() => {
+    if (pdfPageCount > 0) {
+      return Array.from({ length: pdfPageCount }, (_, idx) => idx + 1)
+    }
+    return slideThumbnails.map((thumb) => thumb.pageNum)
+  }, [pdfPageCount, slideThumbnails])
+
+  const visiblePageNumbers = useMemo(() => {
+    return allSlidePages.slice(0, visibleSlideCount)
+  }, [allSlidePages, visibleSlideCount])
+
+  const visibleSlides = useMemo(() => {
+    return visiblePageNumbers.map((pageNum) => lazySlidesByPage[pageNum] || null)
+  }, [visiblePageNumbers, lazySlidesByPage])
+
+  const slideItemsForSelection = useMemo(() => {
+    if (activeTab !== 'slides' || slidesSelectionMode !== 'slides') return []
+    if (pdfPageCount > 0) {
+      return visiblePageNumbers
+    }
+    return filteredThumbnails
+  }, [activeTab, slidesSelectionMode, pdfPageCount, visiblePageNumbers, filteredThumbnails])
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'slides' || slidesSelectionMode !== 'slides') return
+    if (!loadSlideThumbnail) return
+
+    let cancelled = false
+    const loadVisible = async () => {
+      // Keep open interaction responsive by loading a small batch and yielding.
+      // Continue in the same effect cycle to avoid state-churn cancellation loops.
+      while (!cancelled) {
+        const toLoad = visiblePageNumbers
+          .filter((pageNum) =>
+            !lazySlidesByPageRef.current[pageNum] &&
+            !loadingPagesRef.current[pageNum] &&
+            !failedPagesRef.current[pageNum]
+          )
+          .slice(0, 3)
+
+        if (toLoad.length === 0) break
+
+        for (const pageNum of toLoad) {
+          if (cancelled) break
+          await triggerLoadPage(pageNum)
+          // Yield between pages so touch UI stays responsive on iPad.
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+      }
+    }
+
+    loadVisible()
+    return () => { cancelled = true }
+  }, [isOpen, activeTab, slidesSelectionMode, visiblePageNumbers, loadSlideThumbnail, triggerLoadPage])
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'slides' || slidesSelectionMode !== 'slides') return
+    // Seed from already available thumbnails.
+    if (slideThumbnails.length === 0) return
+    setLazySlidesByPage((prev) => {
+      const next = { ...prev }
+      slideThumbnails.forEach((thumb) => {
+        if (thumb?.pageNum && !next[thumb.pageNum]) {
+          next[thumb.pageNum] = thumb
+        }
+      })
+      lazySlidesByPageRef.current = next
+      return next
+    })
+  }, [isOpen, activeTab, slidesSelectionMode, slideThumbnails])
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'slides' || slidesSelectionMode !== 'slides') return
+    const pageNum = visiblePageNumbers[selectedIndex]
+    if (!pageNum || !loadSlideThumbnail) return
+    if (lazySlidesByPageRef.current[pageNum] || loadingPagesRef.current[pageNum]) return
+
+    let cancelled = false
+    const loadSelected = async () => {
+      if (cancelled) return
+      await triggerLoadPage(pageNum)
+    }
+    loadSelected()
+    return () => { cancelled = true }
+  }, [isOpen, activeTab, slidesSelectionMode, selectedIndex, visiblePageNumbers, loadSlideThumbnail, triggerLoadPage])
 
   // Keyboard navigation
   const handleKeyDown = useCallback((e) => {
     if (!isOpen) return
 
     const items = activeTab === 'slides'
-      ? (slidesSelectionMode === 'slides' ? filteredThumbnails : availableExistingImages)
+      ? (slidesSelectionMode === 'slides' ? slideItemsForSelection : availableExistingImages)
       : uploadedImages
     if (items.length === 0) return
 
@@ -108,16 +303,25 @@ export function ImagePickerModal({
       case 'Enter':
         e.preventDefault()
         if (activeTab === 'slides' && slidesSelectionMode === 'slides') {
-          onSelectSlide(filteredThumbnails[selectedIndex].pageNum)
+          const selectedPageNum = pdfPageCount > 0
+            ? visiblePageNumbers[selectedIndex]
+            : filteredThumbnails[selectedIndex]?.pageNum
+          if (selectedPageNum) {
+            onSelectSlide(selectedPageNum)
+          }
         } else if (activeTab === 'slides' && slidesSelectionMode === 'link-existing') {
-          if (onSelectExisting) {
-            onSelectExisting(availableExistingImages[selectedIndex].key)
+          const selectedExisting = availableExistingImages[selectedIndex]
+          if (onSelectExisting && selectedExisting) {
+            onSelectExisting(selectedExisting.key)
           }
         } else {
           // For uploaded images, call onSelectSlide with the uploaded image index in original thumbnails array
           const uploadedImg = uploadedImages[selectedIndex]
+          if (!uploadedImg) break
           const originalIndex = thumbnails.findIndex(t => t.id === uploadedImg.id)
-          onSelectSlide(originalIndex + 1) // pageNum is 1-indexed
+          if (originalIndex >= 0) {
+            onSelectSlide(originalIndex + 1) // pageNum is 1-indexed
+          }
         }
         break
       case 'Escape':
@@ -125,7 +329,7 @@ export function ImagePickerModal({
         onClose()
         break
     }
-  }, [isOpen, activeTab, slidesSelectionMode, filteredThumbnails, availableExistingImages, uploadedImages, selectedIndex, onSelectSlide, onSelectExisting, thumbnails, onClose])
+  }, [isOpen, activeTab, slidesSelectionMode, slideItemsForSelection, availableExistingImages, uploadedImages, selectedIndex, onSelectSlide, onSelectExisting, thumbnails, onClose, visiblePageNumbers, pdfPageCount, filteredThumbnails])
 
   useEffect(() => {
     document.addEventListener('keydown', handleKeyDown)
@@ -135,22 +339,31 @@ export function ImagePickerModal({
   // Ensure selectedIndex is valid when filter changes
   useEffect(() => {
     const items = activeTab === 'slides'
-      ? (slidesSelectionMode === 'slides' ? filteredThumbnails : availableExistingImages)
+      ? (slidesSelectionMode === 'slides' ? slideItemsForSelection : availableExistingImages)
       : uploadedImages
     if (selectedIndex >= items.length) {
       setSelectedIndex(Math.max(0, items.length - 1))
     }
-  }, [filteredThumbnails, availableExistingImages, uploadedImages, activeTab, slidesSelectionMode, selectedIndex])
+  }, [slideItemsForSelection, availableExistingImages, uploadedImages, activeTab, slidesSelectionMode, selectedIndex])
+
+  const selectedSlideItem = useMemo(() => {
+    if (!(activeTab === 'slides' && slidesSelectionMode === 'slides')) return null
+    if (pdfPageCount > 0) {
+      const pageNum = visiblePageNumbers[selectedIndex]
+      return pageNum ? (lazySlidesByPage[pageNum] || null) : null
+    }
+    return filteredThumbnails[selectedIndex] || null
+  }, [activeTab, slidesSelectionMode, pdfPageCount, selectedIndex, visiblePageNumbers, lazySlidesByPage, filteredThumbnails])
+
+  const selectedItem = activeTab === 'slides'
+    ? selectedSlideItem
+    : uploadedImages[selectedIndex]
 
   if (!isOpen) return null
 
-  const selectedItem = activeTab === 'slides'
-    ? (slidesSelectionMode === 'slides' ? filteredThumbnails[selectedIndex] : null)
-    : uploadedImages[selectedIndex]
-
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl md:max-w-5xl lg:max-w-6xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
           <h2 className="text-lg font-semibold text-gray-900">Insert Image</h2>
@@ -173,7 +386,7 @@ export function ImagePickerModal({
             }`}
           >
             <FileImage className="w-4 h-4 inline mr-2" />
-            From Slides ({slideThumbnails.length})
+            From Slides ({pdfPageCount > 0 ? pdfPageCount : slideThumbnails.length})
           </button>
           <button
             onClick={() => { setActiveTab('uploaded'); setSelectedIndex(0) }}
@@ -270,7 +483,18 @@ export function ImagePickerModal({
         {/* Content */}
         <div className="flex-1 overflow-hidden flex">
           {/* Thumbnail grid */}
-          <div className={(activeTab === 'slides' && slidesSelectionMode === 'link-existing') ? 'w-full overflow-y-auto p-4' : 'w-1/2 overflow-y-auto p-4 border-r border-gray-100'}>
+          <div
+            ref={slidesScrollRef}
+            onScroll={(e) => {
+              if (!(activeTab === 'slides' && slidesSelectionMode === 'slides')) return
+              const el = e.currentTarget
+              const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 120
+              if (nearBottom && visibleSlideCount < allSlidePages.length) {
+                setVisibleSlideCount((prev) => Math.min(prev + 12, allSlidePages.length))
+              }
+            }}
+            className={(activeTab === 'slides' && slidesSelectionMode === 'link-existing') ? 'w-full overflow-y-auto p-4' : 'w-full md:basis-[42%] md:shrink-0 overflow-y-auto p-4 border-r border-gray-100'}
+          >
             {thumbnailsLoading && activeTab === 'slides' && slidesSelectionMode === 'slides' ? (
               <div className="flex items-center justify-center h-full">
                 <div className="text-center">
@@ -331,28 +555,49 @@ export function ImagePickerModal({
               </div>
             ) : activeTab === 'slides' ? (
               <div className="grid grid-cols-3 gap-2">
-                {filteredThumbnails.map((thumb, index) => (
+                {(pdfPageCount > 0 ? visibleSlides : filteredThumbnails).map((thumb, index) => (
                   <button
-                    key={thumb.pageNum}
-                    onClick={() => setSelectedIndex(index)}
-                    onDoubleClick={() => onSelectSlide(thumb.pageNum)}
+                    key={thumb?.pageNum || `page-${visiblePageNumbers[index] || index}`}
+                    onClick={() => {
+                      const pageNum = thumb?.pageNum || visiblePageNumbers[index]
+                      if (pageNum && failedPages[pageNum]) {
+                        triggerLoadPage(pageNum)
+                        return
+                      }
+                      setSelectedIndex(index)
+                    }}
+                    onDoubleClick={() => {
+                      const pageNum = thumb?.pageNum || visiblePageNumbers[index]
+                      if (pageNum) onSelectSlide(pageNum)
+                    }}
                     className={`relative aspect-[4/3] bg-gray-100 rounded-lg overflow-hidden border-2 transition-all ${
                       selectedIndex === index
                         ? 'border-indigo-600 ring-2 ring-indigo-200'
                         : 'border-transparent hover:border-gray-300'
                     }`}
                   >
-                    <img
-                      src={thumb.dataUrl}
-                      alt={`Page ${thumb.pageNum}`}
-                      className="w-full h-full object-contain"
-                    />
+                    {thumb?.dataUrl ? (
+                      <img
+                        src={thumb.dataUrl}
+                        alt={`Page ${thumb.pageNum}`}
+                        className="w-full h-full object-contain"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-xs text-gray-500">
+                        {(() => {
+                          const pageNum = visiblePageNumbers[index]
+                          if (failedPages[pageNum]) return 'Tap to retry'
+                          if (loadingPages[pageNum]) return 'Loading…'
+                          return `Page ${pageNum}`
+                        })()}
+                      </div>
+                    )}
                     <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
-                      {thumb.pageNum}
+                      {thumb?.pageNum || visiblePageNumbers[index]}
                     </span>
                   </button>
                 ))}
-                {filteredThumbnails.length === 0 && (
+                {(pdfPageCount > 0 ? visibleSlides.length === 0 : filteredThumbnails.length === 0) && (
                   <div className="col-span-3 text-center py-8 text-gray-500">
                     {searchQuery ? 'No slides match your search' : 'No slides available'}
                   </div>
@@ -395,13 +640,13 @@ export function ImagePickerModal({
 
           {/* Preview pane (hidden when linking existing image) */}
           {!(activeTab === 'slides' && slidesSelectionMode === 'link-existing') && (
-          <div className="w-1/2 p-4 flex flex-col">
+          <div className="w-full md:basis-[58%] md:shrink-0 p-4 flex flex-col">
             <div className="flex-1 bg-gray-50 rounded-lg flex items-center justify-center overflow-hidden">
               {selectedItem ? (
                 <img
                   src={selectedItem.dataUrl}
                   alt="Preview"
-                  className="max-w-full max-h-full object-contain"
+                  className="w-full h-full object-contain"
                 />
               ) : (
                 <div className="text-center text-gray-400">
@@ -415,7 +660,7 @@ export function ImagePickerModal({
               <div className="mt-3 text-center">
                 <p className="text-sm text-gray-600">
                   {activeTab === 'slides'
-                    ? `Slide ${selectedItem.pageNum} of ${slideThumbnails.length}`
+                    ? `Slide ${selectedItem.pageNum || visiblePageNumbers[selectedIndex] || 1} of ${pdfPageCount || slideThumbnails.length || visiblePageNumbers.length}`
                     : `Image ${selectedIndex + 1} of ${uploadedImages.length}`
                   }
                 </p>
@@ -442,15 +687,20 @@ export function ImagePickerModal({
             </button>
             <button
               onClick={() => {
-                if (activeTab === 'slides' && slidesSelectionMode === 'slides' && filteredThumbnails[selectedIndex]) {
-                  onSelectSlide(filteredThumbnails[selectedIndex].pageNum)
+                if (activeTab === 'slides' && slidesSelectionMode === 'slides') {
+                  const pageNum = pdfPageCount > 0
+                    ? visiblePageNumbers[selectedIndex]
+                    : filteredThumbnails[selectedIndex]?.pageNum
+                  if (pageNum) onSelectSlide(pageNum)
                 } else if (activeTab === 'uploaded' && uploadedImages[selectedIndex]) {
                   const uploadedImg = uploadedImages[selectedIndex]
                   const originalIndex = thumbnails.findIndex(t => t.id === uploadedImg.id)
-                  onSelectSlide(originalIndex + 1)
+                  if (originalIndex >= 0) {
+                    onSelectSlide(originalIndex + 1)
+                  }
                 }
               }}
-              disabled={!selectedItem}
+              disabled={!selectedItem && !(activeTab === 'slides' && slidesSelectionMode === 'slides' && Boolean(visiblePageNumbers[selectedIndex]))}
               className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg transition-colors"
             >
               Select & Crop

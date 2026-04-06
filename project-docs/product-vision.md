@@ -1,32 +1,48 @@
 # Product Vision
 
-This project is an AI-powered learning operating system for structured knowledge domains such as medicine.
+Last updated: March 25, 2026
 
-The goal is to eliminate ambiguity in revision by providing a complete pipeline:
+This project is an AI-powered learning operating system for structured, high-density domains (starting with medicine).
 
-1. Course structure (modules and lectures)
-2. AI-generated concise notes
-3. AI-guided first exposure ("Learn Mode")
-4. Structure recall (mindmap step)
-5. Flashcard-based active recall
-6. Native spaced repetition
-7. Lecture-level mastery tracking
+## Core product goal
 
-The philosophy of the system:
+Eliminate ambiguity in revision by keeping the full workflow inside one system:
 
-- Remove unnecessary flexibility
-- Provide a disciplined workflow
-- Guarantee course coverage
-- Force conceptual understanding before memorisation
+1. Course structure (modules, submodules, lectures)
+2. AI-generated or AI-converted lecture notes
+3. First-pass understanding support (Learn Mode)
+4. Flashcard generation and editing
+5. Native spaced repetition sessions (lecture/global/custom)
+6. Lecture-level progress and long-term maintenance
 
-Target users:
-- medical students
-- other dense academic fields
+## Product philosophy
 
-The system is designed to replace fragmented workflows involving:
-- lecture slides
-- notes apps
-- Anki
-- revision planning
+- Reduce unnecessary flexibility that harms consistency
+- Enforce disciplined study loops over ad-hoc revision
+- Maintain explicit coverage tracking across the course map
+- Balance conceptual understanding and memorisation
 
-Instead everything lives in one structured system.
+## Current implementation posture
+
+The platform is no longer just a notes-generation prototype. It now includes:
+
+- Native review engine and card-state lifecycle
+- Session logging + resume/pause workflow
+- Filtered custom study and global due review
+- Stats and exam-date-aware scheduling behavior
+
+## Target users
+
+- Medical students
+- Learners in other dense academic/professional domains
+
+## What this is replacing
+
+A fragmented stack of:
+
+- slides/PDF folders
+- disconnected notes apps
+- external flashcard tooling
+- manual revision planning
+
+The intended end state is one structured system from content ingestion to long-term recall.

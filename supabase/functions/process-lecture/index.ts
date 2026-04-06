@@ -244,16 +244,24 @@ serve(async (req) => {
   }
 
   try {
-    // Get auth header
-    const authHeader = req.headers.get('Authorization')
-    if (!authHeader) {
-      throw new Error('Missing authorization header')
-    }
-
     // Create Supabase client
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
+
+    // Explicit auth verification (required because verify_jwt is disabled for reliability)
+    const authHeader = req.headers.get('Authorization')
+    if (!authHeader) {
+      throw new Error('Missing authorization header')
+    }
+    const token = authHeader.replace('Bearer ', '').trim()
+    if (!token) {
+      throw new Error('Missing bearer token')
+    }
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token)
+    if (authError || !user) {
+      throw new Error('Invalid or expired token')
+    }
 
     // Parse request body
     const { lecture_id, file_path, user_learning_objectives }: ProcessRequest = await req.json()
@@ -361,7 +369,7 @@ serve(async (req) => {
     // Store the notes structure
     const notesData = {
       title: parsedResult.title || 'Untitled Lecture',
-      notes: consolidateSections(normalizeGeneratedSections(parsedResult.notes)),
+      notes: normalizeGeneratedSections(parsedResult.notes),
       _ai_nesting_policy: 'flat',
       _notes_generated_by: 'ai',
     }

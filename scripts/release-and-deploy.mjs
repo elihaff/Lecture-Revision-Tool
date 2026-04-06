@@ -27,7 +27,7 @@ function toUiVersion(version) {
 
 function syncUiVersionBadge(uiVersion) {
   const source = fs.readFileSync(appPath, 'utf8')
-  const updated = source.replace(/v\d+\.\d{2}/, uiVersion)
+  const updated = source.replace(/v\d+\.\d+(?:\.\d+)?/, uiVersion)
   if (updated !== source) {
     fs.writeFileSync(appPath, updated)
   }

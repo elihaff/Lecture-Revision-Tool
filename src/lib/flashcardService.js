@@ -311,7 +311,10 @@ export async function getFlashcardsByLecture(lectureId) {
     .from('flashcards')
     .select('*')
     .eq('lecture_id', lectureId)
+    .order('section_index', { ascending: true, nullsFirst: false })
+    .order('source_point_index', { ascending: true, nullsFirst: false })
     .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
 
   return { data: data || [], error }
 }

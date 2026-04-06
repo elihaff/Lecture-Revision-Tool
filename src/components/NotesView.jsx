@@ -1,5 +1,8 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { ArrowLeft, BookOpen, Circle, Copy, Check, FileText, Trash2, GripVertical, Edit2, Plus, Save, X, Upload, Loader2, Download, FileUp, Image, ChevronLeft, ChevronRight, SlidersHorizontal } from 'lucide-react'
+import { DndContext, PointerSensor, TouchSensor, KeyboardSensor, useSensor, useSensors, closestCenter, pointerWithin, useDroppable } from '@dnd-kit/core'
+import { SortableContext, useSortable, rectSortingStrategy, arrayMove, sortableKeyboardCoordinates } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { supabase } from '../lib/supabase'
 import { ImagePickerModal } from './ImagePickerModal'
 import { CropModal } from './CropModal'
@@ -242,7 +245,15 @@ async function ensureUnicodePdfFont() {
 // Convert markdown-like syntax and symbols to HTML
 function markdownToHTML(text) {
   if (!text) return ''
-  return text
+  return String(text)
+    .replace(/\buparrow\b/gi, '↑')
+    .replace(/\bdownarrow\b/gi, '↓')
+    .replace(/<=>/g, '⇔')
+    .replace(/<->/g, '↔')
+    .replace(/=>/g, '⇒')
+    .replace(/<=/g, '⇐')
+    .replace(/->/g, '→')
+    .replace(/<-/g, '←')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
     .replace(/\^([^^]+)\^/g, '<sup>$1</sup>')
@@ -381,6 +392,45 @@ function normalizePointImagesMap(rawMap) {
     } else if (images.length > 1) {
       normalized[key] = images
     }
+  })
+  return normalized
+}
+
+function normalizeSectionImageEntry(entry) {
+  return normalizePointImageEntry(entry)
+}
+
+function normalizeSectionImagesMap(rawMap) {
+  const normalized = {}
+  Object.entries(rawMap || {}).forEach(([key, value]) => {
+    const images = normalizeSectionImageEntry(value)
+    if (images.length === 1) {
+      normalized[key] = images[0]
+    } else if (images.length > 1) {
+      normalized[key] = images
+    }
+  })
+  return normalized
+}
+
+function isSectionTitleReferenceTargetKey(key) {
+  return String(key || '').startsWith('section-title-')
+}
+
+function normalizeReferenceKeyList(value) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))]
+  }
+  const single = String(value || '').trim()
+  return single ? [single] : []
+}
+
+function normalizeImageReferencesMap(rawMap) {
+  const normalized = {}
+  Object.entries(rawMap || {}).forEach(([targetKey, sourceValue]) => {
+    const refs = normalizeReferenceKeyList(sourceValue)
+    if (refs.length === 0) return
+    normalized[targetKey] = isSectionTitleReferenceTargetKey(targetKey) ? refs : refs[0]
   })
   return normalized
 }
@@ -539,6 +589,66 @@ function computeFigureRows(figures, sectionLayout, options = {}) {
   return { rows, layout: normalizedLayout }
 }
 
+function SortableFigureCard({ id, className, children, sectionIndex, draggingEnabled = true }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+    disabled: !draggingEnabled,
+    data: { kind: 'section-figure', sectionIndex }
+  })
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 20 : 'auto',
+    opacity: isDragging ? 0.6 : 1
+  }
+
+  return (
+    <div ref={setNodeRef} style={style} className={className} {...attributes} {...listeners}>
+      {children}
+    </div>
+  )
+}
+
+function PointImageLinkDropTarget({ id, enabled = false }) {
+  const { setNodeRef, isOver } = useDroppable({
+    id,
+    disabled: !enabled,
+    data: { kind: 'point-image-link-target' }
+  })
+
+  if (!enabled) return null
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`absolute inset-0 rounded-lg pointer-events-none transition-colors ${
+        isOver ? 'bg-green-100/50 ring-2 ring-green-500' : 'bg-transparent'
+      }`}
+      aria-hidden="true"
+    />
+  )
+}
+
+function SectionTitleDropTarget({ id, enabled = false }) {
+  const { setNodeRef, isOver } = useDroppable({
+    id,
+    disabled: !enabled,
+    data: { kind: 'section-title-image-link-target' }
+  })
+
+  if (!enabled) return null
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`absolute inset-0 rounded-lg pointer-events-none transition-colors ${
+        isOver ? 'bg-indigo-100/50 ring-2 ring-indigo-500' : 'bg-transparent'
+      }`}
+      aria-hidden="true"
+    />
+  )
+}
+
 export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
   const toast = useToast()
   // Local state for editing
@@ -576,15 +686,18 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
   const lastDebouncedPayloadRef = useRef(null)
   const signedUrlCacheRef = useRef(new Map())
   const exportImageDataUrlCacheRef = useRef(new Map())
+  const slideThumbnailCacheRef = useRef(new Map())
 
   // Drag and drop state
   const [draggedPoint, setDraggedPoint] = useState(null)
   const [draggedSection, setDraggedSection] = useState(null)
   const [dropTargetPoint, setDropTargetPoint] = useState(null)
   const [dropTargetSection, setDropTargetSection] = useState(null)
+  const [draggedFigureKey, setDraggedFigureKey] = useState(null)
 
   // Image insertion state
   const [pdfThumbnails, setPdfThumbnails] = useState([])
+  const [pdfPageCount, setPdfPageCount] = useState(0)
   const [thumbnailsLoading, setThumbnailsLoading] = useState(false)
   const [thumbnailsError, setThumbnailsError] = useState('')
   const [pointImages, setPointImages] = useState({})
@@ -598,7 +711,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
 
   const learningObjectives = lecture.learning_objectives || []
   const sections = notes.notes || []
-  const hasSlidesSource = pdfThumbnails.length > 0
+  const hasSlidesSource = Boolean(lecture?.pdf_path) || pdfThumbnails.length > 0 || pdfPageCount > 0
   const hasInsertedImages = Object.keys(pointImages).length > 0 || Object.keys(sectionImages).length > 0
   const canInsertFromSlides = hasSlidesSource || hasInsertedImages
 
@@ -608,6 +721,145 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
     if (!lecture?.pdf_path) return 'No slides PDF is linked to this lecture yet. Upload slides PDF to enable image insertion.'
     return 'Slides are not available for this lecture yet. Upload slides PDF to enable image insertion.'
   }
+
+  const isIOSLikeDevice = () => {
+    if (typeof navigator === 'undefined') return false
+    const ua = String(navigator.userAgent || '')
+    const platform = String(navigator.platform || '')
+    const maxTouchPoints = Number(navigator.maxTouchPoints || 0)
+    return /iPad|iPhone|iPod/i.test(ua) || (platform === 'MacIntel' && maxTouchPoints > 1)
+  }
+
+  const buildPdfThumbnails = async (arrayBuffer) => {
+    const pdfjsLib = await getPdfJsLib()
+    const mobileMode = isIOSLikeDevice()
+    const thumbnailScale = mobileMode ? 0.16 : 0.3
+    const maxThumbnailPages = mobileMode ? 8 : 120
+
+    const loadingTask = pdfjsLib.getDocument({
+      data: arrayBuffer,
+      useSystemFonts: true,
+      isEvalSupported: false,
+    })
+    const pdf = await loadingTask.promise
+    cachedPdfRef.current = pdf
+
+    const targetPages = Math.min(pdf.numPages, maxThumbnailPages)
+    const thumbnails = []
+    let failedPages = 0
+
+    for (let pageNum = 1; pageNum <= targetPages; pageNum++) {
+      try {
+        const page = await pdf.getPage(pageNum)
+        const pageText = mobileMode
+          ? ''
+          : (await page.getTextContent()).items.map((item) => item.str).join(' ').toLowerCase()
+
+        const viewport = page.getViewport({ scale: thumbnailScale })
+        const canvas = document.createElement('canvas')
+        canvas.width = viewport.width
+        canvas.height = viewport.height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          failedPages += 1
+          continue
+        }
+
+        await page.render({
+          canvasContext: ctx,
+          viewport,
+        }).promise
+
+        thumbnails.push({
+          pageNum,
+          dataUrl: canvas.toDataURL('image/jpeg', 0.65),
+          text: pageText,
+          width: viewport.width,
+          height: viewport.height
+        })
+        slideThumbnailCacheRef.current.set(pageNum, thumbnails[thumbnails.length - 1])
+
+        page.cleanup?.()
+      } catch {
+        failedPages += 1
+      }
+
+      // Yield between pages to reduce memory pressure on Safari/iPad.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+
+    return {
+      thumbnails,
+      totalPages: pdf.numPages,
+      renderedPages: targetPages,
+      failedPages,
+      truncated: pdf.numPages > targetPages,
+    }
+  }
+
+  const ensurePdfDocumentLoaded = useCallback(async () => {
+    if (cachedPdfRef.current) return cachedPdfRef.current
+    if (!lecture?.pdf_path) return null
+
+    const { data: pdfBlob, error } = await supabase.storage
+      .from('lecture-pdfs')
+      .download(lecture.pdf_path)
+    if (error || !pdfBlob) return null
+
+    const arrayBuffer = await pdfBlob.arrayBuffer()
+    const pdfjsLib = await getPdfJsLib()
+    const pdf = await pdfjsLib.getDocument({
+      data: arrayBuffer,
+      useSystemFonts: true,
+      isEvalSupported: false,
+    }).promise
+    cachedPdfRef.current = pdf
+    if (!pdfPageCount && Number.isFinite(pdf.numPages)) {
+      setPdfPageCount(pdf.numPages)
+    }
+    return pdf
+  }, [lecture?.pdf_path, pdfPageCount])
+
+  const loadSlideThumbnailByPage = useCallback(async (pageNum) => {
+    const safePageNum = Number(pageNum)
+    if (!Number.isFinite(safePageNum) || safePageNum < 1) return null
+    const cached = slideThumbnailCacheRef.current.get(safePageNum)
+    if (cached) return cached
+
+    const pdf = await ensurePdfDocumentLoaded()
+    if (!pdf || safePageNum > pdf.numPages) return null
+
+    const mobileMode = isIOSLikeDevice()
+    const thumbnailScale = mobileMode ? 0.16 : 0.3
+
+    const page = await pdf.getPage(safePageNum)
+    const pageText = mobileMode
+      ? ''
+      : (await page.getTextContent()).items.map((item) => item.str).join(' ').toLowerCase()
+
+    const viewport = page.getViewport({ scale: thumbnailScale })
+    const canvas = document.createElement('canvas')
+    canvas.width = viewport.width
+    canvas.height = viewport.height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+
+    await page.render({
+      canvasContext: ctx,
+      viewport
+    }).promise
+
+    const thumb = {
+      pageNum: safePageNum,
+      dataUrl: canvas.toDataURL('image/jpeg', 0.65),
+      text: pageText,
+      width: viewport.width,
+      height: viewport.height,
+    }
+    slideThumbnailCacheRef.current.set(safePageNum, thumb)
+    page.cleanup?.()
+    return thumb
+  }, [ensurePdfDocumentLoaded])
 
   const dataUrlToBlob = async (dataUrl) => {
     const response = await fetch(dataUrl)
@@ -671,7 +923,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
 
     const persistedSectionImages = {}
     for (const [key, value] of Object.entries(rawSectionImages)) {
-      const persisted = await ensureImagePersisted(value, `section-${key}`)
+      const persisted = await ensureImageEntryPersisted(value, `section-${key}`)
       if (persisted) persistedSectionImages[key] = persisted
     }
 
@@ -749,8 +1001,11 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
       })
     })
     Object.values(rawSectionImages || {}).forEach((img) => {
-      if (img?.storagePath) paths.push(img.storagePath)
-      if (img?.originalStoragePath) paths.push(img.originalStoragePath)
+      const normalized = normalizeSectionImageEntry(img)
+      normalized.forEach((sectionImg) => {
+        if (sectionImg?.storagePath) paths.push(sectionImg.storagePath)
+        if (sectionImg?.originalStoragePath) paths.push(sectionImg.originalStoragePath)
+      })
     })
     const signedUrlsMap = await getSignedUrlsMap(paths)
 
@@ -761,7 +1016,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
     }
     const section = {}
     for (const [key, value] of Object.entries(rawSectionImages || {})) {
-      const hydrated = hydrateImageForDisplay(value, signedUrlsMap)
+      const hydrated = hydrateImageEntryForDisplay(value, signedUrlsMap)
       if (hydrated) section[key] = hydrated
     }
     return { point, section }
@@ -799,14 +1054,15 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
 
     // Clear cached PDF when lecture changes
     cachedPdfRef.current = null
+    slideThumbnailCacheRef.current = new Map()
 
     // Load embedded image data if present
     const rawPointImages = lecture.notes?._pointImages ? normalizePointImagesMap(lecture.notes._pointImages) : {}
-    const rawSectionImages = lecture.notes?._sectionImages || {}
+    const rawSectionImages = lecture.notes?._sectionImages ? normalizeSectionImagesMap(lecture.notes._sectionImages) : {}
     setPointImages(rawPointImages)
     setSectionImages(rawSectionImages)
     if (lecture.notes?._imageReferences) {
-      setImageReferences(lecture.notes._imageReferences)
+      setImageReferences(normalizeImageReferencesMap(lecture.notes._imageReferences))
     } else {
       setImageReferences({})
     }
@@ -851,6 +1107,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
       if (!lecture.pdf_path) {
         // No pdf_path found
         setPdfThumbnails([])
+        setPdfPageCount(0)
         return
       }
 
@@ -868,46 +1125,45 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
         }
 
         const arrayBuffer = await pdfBlob.arrayBuffer()
-        const pdfjsLib = await getPdfJsLib()
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+        const summary = await buildPdfThumbnails(arrayBuffer)
+        setPdfThumbnails(summary.thumbnails)
+        setPdfPageCount(summary.totalPages || 0)
 
-        // Cache the PDF document for later high-res rendering
-        cachedPdfRef.current = pdf
-
-        const thumbnails = []
-        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-          const page = await pdf.getPage(pageNum)
-
-          // Extract text for search filtering
-          const textContent = await page.getTextContent()
-          const pageText = textContent.items.map(item => item.str).join(' ').toLowerCase()
-
-          // Render thumbnail at lower scale for performance
-          const viewport = page.getViewport({ scale: 0.3 })
-          const canvas = document.createElement('canvas')
-          canvas.width = viewport.width
-          canvas.height = viewport.height
-          const ctx = canvas.getContext('2d')
-
-          await page.render({
-            canvasContext: ctx,
-            viewport: viewport
-          }).promise
-
-          thumbnails.push({
-            pageNum,
-            dataUrl: canvas.toDataURL('image/jpeg', 0.7),
-            text: pageText,
-            width: viewport.width,
-            height: viewport.height
-          })
+        if (summary.thumbnails.length === 0) {
+          setThumbnailsError('Could not process slides for image insertion.')
+          return
         }
 
-        setPdfThumbnails(thumbnails)
-        // Thumbnails generated
+        if (summary.truncated || summary.failedPages > 0) {
+          const notes = []
+          if (summary.truncated) {
+            notes.push(`Loaded ${summary.renderedPages} of ${summary.totalPages} slides for performance`)
+          }
+          if (summary.failedPages > 0) {
+            notes.push(`${summary.failedPages} slide(s) could not be rendered`)
+          }
+          setThumbnailsError(`${notes.join('. ')}.`)
+        }
       } catch (error) {
         // Thumbnail generation failed
-        setThumbnailsError('Could not process slides for image insertion.')
+        setThumbnailsError(`Could not process slides for image insertion (${error?.message || 'unknown error'}).`)
+        // Keep picker usable with manual page selection when PDF is linked.
+        if (lecture?.pdf_path) {
+          try {
+            const { data: pdfBlob } = await supabase.storage
+              .from('lecture-pdfs')
+              .download(lecture.pdf_path)
+            if (pdfBlob) {
+              const arrayBuffer = await pdfBlob.arrayBuffer()
+              const pdfjsLib = await getPdfJsLib()
+              const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, useSystemFonts: true, isEvalSupported: false }).promise
+              cachedPdfRef.current = pdf
+              setPdfPageCount(pdf.numPages || 0)
+            }
+          } catch {
+            // Best-effort fallback only.
+          }
+        }
       } finally {
         setThumbnailsLoading(false)
       }
@@ -1384,7 +1640,8 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
     try {
       setConvertingLegacy(true)
 
-      // Get user session for auth
+      // Refresh then get user session for auth
+      await supabase.auth.refreshSession()
       const { data: sessionData } = await supabase.auth.getSession()
       const accessToken = sessionData?.session?.access_token
       const userId = sessionData?.session?.user?.id
@@ -1405,6 +1662,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
 
       // Call Edge Function to convert the PDF
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
       const functionUrl = `${supabaseUrl}/functions/v1/convert-legacy-notes`
 
       const response = await fetch(functionUrl, {
@@ -1412,6 +1670,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${accessToken}`,
+          'apikey': anonKey,
         },
         body: JSON.stringify({
           notes_path: notesPath,
@@ -1491,40 +1750,30 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
       // Generate thumbnails from the uploaded file
       setThumbnailsError('')
       const arrayBuffer = await file.arrayBuffer()
-      const pdfjsLib = await getPdfJsLib()
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+      const summary = await buildPdfThumbnails(arrayBuffer)
+      setPdfThumbnails(summary.thumbnails)
+      setPdfPageCount(summary.totalPages || 0)
 
-      const thumbnails = []
-      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-        const page = await pdf.getPage(pageNum)
-        const textContent = await page.getTextContent()
-        const pageText = textContent.items.map(item => item.str).join(' ').toLowerCase()
-
-        const viewport = page.getViewport({ scale: 0.3 })
-        const canvas = document.createElement('canvas')
-        canvas.width = viewport.width
-        canvas.height = viewport.height
-        const ctx = canvas.getContext('2d')
-
-        await page.render({
-          canvasContext: ctx,
-          viewport: viewport
-        }).promise
-
-        thumbnails.push({
-          pageNum,
-          dataUrl: canvas.toDataURL('image/jpeg', 0.7),
-          text: pageText,
-          width: viewport.width,
-          height: viewport.height
-        })
+      if (summary.thumbnails.length === 0) {
+        throw new Error('Could not process slides for image insertion')
       }
 
-      setPdfThumbnails(thumbnails)
-      toast.success(`Uploaded ${thumbnails.length} slides. You can now insert images.`)
+      if (summary.truncated || summary.failedPages > 0) {
+        const notes = []
+        if (summary.truncated) {
+          notes.push(`Loaded ${summary.renderedPages} of ${summary.totalPages} slides`)
+        }
+        if (summary.failedPages > 0) {
+          notes.push(`${summary.failedPages} slide(s) could not be rendered`)
+        }
+        setThumbnailsError(`${notes.join('. ')}.`)
+      }
+
+      toast.success(`Uploaded ${summary.thumbnails.length} slides. You can now insert images.`)
 
     } catch (error) {
       setThumbnailsError(`Slides upload failed: ${error.message}`)
+      setPdfPageCount(0)
       toast.error('Failed to upload slides. Please try again.')
     } finally {
       setUploadingSlides(false)
@@ -2063,17 +2312,18 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
 
   const startEditPoint = (sectionIndex, pointIndex) => {
     const rawValue = String(notes.notes[sectionIndex].points[pointIndex]).replace(/<br\s*\/?>/gi, '\n')
-    const value = /<(ul|ol|li)\b/i.test(rawValue) ? rawValue : ensureEditableLineBullets(rawValue)
+    const formattedValue = markdownToHTML(rawValue)
+    const value = /<(ul|ol|li)\b/i.test(formattedValue) ? formattedValue : ensureEditableLineBullets(formattedValue)
     setEditingNote({ type: 'point', sectionIndex, pointIndex, value })
   }
 
   const startEditSection = (sectionIndex) => {
-    const value = String(notes.notes[sectionIndex].section).replace(/<br\s*\/?>/gi, '\n')
+    const value = markdownToHTML(String(notes.notes[sectionIndex].section).replace(/<br\s*\/?>/gi, '\n'))
     setEditingNote({ type: 'section', sectionIndex, value })
   }
 
   const startEditTitle = () => {
-    setEditingNote({ type: 'title', value: notes.title || '' })
+    setEditingNote({ type: 'title', value: markdownToHTML(notes.title || '') })
   }
 
   const saveNoteEdit = () => {
@@ -2116,7 +2366,10 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
     }
     const nextImageReferences = {}
     Object.entries(currentImageReferences || {}).forEach(([targetKey, sourceKey]) => {
-      nextImageReferences[remap(targetKey)] = remap(sourceKey)
+      const nextTarget = remap(targetKey)
+      const nextSource = remapReferenceValue(targetKey, sourceKey, remap)
+      if (!nextTarget || !nextSource) return
+      nextImageReferences[nextTarget] = nextSource
     })
 
     return { nextPointImages, nextImageReferences }
@@ -2147,7 +2400,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
     const nextImageReferences = {}
     Object.entries(currentImageReferences || {}).forEach(([targetKey, sourceKey]) => {
       const nextTarget = remap(targetKey)
-      const nextSource = remap(sourceKey)
+      const nextSource = remapReferenceValue(targetKey, sourceKey, remap)
       if (!nextTarget || !nextSource) return
       nextImageReferences[nextTarget] = nextSource
     })
@@ -2385,6 +2638,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
   const handleDragEnd = () => {
     setDraggedPoint(null)
     setDraggedSection(null)
+    setDraggedFigureKey(null)
     setDropTargetPoint(null)
     setDropTargetSection(null)
   }
@@ -2489,7 +2743,8 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
     Object.entries(imageReferences).forEach(([targetKey, sourceKey]) => {
       const nextTargetKey = remapPointKey(targetKey)
       if (!nextTargetKey) return
-      const nextSourceKey = remapPointKey(sourceKey) || sourceKey
+      const nextSourceKey = remapReferenceValue(targetKey, sourceKey, (key) => remapPointKey(key) || key)
+      if (!nextSourceKey) return
       nextImageRefs[nextTargetKey] = nextSourceKey
     })
     setImageReferences(nextImageRefs)
@@ -2552,10 +2807,15 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
       const value = String(key)
 
       if (value.startsWith('section-')) {
-        const oldSectionIndex = Number(value.replace('section-', ''))
+        const sectionPayload = value.replace('section-', '')
+        const [sectionIndexRaw, sectionImageSuffix] = sectionPayload.split('::')
+        const oldSectionIndex = Number(sectionIndexRaw)
         if (Number.isNaN(oldSectionIndex)) return value
         const newSectionIndex = oldToNewSectionIndex[oldSectionIndex]
-        return newSectionIndex === undefined ? null : `section-${newSectionIndex}`
+        if (newSectionIndex === undefined) return null
+        return sectionImageSuffix !== undefined
+          ? `section-${newSectionIndex}::${sectionImageSuffix}`
+          : `section-${newSectionIndex}`
       }
 
       const [pointBase, pointImageSuffix] = value.split('::')
@@ -2586,7 +2846,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
     const nextImageReferences = {}
     Object.entries(imageReferences).forEach(([targetKey, sourceKey]) => {
       const remappedTarget = remapFigureKey(targetKey)
-      const remappedSource = remapFigureKey(sourceKey)
+      const remappedSource = remapReferenceValue(targetKey, sourceKey, remapFigureKey)
       if (!remappedTarget || !remappedSource) return
       nextImageReferences[remappedTarget] = remappedSource
     })
@@ -2641,6 +2901,16 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
 
   // Generate a key for point images (e.g., "0-1" for section 0, point 1)
   const getPointImageKey = (sectionIndex, pointIndex) => `${sectionIndex}-${pointIndex}`
+  const getReferenceSourceKeys = (targetKey) => normalizeReferenceKeyList(imageReferences[targetKey])
+  const hasReferenceSourceKey = (targetKey, sourceKey) => getReferenceSourceKeys(targetKey).includes(sourceKey)
+  const remapReferenceValue = (targetKey, sourceValue, remapFn) => {
+    const remapped = normalizeReferenceKeyList(sourceValue)
+      .map((key) => remapFn(key))
+      .filter(Boolean)
+    const unique = [...new Set(remapped)]
+    if (unique.length === 0) return null
+    return isSectionTitleReferenceTargetKey(targetKey) ? unique : unique[0]
+  }
 
   const getPointImages = (sectionIndex, pointIndex) => {
     const key = getPointImageKey(sectionIndex, pointIndex)
@@ -2711,14 +2981,30 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
     })
   }
 
-  // Get section image
+  // Get section images
+  const getSectionImages = (sectionIndex) => {
+    return normalizeSectionImageEntry(sectionImages[sectionIndex])
+  }
+
   const getSectionImage = (sectionIndex) => {
-    return sectionImages[sectionIndex] || null
+    return getSectionImages(sectionIndex)[0] || null
   }
 
   // Set section image
-  const setSectionImageData = (sectionIndex, imageData) => {
-    const nextSectionImages = { ...sectionImages, [sectionIndex]: imageData }
+  const setSectionImageData = (sectionIndex, imageData, options = {}) => {
+    const { imageIndex = null, replace = false } = options
+    const existing = getSectionImages(sectionIndex)
+    let nextEntry = []
+    if (replace && imageIndex !== null && imageIndex >= 0 && imageIndex < existing.length) {
+      nextEntry = [...existing]
+      nextEntry[imageIndex] = imageData
+    } else if (existing.length === 0) {
+      nextEntry = [imageData]
+    } else {
+      nextEntry = [...existing, imageData]
+    }
+    const valueToStore = nextEntry.length === 1 ? nextEntry[0] : nextEntry
+    const nextSectionImages = { ...sectionImages, [sectionIndex]: valueToStore }
     setSectionImages(nextSectionImages)
     setHasChanges(true)
     saveNotesAssets({
@@ -2730,9 +3016,19 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
   }
 
   // Remove section image
-  const removeSectionImage = (sectionIndex) => {
+  const removeSectionImage = (sectionIndex, imageIndex = null) => {
+    const existing = getSectionImages(sectionIndex)
     const nextSectionImages = { ...sectionImages }
-    delete nextSectionImages[sectionIndex]
+    if (imageIndex === null || existing.length <= 1) {
+      delete nextSectionImages[sectionIndex]
+    } else {
+      const remaining = existing.filter((_, idx) => idx !== imageIndex)
+      if (remaining.length === 0) {
+        delete nextSectionImages[sectionIndex]
+      } else {
+        nextSectionImages[sectionIndex] = remaining.length === 1 ? remaining[0] : remaining
+      }
+    }
     setSectionImages(nextSectionImages)
     setHasChanges(true)
     saveNotesAssets({
@@ -2743,68 +3039,79 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
     })
   }
 
-  // Get figure number for a point or section image
+  // Build a global figure number map based on display order across all sections
+  // Figure numbers follow the order figures appear in the document (respecting layout order within sections)
+  const buildGlobalFigureNumberMap = () => {
+    const figureNumberMap = new Map() // key -> figureNumber
+    let figNum = 0
+
+    for (let si = 0; si < sections.length; si++) {
+      const section = sections[si]
+      // Collect all figures in this section (without figNum - we'll assign it)
+      const sectionFigures = []
+      const sectionImgs = getSectionImages(si)
+      sectionImgs.forEach((_, sectionImageIndex) => {
+        sectionFigures.push({ key: `section-${si}::${sectionImageIndex}` })
+      })
+      ;(section?.points || []).forEach((_, pointIndex) => {
+        const pointImgs = getPointImages(si, pointIndex)
+        pointImgs.forEach((_, pointImageIndex) => {
+          sectionFigures.push({ key: `${getPointImageKey(si, pointIndex)}::${pointImageIndex}` })
+        })
+      })
+
+      if (sectionFigures.length === 0) continue
+
+      // Get the display order for this section's figures
+      const sectionLayout = imageLayout?.[si]
+      const figureKeys = new Set(sectionFigures.map((f) => f.key))
+      const orderedKeys = []
+      ;(sectionLayout?.order || []).forEach((key) => {
+        if (figureKeys.has(key)) orderedKeys.push(key)
+      })
+      // Add any figures not in the explicit order
+      sectionFigures.forEach((fig) => {
+        if (!orderedKeys.includes(fig.key)) orderedKeys.push(fig.key)
+      })
+
+      // Assign figure numbers in display order
+      orderedKeys.forEach((key) => {
+        figNum++
+        figureNumberMap.set(key, figNum)
+      })
+    }
+
+    return figureNumberMap
+  }
+
+  // Memoize the figure number map to avoid recalculating on every render
+  const figureNumberMap = buildGlobalFigureNumberMap()
+
+  // Get figure number for a point or section image by key
   const getFigureNumberByKey = (key) => {
     if (!key) return null
-    if (key.startsWith('section-')) {
-      const sectionIndex = Number(key.replace('section-', ''))
-      if (Number.isNaN(sectionIndex)) return null
-      return getFigureNumber(sectionIndex, null)
-    }
-    const [pointBase, pointImageSuffix] = String(key).split('::')
-    const [sectionIndex, pointIndex] = pointBase.split('-').map(Number)
-    if (Number.isNaN(sectionIndex) || Number.isNaN(pointIndex)) return null
-    const imageIndex = pointImageSuffix !== undefined ? Number(pointImageSuffix) : 0
-    return getFigureNumber(sectionIndex, pointIndex, Number.isNaN(imageIndex) ? 0 : imageIndex)
+    return figureNumberMap.get(key) || null
   }
 
   const getFigureNumber = (sectionIndex, pointIndex = null, pointImageIndex = 0) => {
     // Linked point: inherit source figure number only (do not create new figure).
     if (pointIndex !== null) {
       const targetKey = getPointImageKey(sectionIndex, pointIndex)
-      const sourceKey = imageReferences[targetKey]
-      if (sourceKey) {
-        return getFigureNumberByKey(sourceKey)
+      const sourceKeys = getReferenceSourceKeys(targetKey)
+      if (sourceKeys.length > 0) {
+        return getFigureNumberByKey(sourceKeys[0])
       }
     }
 
-    let figNum = 0
-
-    // Count section images first (in order)
-    for (let si = 0; si < sections.length; si++) {
-      if (sectionImages[si]) {
-        figNum++
-        if (pointIndex === null && si === sectionIndex) {
-          return figNum
-        }
-      }
-
-      // Count point images for this section
-      if (si < sectionIndex || (si === sectionIndex && pointIndex !== null)) {
-        const sectionPoints = sections[si]?.points || []
-        for (let pi = 0; pi < sectionPoints.length; pi++) {
-          if (si === sectionIndex && pi >= pointIndex) break
-          const key = getPointImageKey(si, pi)
-          const images = normalizePointImageEntry(pointImages[key])
-          if (images.length > 0) {
-            figNum += images.length
-          }
-        }
-      }
+    // Build the key for this figure
+    let key
+    if (pointIndex === null) {
+      key = `section-${sectionIndex}::${pointImageIndex}`
+    } else {
+      key = `${getPointImageKey(sectionIndex, pointIndex)}::${pointImageIndex}`
     }
 
-    // If we're looking for a point image
-    if (pointIndex !== null) {
-      const key = getPointImageKey(sectionIndex, pointIndex)
-      const images = normalizePointImageEntry(pointImages[key])
-      if (images.length > 0) {
-        const safeIndex = Math.max(0, Math.min(pointImageIndex, images.length - 1))
-        figNum += safeIndex + 1
-        return figNum
-      }
-    }
-
-    return null
+    return figureNumberMap.get(key) || null
   }
 
   const getPointFigureNumbers = (sectionIndex, pointIndex) => {
@@ -2814,25 +3121,29 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
       return directImages
         .map((_, idx) => getFigureNumber(sectionIndex, pointIndex, idx))
         .filter((n) => n !== null)
+        .sort((a, b) => a - b)
     }
 
-    const refKey = imageReferences[key]
-    if (!refKey) return []
-    const refFigNum = getFigureNumberByKey(refKey)
-    return refFigNum ? [refFigNum] : []
+    const refKeys = getReferenceSourceKeys(key)
+    if (refKeys.length === 0) return []
+    return refKeys
+      .map((refKey) => getFigureNumberByKey(refKey))
+      .filter((n) => n !== null)
+      .sort((a, b) => a - b)
   }
 
   const collectSectionFigures = (sectionIndex, section) => {
     const sectionFigures = []
-    const sectionImg = getSectionImage(sectionIndex)
-    if (sectionImg) {
+    const sectionImgs = getSectionImages(sectionIndex)
+    sectionImgs.forEach((sectionImg, sectionImageIndex) => {
       sectionFigures.push({
         type: 'section',
         image: sectionImg,
-        figNum: getFigureNumber(sectionIndex, null),
-        key: `section-${sectionIndex}`
+        figNum: getFigureNumber(sectionIndex, null, sectionImageIndex),
+        sectionImageIndex,
+        key: `section-${sectionIndex}::${sectionImageIndex}`
       })
-    }
+    })
 
     ;(section?.points || []).forEach((_, pointIndex) => {
       const pointImgs = getPointImages(sectionIndex, pointIndex)
@@ -2900,13 +3211,293 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
     })
   }
 
+  const getPointDropId = (sectionIndex, pointIndex) => `point-drop-${sectionIndex}-${pointIndex}`
+  const getSectionDropId = (sectionIndex) => `section-drop-${sectionIndex}`
+
+  const parsePointDropId = (id) => {
+    const match = String(id || '').match(/^point-drop-(\d+)-(\d+)$/)
+    if (!match) return null
+    return { sectionIndex: Number(match[1]), pointIndex: Number(match[2]) }
+  }
+
+  const parseSectionDropId = (id) => {
+    const match = String(id || '').match(/^section-drop-(\d+)$/)
+    if (!match) return null
+    return { sectionIndex: Number(match[1]) }
+  }
+
+  const getPointBaseKeyFromFigureKey = (figureKey) => {
+    if (!figureKey || String(figureKey).startsWith('section-')) return null
+    const [pointBase] = String(figureKey).split('::')
+    return pointBase || null
+  }
+
+  const reorderSectionFigureByKey = (sectionIndex, fromKey, toKey) => {
+    if (!fromKey || !toKey || fromKey === toKey) return
+
+    const section = sections[sectionIndex]
+    if (!section) return
+    const figures = collectSectionFigures(sectionIndex, section)
+    const normalized = normalizeSectionLayoutForFigures(figures, imageLayout?.[sectionIndex])
+    const fromIndex = normalized.order.indexOf(fromKey)
+    const toIndex = normalized.order.indexOf(toKey)
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return
+
+    const nextOrder = arrayMove(normalized.order, fromIndex, toIndex)
+    updateSectionImageLayout(sectionIndex, (current) => ({
+      ...current,
+      order: nextOrder
+    }))
+  }
+
+  const createImageReferenceToPointByKey = (targetSectionIndex, targetPointIndex, sourceFigureKey) => {
+    if (!sourceFigureKey) return
+    const targetKey = getPointImageKey(targetSectionIndex, targetPointIndex)
+    const sourcePointBase = getPointBaseKeyFromFigureKey(sourceFigureKey)
+
+    if (sourcePointBase && sourcePointBase === targetKey) {
+      toast.info('Cannot link an image reference to the same bullet point.')
+      return
+    }
+
+    if (hasReferenceSourceKey(targetKey, sourceFigureKey)) {
+      toast.info('This bullet already references that image.')
+      return
+    }
+
+    const directImages = normalizePointImageEntry(pointImages[targetKey])
+    if (directImages.length > 0) {
+      const confirmed = window.confirm('This bullet already has a direct image. Replace it with a linked image reference?')
+      if (!confirmed) return
+    }
+
+    createImageReference(targetSectionIndex, targetPointIndex, sourceFigureKey)
+    toast.success('Image linked to bullet point.')
+  }
+
+  // Create a reference from a section title to an image
+  const createSectionImageReference = (targetSectionIndex, sourceFigureKey) => {
+    if (!sourceFigureKey) return
+    const targetKey = `section-title-${targetSectionIndex}`
+
+    // Don't allow linking a section to its own section image
+    if (sourceFigureKey === `section-${targetSectionIndex}` || String(sourceFigureKey).startsWith(`section-${targetSectionIndex}::`)) {
+      toast.info('Cannot link a section to its own section image.')
+      return
+    }
+
+    const existingSources = getReferenceSourceKeys(targetKey)
+    if (existingSources.includes(sourceFigureKey)) {
+      toast.info('This section already references that image.')
+      return
+    }
+
+    const nextImageReferences = {
+      ...imageReferences,
+      [targetKey]: [...existingSources, sourceFigureKey]
+    }
+    setImageReferences(nextImageReferences)
+    setHasChanges(true)
+    saveNotesAssets({
+      pointImages,
+      imageReferences: nextImageReferences,
+      sectionImages,
+      imageLayout,
+    })
+    toast.success('Image linked to section title.')
+  }
+
+  // Remove section title image reference
+  const removeSectionTitleImageReference = (sectionIndex, sourceFigureKey = null) => {
+    const key = `section-title-${sectionIndex}`
+    const existingSources = getReferenceSourceKeys(key)
+    if (existingSources.length === 0) return
+
+    const nextImageReferences = { ...imageReferences }
+    if (!sourceFigureKey) {
+      delete nextImageReferences[key]
+    } else {
+      const remaining = existingSources.filter((candidate) => candidate !== sourceFigureKey)
+      if (remaining.length === 0) {
+        delete nextImageReferences[key]
+      } else {
+        nextImageReferences[key] = remaining
+      }
+    }
+    setImageReferences(nextImageReferences)
+    setHasChanges(true)
+    saveNotesAssets({
+      pointImages,
+      imageReferences: nextImageReferences,
+      sectionImages,
+      imageLayout,
+    })
+  }
+
+  // Get figure number for a section title reference (if linked)
+  const getSectionTitleFigureNumber = (sectionIndex) => {
+    const key = `section-title-${sectionIndex}`
+    const refKeys = getReferenceSourceKeys(key)
+    if (refKeys.length === 0) return null
+    return getFigureNumberByKey(refKeys[0])
+  }
+
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 8 }
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 140, tolerance: 8 }
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates
+    })
+  )
+
+  const figureCollisionDetection = useCallback((args) => {
+    const pointerHits = pointerWithin(args)
+    if (!pointerHits || pointerHits.length === 0) {
+      return closestCenter(args)
+    }
+
+    const pointHits = pointerHits.filter((hit) => String(hit?.id || '').startsWith('point-drop-'))
+    if (pointHits.length > 0) {
+      return pointHits
+    }
+
+    return pointerHits
+  }, [])
+
+  const handleFigureDragStart = (event) => {
+    const activeId = String(event?.active?.id || '')
+    setDraggedFigureKey(activeId || null)
+  }
+
+  const handleFigureDragEnd = (event) => {
+    const activeId = String(event?.active?.id || '')
+    const overId = String(event?.over?.id || '')
+    setDraggedFigureKey(null)
+    if (!activeId || !overId || activeId === overId) return
+
+    // Check if dropping on a point
+    const overDropPoint = parsePointDropId(overId)
+    if (overDropPoint) {
+      createImageReferenceToPointByKey(overDropPoint.sectionIndex, overDropPoint.pointIndex, activeId)
+      return
+    }
+
+    // Check if dropping on a section title
+    const overDropSection = parseSectionDropId(overId)
+    if (overDropSection) {
+      createSectionImageReference(overDropSection.sectionIndex, activeId)
+      return
+    }
+
+    const activeSection = event?.active?.data?.current?.sectionIndex
+    const overSection = event?.over?.data?.current?.sectionIndex
+    if (!Number.isInteger(activeSection) || !Number.isInteger(overSection)) return
+    if (activeSection !== overSection) return
+
+    reorderSectionFigureByKey(activeSection, activeId, overId)
+  }
+
+  const handleFigureDragCancel = () => {
+    setDraggedFigureKey(null)
+  }
+
   // Create a reference from one point to another point's image
   const createImageReference = (fromSectionIndex, fromPointIndex, toKey) => {
     const fromKey = getPointImageKey(fromSectionIndex, fromPointIndex)
     // Linking should not keep or create a second direct image at this point.
     const nextPointImages = { ...pointImages }
     delete nextPointImages[fromKey]
-    const nextImageReferences = { ...imageReferences, [fromKey]: toKey }
+    const existingSources = getReferenceSourceKeys(fromKey)
+    const nextSources = [...new Set([...existingSources, toKey])]
+    const nextImageReferences = {
+      ...imageReferences,
+      [fromKey]: nextSources
+    }
+    setPointImages(nextPointImages)
+    setImageReferences(nextImageReferences)
+    setHasChanges(true)
+    saveNotesAssets({
+      pointImages: nextPointImages,
+      imageReferences: nextImageReferences,
+      sectionImages,
+      imageLayout,
+    })
+  }
+
+  const removePointImageReference = (sectionIndex, pointIndex, sourceKey = null) => {
+    const key = getPointImageKey(sectionIndex, pointIndex)
+    const existingSources = getReferenceSourceKeys(key)
+    if (existingSources.length === 0) return
+
+    const nextImageReferences = { ...imageReferences }
+    if (!sourceKey) {
+      delete nextImageReferences[key]
+    } else {
+      const remaining = existingSources.filter((candidate) => candidate !== sourceKey)
+      if (remaining.length === 0) {
+        delete nextImageReferences[key]
+      } else {
+        nextImageReferences[key] = remaining
+      }
+    }
+    setImageReferences(nextImageReferences)
+    setHasChanges(true)
+    saveNotesAssets({
+      pointImages,
+      imageReferences: nextImageReferences,
+      sectionImages,
+      imageLayout,
+    })
+  }
+
+  const removePointFigureAssociation = (sectionIndex, pointIndex, pointImageIndex) => {
+    const pointKey = getPointImageKey(sectionIndex, pointIndex)
+    const existingImages = normalizePointImageEntry(pointImages[pointKey])
+    if (pointImageIndex < 0 || pointImageIndex >= existingImages.length) return
+
+    const sourceKey = `${pointKey}::${pointImageIndex}`
+    const referenceTargets = Object.entries(imageReferences)
+      .filter(([, refSource]) => normalizeReferenceKeyList(refSource).includes(sourceKey))
+      .map(([targetKey]) => targetKey)
+
+    // No external references: removing association is equivalent to removing this image.
+    if (referenceTargets.length === 0) {
+      removePointImage(sectionIndex, pointIndex, pointImageIndex)
+      return
+    }
+
+    const imageToRehome = existingImages[pointImageIndex]
+    const nextPointImages = { ...pointImages }
+    const nextImageReferences = { ...imageReferences }
+
+    const remainingAtSource = existingImages.filter((_, idx) => idx !== pointImageIndex)
+    if (remainingAtSource.length === 0) {
+      delete nextPointImages[pointKey]
+    } else {
+      nextPointImages[pointKey] = remainingAtSource.length === 1 ? remainingAtSource[0] : remainingAtSource
+    }
+
+    // Promote one referenced bullet to become the new direct owner, then repoint all references.
+    const newOwnerKey = referenceTargets[0]
+    const ownerExisting = normalizePointImageEntry(nextPointImages[newOwnerKey])
+    const newOwnerIndex = ownerExisting.length
+    const ownerNext = [...ownerExisting, imageToRehome]
+    nextPointImages[newOwnerKey] = ownerNext.length === 1 ? ownerNext[0] : ownerNext
+    delete nextImageReferences[newOwnerKey]
+
+    const newSourceKey = `${newOwnerKey}::${newOwnerIndex}`
+    Object.entries(nextImageReferences).forEach(([targetKey, refSource]) => {
+      const refs = normalizeReferenceKeyList(refSource)
+      if (refs.length === 0 || !refs.includes(sourceKey)) return
+      const replaced = refs.map((ref) => (ref === sourceKey ? newSourceKey : ref))
+      const uniqueReplaced = [...new Set(replaced)]
+      nextImageReferences[targetKey] = isSectionTitleReferenceTargetKey(targetKey) ? uniqueReplaced : uniqueReplaced[0]
+    })
+
     setPointImages(nextPointImages)
     setImageReferences(nextImageReferences)
     setHasChanges(true)
@@ -2952,6 +3543,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
         dataUrl: selectedThumbnail.dataUrl,
         width: img.width,
         height: img.height,
+        launchedFromPicker: true,
         ...targetInfo
       })
       return
@@ -2974,6 +3566,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
         dataUrl: highResImage.dataUrl,
         width: highResImage.width,
         height: highResImage.height,
+        launchedFromPicker: true,
         ...targetInfo
       })
     } finally {
@@ -2999,17 +3592,31 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
         replace: cropModalOpen.pointImageIndex !== undefined && cropModalOpen.pointImageIndex !== null
       })
     } else {
-      setSectionImageData(cropModalOpen.sectionIndex, imageData)
+      setSectionImageData(cropModalOpen.sectionIndex, imageData, {
+        imageIndex: cropModalOpen.pointImageIndex ?? null,
+        replace: cropModalOpen.pointImageIndex !== undefined && cropModalOpen.pointImageIndex !== null
+      })
     }
 
     setCropModalOpen(null)
+  }
+
+  const handleBackToImagePicker = () => {
+    if (!cropModalOpen) return
+
+    const pickerState = cropModalOpen.pointIndex !== undefined
+      ? { sectionIndex: cropModalOpen.sectionIndex, pointIndex: cropModalOpen.pointIndex }
+      : { sectionIndex: cropModalOpen.sectionIndex }
+
+    setCropModalOpen(null)
+    setImagePickerOpen(pickerState)
   }
 
   // Handle editing an existing image - opens crop modal with saved annotations
   const handleEditExistingImage = async (sectionIndex, pointIndex = null, pointImageIndex = null) => {
     const imageData = pointIndex !== null
       ? getPointImages(sectionIndex, pointIndex)[pointImageIndex ?? 0]
-      : getSectionImage(sectionIndex)
+      : getSectionImages(sectionIndex)[pointImageIndex ?? 0]
 
     if (!imageData) return
 
@@ -3086,12 +3693,13 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
 
       const page = await pdf.getPage(pageNum)
 
-      // Render at high scale for crisp text (2.0x for good quality)
-      let scale = 2.0
+      const mobileMode = isIOSLikeDevice()
+      // Render at lower scale on iOS to avoid Safari memory spikes; keep desktop unchanged.
+      let scale = mobileMode ? 1.35 : 2.0
       let viewport = page.getViewport({ scale })
 
-      // Check if canvas would be too large (limit to ~3000px to avoid memory issues)
-      const maxDimension = 3000
+      // Check if canvas would be too large.
+      const maxDimension = mobileMode ? 2200 : 3000
       if (viewport.width > maxDimension || viewport.height > maxDimension) {
         const reductionFactor = Math.min(maxDimension / viewport.width, maxDimension / viewport.height)
         scale = scale * reductionFactor
@@ -3192,6 +3800,13 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
         )}
 
         {/* Notes Sections */}
+        <DndContext
+          sensors={dndSensors}
+          collisionDetection={figureCollisionDetection}
+          onDragStart={handleFigureDragStart}
+          onDragEnd={handleFigureDragEnd}
+          onDragCancel={handleFigureDragCancel}
+        >
         <div className="space-y-4">
           {sections.map((section, sectionIndex) => (
             <div
@@ -3215,28 +3830,124 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
                 </div>
 
                 {editingNote?.type === 'section' && editingNote.sectionIndex === sectionIndex ? (
-                  <div className="flex-1 flex gap-2">
-                    <input
-                      type="text"
-                      value={editingNote.value}
-                      onChange={(e) => setEditingNote(p => ({ ...p, value: e.target.value }))}
-                      onKeyDown={(e) => e.key === 'Enter' && saveNoteEdit()}
-                      className="flex-1 font-semibold bg-white border border-divider rounded-lg px-3 py-1 focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
-                      autoFocus
+                  <div className="flex-1 space-y-2 relative">
+                    <SectionTitleDropTarget
+                      id={getSectionDropId(sectionIndex)}
+                      enabled={!!draggedFigureKey}
                     />
-                    <button onClick={saveNoteEdit} className="px-3 py-1 bg-accent hover:bg-blue-600 text-white rounded-lg text-sm">Save</button>
-                    <button onClick={() => setEditingNote(null)} className="px-3 py-1 bg-gray-200 hover:bg-gray-300 text-primary rounded-lg text-sm">Cancel</button>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={editingNote.value}
+                        onChange={(e) => setEditingNote(p => ({ ...p, value: e.target.value }))}
+                        onKeyDown={(e) => e.key === 'Enter' && saveNoteEdit()}
+                        className="flex-1 font-semibold bg-white border border-divider rounded-lg px-3 py-1 focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
+                        autoFocus
+                      />
+                      <button onClick={saveNoteEdit} className="px-3 py-1 bg-accent hover:bg-blue-600 text-white rounded-lg text-sm">Save</button>
+                      <button onClick={() => setEditingNote(null)} className="px-3 py-1 bg-gray-200 hover:bg-gray-300 text-primary rounded-lg text-sm">Cancel</button>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-secondary">Figure References</label>
+                      <div className="flex flex-wrap gap-1.5 min-h-[32px] p-2 bg-gray-50 border border-divider rounded-lg">
+                        {(() => {
+                          const sectionTitleRefKeys = getReferenceSourceKeys(`section-title-${sectionIndex}`)
+                          const directSectionRefKeys = getSectionImages(sectionIndex).map((_, sectionImageIndex) => `section-${sectionIndex}::${sectionImageIndex}`)
+                          if (sectionTitleRefKeys.length === 0 && directSectionRefKeys.length === 0) {
+                            return (
+                              <span className="text-xs text-secondary">
+                                Drag figures onto this section title to link them.
+                              </span>
+                            )
+                          }
+                          return (
+                            <>
+                              {directSectionRefKeys.map((refKey, sectionImageIndex) => {
+                                const figNum = getFigureNumberByKey(refKey)
+                                if (!figNum) return null
+                                return (
+                                  <span key={refKey} className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs rounded-full">
+                                    Fig {figNum}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        removeSectionImage(sectionIndex, sectionImageIndex)
+                                      }}
+                                      className="w-3.5 h-3.5 flex items-center justify-center hover:bg-indigo-100 rounded-full"
+                                      title="Remove figure reference"
+                                    >
+                                      <X className="w-2.5 h-2.5" />
+                                    </button>
+                                  </span>
+                                )
+                              })}
+                              {sectionTitleRefKeys.map((refKey) => {
+                                const figNum = getFigureNumberByKey(refKey)
+                                if (!figNum) return null
+                                return (
+                                  <span key={refKey} className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs rounded-full">
+                                    Fig {figNum}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        removeSectionTitleImageReference(sectionIndex, refKey)
+                                      }}
+                                      className="w-3.5 h-3.5 flex items-center justify-center hover:bg-indigo-100 rounded-full"
+                                      title="Remove linked figure"
+                                    >
+                                      <X className="w-2.5 h-2.5" />
+                                    </button>
+                                  </span>
+                                )
+                              })}
+                            </>
+                          )
+                        })()}
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <>
-                    <h3 className="font-semibold text-primary text-lg flex-1">
-                      {section.section}
-                      {getFigureNumber(sectionIndex, null) && (
-                        <span className="text-indigo-500 text-xs font-medium ml-2">
-                          (Fig {getFigureNumber(sectionIndex, null)})
-                        </span>
-                      )}
-                    </h3>
+                    <div className="flex-1 flex items-center gap-2 relative">
+                      <SectionTitleDropTarget
+                        id={getSectionDropId(sectionIndex)}
+                        enabled={!!draggedFigureKey}
+                      />
+                      <h3 className="font-semibold text-primary text-lg">
+                        {section.section}
+                      </h3>
+                      {/* Section's own image figure references */}
+                      {getSectionImages(sectionIndex).map((_, sectionImageIndex) => {
+                        const directKey = `section-${sectionIndex}::${sectionImageIndex}`
+                        const figNum = getFigureNumberByKey(directKey)
+                        if (!figNum) return null
+                        return (
+                          <span key={directKey} className="text-indigo-500 text-xs font-medium">
+                            (Fig {figNum})
+                          </span>
+                        )
+                      })}
+                      {/* Linked figure references for section title */}
+                      {(() => {
+                        const sectionTitleRefKeys = getReferenceSourceKeys(`section-title-${sectionIndex}`)
+                        if (sectionTitleRefKeys.length === 0) return null
+                        return (
+                          <>
+                            {sectionTitleRefKeys.map((refKey) => {
+                              const figNum = getFigureNumberByKey(refKey)
+                              if (!figNum) return null
+                              return (
+                                <span key={refKey} className="text-indigo-500 text-xs font-medium">
+                                  (Fig {figNum})
+                                </span>
+                              )
+                            })}
+                          </>
+                        )
+                      })()}
+                    </div>
                     <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity">
                       <button
                         onClick={() => startEditSection(sectionIndex)}
@@ -3285,6 +3996,30 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
                     {section.points.map((point, pointIndex) => (
                       (() => {
                         const pointLevel = getPointLevel(sectionIndex, pointIndex)
+                        const pointKey = getPointImageKey(sectionIndex, pointIndex)
+                        const imageReferenceKeys = getReferenceSourceKeys(pointKey)
+                        const directPointImages = getPointImages(sectionIndex, pointIndex)
+                        const directFigureBubbles = directPointImages
+                          .map((_, imageIndex) => {
+                            const figNum = getFigureNumber(sectionIndex, pointIndex, imageIndex)
+                            if (!figNum) return null
+                            const sourceKey = `${pointKey}::${imageIndex}`
+                            const isShared = Object.values(imageReferences).some((refSource) => normalizeReferenceKeyList(refSource).includes(sourceKey))
+                            return {
+                              id: sourceKey,
+                              label: `Fig ${figNum}`,
+                              isShared,
+                              onRemove: () => removePointFigureAssociation(sectionIndex, pointIndex, imageIndex)
+                            }
+                          })
+                          .filter(Boolean)
+                        const linkedFigureBubbles = imageReferenceKeys
+                          .map((refKey) => {
+                            const figNum = getFigureNumberByKey(refKey)
+                            return figNum ? { id: refKey, label: `Fig ${figNum}`, figNum } : null
+                          })
+                          .filter(Boolean)
+                          .sort((a, b) => a.figNum - b.figNum)
                         return (
                       <li
                         key={pointIndex}
@@ -3299,6 +4034,10 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
                           !(draggedPoint?.sectionIndex === sectionIndex && draggedPoint?.pointIndex === pointIndex) && (
                             <div className="absolute -top-0.5 left-0 right-0 h-0.5 bg-accent rounded-full pointer-events-none" />
                           )}
+                        <PointImageLinkDropTarget
+                          id={getPointDropId(sectionIndex, pointIndex)}
+                          enabled={!!draggedFigureKey}
+                        />
                         {editingNote?.type === 'point' && editingNote.sectionIndex === sectionIndex && editingNote.pointIndex === pointIndex ? (
                           <div className="flex-1 space-y-2">
                             {/* Formatting Toolbar */}
@@ -3410,6 +4149,43 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
                               className="w-full notes-content bg-white border border-divider rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent min-h-[80px] max-h-[300px] overflow-y-auto"
                               style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
                             />
+                            {(directFigureBubbles.length > 0 || linkedFigureBubbles.length > 0) && (
+                              <div className="space-y-2">
+                                <label className="text-xs text-secondary">Figure References</label>
+                                <div className="flex flex-wrap gap-1.5 min-h-[32px] p-2 bg-gray-50 border border-divider rounded-lg">
+                                  {directFigureBubbles.map((bubble) => (
+                                    <span
+                                      key={bubble.id}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs rounded-full"
+                                      title={bubble.isShared ? 'Shared figure. Removing here will keep the image linked elsewhere.' : 'Remove this figure from this bullet.'}
+                                    >
+                                      {bubble.label}
+                                      <button
+                                        type="button"
+                                        onClick={bubble.onRemove}
+                                        className="w-3.5 h-3.5 flex items-center justify-center hover:bg-indigo-100 rounded-full"
+                                        title="Remove figure reference"
+                                      >
+                                        <X className="w-2.5 h-2.5" />
+                                      </button>
+                                    </span>
+                                  ))}
+                                  {linkedFigureBubbles.map((bubble) => (
+                                    <span key={bubble.id} className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs rounded-full">
+                                      {bubble.label}
+                                      <button
+                                        type="button"
+                                        onClick={() => removePointImageReference(sectionIndex, pointIndex, bubble.id)}
+                                        className="w-3.5 h-3.5 flex items-center justify-center hover:bg-indigo-100 rounded-full"
+                                        title="Remove figure reference"
+                                      >
+                                        <X className="w-2.5 h-2.5" />
+                                      </button>
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                             <div className="flex gap-2">
                               <button onClick={saveNoteEdit} className="px-3 py-1 bg-accent hover:bg-blue-600 text-white rounded-lg text-sm">Save</button>
                               <button onClick={() => setEditingNote(null)} className="px-3 py-1 bg-gray-200 hover:bg-gray-300 text-primary rounded-lg text-sm">Cancel</button>
@@ -3508,7 +4284,13 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
                       const controlsOpen = openLayoutControlsKey === fig.key
 
                       return (
-                        <div key={fig.key} className="relative group/img">
+                        <SortableFigureCard
+                          key={fig.key}
+                          id={fig.key}
+                          sectionIndex={sectionIndex}
+                          draggingEnabled={!editingNote}
+                          className="relative group/img touch-none"
+                        >
                           <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                             <img
                               src={fig.image.dataUrl}
@@ -3538,7 +4320,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
                                 if (fig.type === 'point') {
                                   handleEditExistingImage(sectionIndex, fig.pointIndex, fig.pointImageIndex)
                                 } else {
-                                  handleEditExistingImage(sectionIndex, null)
+                                  handleEditExistingImage(sectionIndex, null, fig.sectionImageIndex)
                                 }
                               }}
                               className="p-1.5 bg-white/95 hover:bg-white rounded-lg shadow-md border border-gray-200"
@@ -3551,7 +4333,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
                                 if (fig.type === 'point') {
                                   removePointImage(sectionIndex, fig.pointIndex, fig.pointImageIndex)
                                 } else {
-                                  removeSectionImage(sectionIndex)
+                                  removeSectionImage(sectionIndex, fig.sectionImageIndex)
                                 }
                               }}
                               className="p-1.5 bg-white/95 hover:bg-red-50 rounded-lg shadow-md border border-gray-200"
@@ -3597,12 +4379,13 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
                               </button>
                             </div>
                           )}
-                        </div>
+                        </SortableFigureCard>
                       )
                     }
 
                     return (
                       <div className="mt-6 pt-4 border-t border-gray-100">
+                        <SortableContext items={orderedKeys} strategy={rectSortingStrategy}>
                         <div className="space-y-4">
                           {rows.map((row, rowIndex) => (
                             <div
@@ -3613,6 +4396,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
                             </div>
                           ))}
                         </div>
+                        </SortableContext>
                       </div>
                     )
                   })()}
@@ -3630,6 +4414,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
             Add Section
           </button>
         </div>
+        </DndContext>
 
         {/* Empty state */}
         {sections.length === 0 && (
@@ -3650,6 +4435,8 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
         isOpen={!!imagePickerOpen}
         onClose={() => setImagePickerOpen(null)}
         thumbnails={pdfThumbnails}
+        pdfPageCount={pdfPageCount}
+        loadSlideThumbnail={loadSlideThumbnailByPage}
         thumbnailsLoading={thumbnailsLoading}
         existingImages={pointImages}
         onSelectSlide={handleSelectSlide}
@@ -3661,8 +4448,10 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
           : null}
         notes={notes}
         getSectionImage={getSectionImage}
+        getPointImages={getPointImages}
         getPointImage={getPointImage}
         getPointImageKey={getPointImageKey}
+        getFigureNumberByKey={getFigureNumberByKey}
       />
 
       {/* Loading overlay for high-res image fetch */}
@@ -3679,6 +4468,7 @@ export function NotesView({ lecture, module, onBack, onOpenFlashcards }) {
       <CropModal
         isOpen={!!cropModalOpen}
         onClose={() => setCropModalOpen(null)}
+        onBack={cropModalOpen?.launchedFromPicker ? handleBackToImagePicker : null}
         imageData={cropModalOpen ? { dataUrl: cropModalOpen.dataUrl, pageNum: cropModalOpen.pageNum, isUploaded: cropModalOpen.isUploaded } : null}
         onConfirm={handleCropConfirm}
         initialAnnotations={cropModalOpen?.initialAnnotations || null}

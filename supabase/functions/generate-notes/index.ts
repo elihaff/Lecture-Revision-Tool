@@ -335,7 +335,7 @@ serve(async (req) => {
     // Store the notes structure
     const notesData = {
       title: parsedResult.title || 'Untitled Lecture',
-      notes: consolidateSections(normalizeGeneratedSections(parsedResult.notes)),
+      notes: normalizeGeneratedSections(parsedResult.notes),
       _ai_nesting_policy: 'flat',
       _notes_generated_by: 'ai',
     }

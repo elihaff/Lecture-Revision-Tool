@@ -3,7 +3,15 @@ import { X, Crop, Pencil, Circle, ArrowRight, Type, RotateCcw, Check, Loader2, T
 
 const COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899', '#000000']
 
-export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnotations, initialCropArea }) {
+function isIOSLikeDevice() {
+  if (typeof navigator === 'undefined') return false
+  const ua = String(navigator.userAgent || '')
+  const platform = String(navigator.platform || '')
+  const maxTouchPoints = Number(navigator.maxTouchPoints || 0)
+  return /iPad|iPhone|iPod/i.test(ua) || (platform === 'MacIntel' && maxTouchPoints > 1)
+}
+
+export function CropModal({ isOpen, onClose, onBack, imageData, onConfirm, initialAnnotations, initialCropArea }) {
   const canvasRef = useRef(null)
   const overlayCanvasRef = useRef(null)
   const containerRef = useRef(null)
@@ -40,6 +48,7 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
   const [displayScale, setDisplayScale] = useState(1)
   const [imageLoaded, setImageLoaded] = useState(false)
   const [originalImage, setOriginalImage] = useState(null)
+  const iOSLike = isIOSLikeDevice()
 
   // Load image and set up canvas
   useEffect(() => {
@@ -89,8 +98,19 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
           height: initialCropArea.height * scale
         })
       } else {
-        // New crop flow: user draws crop rectangle manually.
-        setCropArea(null)
+        // On iPad/iOS, start with a full-image crop so touch users can insert immediately.
+        // Desktop keeps the existing manual-draw first behavior.
+        if (iOSLike) {
+          setCropArea({
+            x: 0,
+            y: 0,
+            width: displayWidth,
+            height: displayHeight
+          })
+        } else {
+          // New crop flow: user draws crop rectangle manually.
+          setCropArea(null)
+        }
       }
 
       // Restore initial annotations if provided, scaled to display size
@@ -758,6 +778,27 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
     }
   }
 
+  const handlePointerDown = (e) => {
+    if (e.pointerType === 'mouse') return
+    if (!overlayCanvasRef.current) return
+    e.preventDefault()
+    overlayCanvasRef.current.setPointerCapture?.(e.pointerId)
+    handleMouseDown(e)
+  }
+
+  const handlePointerMove = (e) => {
+    if (e.pointerType === 'mouse') return
+    e.preventDefault()
+    handleMouseMove(e)
+  }
+
+  const handlePointerUp = (e) => {
+    if (e.pointerType === 'mouse') return
+    e.preventDefault()
+    overlayCanvasRef.current?.releasePointerCapture?.(e.pointerId)
+    handleMouseUp(e)
+  }
+
   // Confirm and generate final image at FULL resolution
   const handleConfirm = () => {
     if (!originalImage || !cropArea) return
@@ -861,8 +902,14 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
       drawAnnotation(ctx, scaledAnn)
     })
 
-    // Use PNG for better quality, or JPEG with high quality
-    const finalDataUrl = outputCanvas.toDataURL('image/png')
+    // iOS Safari is much more memory-sensitive with large PNG data URLs.
+    // Keep desktop export behavior unchanged.
+    const useJpegOutput = iOSLike
+    const finalDataUrl = useJpegOutput
+      ? outputCanvas.toDataURL('image/jpeg', 0.9)
+      : outputCanvas.toDataURL('image/png')
+
+    const shouldStoreOriginalDataUrl = !(iOSLike && imageData?.pageNum)
 
     onConfirm({
       dataUrl: finalDataUrl,
@@ -873,7 +920,7 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
       cropped: cropArea.width < canvasRef.current?.width || cropArea.height < canvasRef.current?.height,
       annotated: annotations.length > 0,
       // Store original data for re-editing
-      originalDataUrl: imageData.dataUrl,
+      originalDataUrl: shouldStoreOriginalDataUrl ? imageData.dataUrl : null,
       originalWidth: originalImage.width,
       originalHeight: originalImage.height,
       cropArea: originalCropArea,
@@ -888,7 +935,18 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
       <div className="bg-white rounded-xl shadow-2xl max-w-[95vw] w-full max-h-[95vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-3 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">Crop & Annotate Slide</h2>
+          <div className="flex items-center gap-3">
+            {typeof onBack === 'function' && (
+              <button
+                onClick={onBack}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-secondary"
+                aria-label="Back to image picker"
+              >
+                ←
+              </button>
+            )}
+            <h2 className="text-lg font-semibold text-gray-900">Crop & Annotate Slide</h2>
+          </div>
           <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-lg">
             <X className="w-5 h-5 text-gray-500" />
           </button>
@@ -1006,11 +1064,15 @@ export function CropModal({ isOpen, onClose, imageData, onConfirm, initialAnnota
             <canvas
               ref={overlayCanvasRef}
               className="absolute top-0 left-0"
-              style={{ cursor: 'crosshair' }}
+              style={{ cursor: 'crosshair', touchAction: 'none' }}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseUp}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerUp}
             />
             {textInput.show && (
               <div

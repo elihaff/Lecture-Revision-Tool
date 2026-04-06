@@ -230,6 +230,14 @@ export function LectureView({ lecture: initialLecture, module, user, examDate, o
     setProgressMessage('Uploading slides for image extraction...')
 
     try {
+      if (!file || file.type !== 'application/pdf') {
+        throw new Error('Please upload a valid PDF file')
+      }
+      const maxSize = 10 * 1024 * 1024 // 10MB
+      if (file.size > maxSize) {
+        throw new Error('PDF must be 10MB or smaller')
+      }
+
       // Get user session
       const { data: sessionData } = await supabase.auth.getSession()
       const userId = sessionData?.session?.user?.id
@@ -243,17 +251,15 @@ export function LectureView({ lecture: initialLecture, module, user, examDate, o
       const { error: uploadError } = await supabase.storage
         .from('lecture-pdfs')
         .upload(slidesPath, file)
-
       if (uploadError) {
-        // Slides upload failed - non-critical
-        // Don't fail - continue without storing (image insertion won't work but notes will)
-      } else {
-        // Save the pdf_path to the lecture
-        await supabase
-          .from('lectures')
-          .update({ pdf_path: slidesPath })
-          .eq('id', lecture.id)
+        throw new Error(`Failed to upload slides PDF: ${uploadError.message}`)
       }
+
+      // Save the pdf_path to the lecture
+      await supabase
+        .from('lectures')
+        .update({ pdf_path: slidesPath })
+        .eq('id', lecture.id)
 
       setProgressMessage('AI is generating notes from slides...')
 
@@ -263,6 +269,9 @@ export function LectureView({ lecture: initialLecture, module, user, examDate, o
         userLearningObjectives,
         (progress) => {
           setProgressMessage(progress.message)
+        },
+        {
+          filePath: slidesPath,
         }
       )
 
@@ -975,6 +984,18 @@ export function LectureView({ lecture: initialLecture, module, user, examDate, o
                   Processed {formatDate(lecture.processed_at)}
                 </p>
               )}
+              {flashcardsCount === 0 && lecture.notes_generated && (
+                <div className="mt-4">
+                  <button
+                    onClick={handleGenerateFlashcards}
+                    disabled={generatingFlashcards}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-400 rounded-lg font-medium text-white text-sm transition-colors"
+                  >
+                    <Layers className="w-4 h-4" />
+                    {generatingFlashcards ? 'Generating...' : 'Generate Flashcards'}
+                  </button>
+                </div>
+              )}
               {flashcardsCount > 0 ? (
                 <div className="mt-4 space-y-2">
                   <button
@@ -1010,25 +1031,7 @@ export function LectureView({ lecture: initialLecture, module, user, examDate, o
                     </button>
                   </div>
                 </div>
-              ) : (
-                <>
-                  <div className="mt-4">
-                    <button
-                      onClick={handleGenerateFlashcards}
-                      disabled={!lecture.notes_generated || generatingFlashcards}
-                      className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg font-medium text-white text-sm transition-colors"
-                    >
-                      {generatingFlashcards ? <Loader2 className="w-4 h-4 animate-spin" /> : <Layers className="w-4 h-4" />}
-                      {generatingFlashcards ? 'Generating...' : 'Generate Flashcards'}
-                    </button>
-                  </div>
-                  {!lecture.notes_generated && (
-                    <p className="text-xs text-secondary mt-2">
-                      Generate notes first to create flashcards.
-                    </p>
-                  )}
-                </>
-              )}
+              ) : null}
             </div>
           </div>
         </div>

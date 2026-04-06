@@ -1,0 +1,6 @@
+import{c as o}from"./index-D6INH1BR.js";/**
+ * @license lucide-react v0.469.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const u=o("Pen",[["path",{d:"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",key:"1a8usu"}]]);function a(t){return String(t||"").replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>").replace(/__([^_]+)__/g,"<strong>$1</strong>").replace(new RegExp("(?<!\\*)\\*(?!\\*)([^*]+)(?<!\\*)\\*(?!\\*)","g"),"<em>$1</em>").replace(new RegExp("(?<!_)_(?!_)([^_]+)(?<!_)_(?!_)","g"),"<em>$1</em>")}function f(t){if(!t||typeof t!="string")return"";const r=document.createElement("div");return r.innerHTML=a(t),["script","iframe","object","embed","link","style"].forEach(e=>{r.querySelectorAll(e).forEach(s=>s.remove())}),r.querySelectorAll("*").forEach(e=>{Array.from(e.attributes).forEach(n=>{n.name.startsWith("on")&&e.removeAttribute(n.name)}),e.href&&e.href.toLowerCase().startsWith("javascript:")&&e.removeAttribute("href"),e.src&&e.src.toLowerCase().startsWith("javascript:")&&e.removeAttribute("src")}),r.innerHTML}function l(t){if(!t||typeof t!="string")return"";const r=document.createElement("div");return r.innerHTML=a(t),r.textContent||r.innerText||""}export{u as P,l as a,f as s};

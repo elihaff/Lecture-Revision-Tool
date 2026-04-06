@@ -178,10 +178,29 @@ function shouldRetryWithSmallerPayload(error) {
   )
 }
 
+function isAuthError(error) {
+  const text = String(error?.message || '').toLowerCase()
+  return (
+    text.includes('authentication failed') ||
+    text.includes('invalid jwt') ||
+    text.includes('invalid token') ||
+    text.includes('expired token') ||
+    text.includes('missing authorization') ||
+    text.includes('unauthorized') ||
+    text.includes('401') ||
+    text.includes('403')
+  )
+}
+
 async function generateFlashcardsAttempt(payload, notes, accessToken, invokeErrorContext = null) {
+  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
   // Primary path: Supabase client invoke
   const { data: result, error } = await supabase.functions.invoke('generate-flashcards', {
     body: payload,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      apikey: anonKey,
+    },
   })
 
   if (!error && result?.success) {
@@ -192,7 +211,6 @@ async function generateFlashcardsAttempt(payload, notes, accessToken, invokeErro
   // Fallback path: direct fetch (same pattern used by notes generation)
   try {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
     const functionUrl = `${supabaseUrl}/functions/v1/generate-flashcards`
 
     const response = await fetch(functionUrl, {
@@ -280,6 +298,23 @@ export async function generateFlashcardsFromNotes({ notes, lectureTitle, moduleA
           return await generateFlashcardsAttempt(payload, notes, retryAccessToken, error)
         } catch (retryError) {
           lastError = retryError
+          break
+        }
+      }
+      if (isAuthError(error)) {
+        await supabase.auth.refreshSession()
+        const { data: retrySessionData } = await supabase.auth.getSession()
+        const retryAccessToken = retrySessionData?.session?.access_token
+        if (retryAccessToken) {
+          try {
+            return await generateFlashcardsAttempt(payload, notes, retryAccessToken, error)
+          } catch (retryError) {
+            lastError = retryError
+            if (isAuthError(retryError)) {
+              break
+            }
+          }
+        } else {
           break
         }
       }

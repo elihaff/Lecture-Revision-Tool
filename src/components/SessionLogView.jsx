@@ -56,6 +56,20 @@ function modeLabel(mode) {
   return mode === 'new' ? 'New' : 'Review'
 }
 
+function getResumeMetaForRow(row) {
+  if (!row) return null
+  if (row.source_type === 'global') {
+    return { mode: 'review-global', scope: 'global' }
+  }
+  if (row.source_type === 'custom') {
+    return { mode: 'custom-study', scope: 'custom-study' }
+  }
+  if (row.source_type === 'lecture' && row.lecture_id) {
+    return { mode: 'learn-lecture', scope: `lecture:${row.lecture_id}` }
+  }
+  return null
+}
+
 function statusLabel(status) {
   if (status === 'paused') return 'Paused'
   if (status === 'completed') return 'Completed'
@@ -181,32 +195,48 @@ export function SessionLogView({ user, onBack }) {
   }, [lecturesById])
 
   const normalized = useMemo(() => {
+    const latestRowIdByResumeKey = {}
+    for (const row of rows) {
+      const resumeMeta = user?.id ? getResumeMetaForRow(row) : null
+      if (!resumeMeta) continue
+      const resumeKey = `${resumeMeta.mode}|${resumeMeta.scope}`
+      if (!latestRowIdByResumeKey[resumeKey]) {
+        latestRowIdByResumeKey[resumeKey] = row.id
+      }
+    }
+
     return rows.map((row) => {
       const denominator = Number(row.again_count || 0) + Number(row.hard_count || 0) + Number(row.good_count || 0) + Number(row.easy_count || 0)
       const accuracy = denominator > 0
         ? (Number(row.good_count || 0) + Number(row.easy_count || 0)) / denominator
         : Number(row.accuracy || 0)
 
-      let resumeMeta = null
-      if (user?.id) {
-        if (row.source_type === 'global') {
-          resumeMeta = { mode: 'review-global', scope: 'global' }
-        } else if (row.source_type === 'custom') {
-          resumeMeta = { mode: 'custom-study', scope: 'custom-study' }
-        } else if (row.source_type === 'lecture' && row.lecture_id) {
-          resumeMeta = { mode: 'learn-lecture', scope: `lecture:${row.lecture_id}` }
-        }
-      }
+      const resumeMeta = user?.id ? getResumeMetaForRow(row) : null
+      const resumeKey = resumeMeta ? `${resumeMeta.mode}|${resumeMeta.scope}` : null
       const saved = resumeMeta
-        ? savedSessionsByResumeKey[`${resumeMeta.mode}|${resumeMeta.scope}`]
+        ? savedSessionsByResumeKey[resumeKey]
         : null
-      const matchesSavedLog = !saved?.sessionLogId || saved.sessionLogId === row.id
-      const canResume = Boolean(
+      const rowIsOpenActive = row.status === 'active' && !row.ended_at
+      const rowIsResumableStatus = row.status === 'active' || row.status === 'paused' || row.status === 'abandoned'
+      const matchesSavedLog = Boolean(saved?.sessionLogId) && saved.sessionLogId === row.id
+      const canResumeWithoutLogId = Boolean(
         saved &&
         !saved.sessionComplete &&
-        matchesSavedLog
+        !saved.sessionLogId &&
+        rowIsResumableStatus &&
+        resumeKey &&
+        latestRowIdByResumeKey[resumeKey] === row.id
       )
-      const displayStatus = canResume ? 'paused' : row.status
+      const canResumeByLatestResumableRow = Boolean(
+        resumeKey &&
+        rowIsResumableStatus &&
+        latestRowIdByResumeKey[resumeKey] === row.id
+      )
+      const canResume = Boolean(
+        (saved && !saved.sessionComplete && (matchesSavedLog || canResumeWithoutLogId)) ||
+        canResumeByLatestResumableRow
+      )
+      const displayStatus = (canResume || rowIsOpenActive) ? 'paused' : row.status
 
       const customFiltersLines = (() => {
         if (row.source_type !== 'custom') return []

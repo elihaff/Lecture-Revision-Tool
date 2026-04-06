@@ -51,7 +51,16 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.generate-interpretation]
-verify_jwt = true
+verify_jwt = false
+
+[functions.process-lecture]
+verify_jwt = false
 
 [functions.suggest-flashcard-tags]
+verify_jwt = false
+
+[functions.generate-occlusion-explanations]
+verify_jwt = false
+
+[functions.convert-legacy-notes]
 verify_jwt = false

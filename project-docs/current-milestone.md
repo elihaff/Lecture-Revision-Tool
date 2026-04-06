@@ -1,35 +1,58 @@
 # Current Milestone
 
-Milestone 2: Lecture workspace + AI notes pipeline
+Milestone 6: Native Review System + Reliability Hardening
 
-Last updated: March 4, 2026
+Last updated: March 25, 2026
 
-## Completed in this milestone
+## Current state summary
 
-- Supabase authentication is implemented
-- Module and lecture structure is implemented
-- Submodules and drag-and-drop ordering are implemented
-- Lecture workspace UI is implemented
-- PDF upload flow is implemented
-- AI notes generation and save flow is implemented
-- Existing notes conversion flow is implemented
-- Notes editing, save, and PDF export/import are implemented
+Core end-to-end workflow is now live in the React app:
+
+- Authentication and account settings
+- Module/submodule/lecture hierarchy with drag-and-drop ordering
+- Lecture workspace with two note-ingestion paths:
+  - generate notes from slides
+  - convert existing notes PDF
+- Notes editing with image support and export/import
+- Flashcard generation from notes and CSV import
+- Learn Mode per lecture
+- Lecture review, global review, and custom study sessions
+- Session pause/resume persistence + study session log
+- Stats dashboard and exam-date-aware scheduling behavior
+
+## Recently completed
+
+- Migrated major revision flows into modular React components
+- Implemented SRS V2 scheduling flow with learning/relearning states
+- Added structured flashcard payload support (`occlusion_data`, `interpretation_data`)
+- Added semantic tagging model for flashcards (`content_tags`, `custom_user_tags`, AI suggestions)
+- Added scoped reset-progress controls in settings
+- Added review activity/day RPC + index optimization migration
 
 ## In progress
 
-- Stabilise edge function wiring and request payload consistency
-- Finalise migration from legacy `index.html.old` flow into modular React components
-- Tighten end-to-end reliability for notes generation/conversion paths
+- Reliability hardening for edge function response parsing and payload consistency
+- Further cleanup of legacy compatibility paths and duplicated fallback logic
+- UX consistency and performance pass across review/edit modals and long sessions
 
-## Definition of done
+## Known gaps / risks
 
-- Upload slides and generate notes works reliably end-to-end
-- Convert existing notes works reliably end-to-end
-- Notes can be edited and saved without regressions
-- Notes export/import roundtrip is reliable
-- No endpoint mismatches between frontend and deployed edge functions
+- Some docs and changelog history lag behind current versioning/state
+- Dist artifacts are currently tracked and frequently churn in local changes
+- Some flows still rely on broad try/catch fallback behavior instead of strongly typed contracts
 
-## Next milestone (Milestone 3)
+## Definition of done for this milestone
 
-- Native flashcard review system in the React app
-- Move remaining flashcard workflow out of legacy implementation
+- Notes generation/conversion and flashcard generation are consistently reliable in production
+- Session resume/pause behavior is stable across all review modes
+- Data contracts between frontend and edge functions are explicit and validated
+- Project docs and roadmap stay synchronized with implemented behavior
+
+## Next milestone direction
+
+Milestone 7: Product quality + operational maturity
+
+- Tighten test coverage for high-risk review and note-conversion paths
+- Reduce edge-function coupling and simplify fallback complexity
+- Improve analytics quality and observability for learning outcomes
+- Prepare cleaner release and deployment hygiene (docs + artifacts + version trail)

@@ -171,17 +171,24 @@ export function GlobalReviewSession({ user, onBack, autoResumeFromLog = false, o
   const [newTagInput, setNewTagInput] = useState('')
   const keyboardFlashTimeoutRef = useRef(null)
   const sessionLogClosedRef = useRef(false)
+  const pauseSessionOnUnmountRef = useRef(() => {})
   const editBackRef = useRef(null)
   const occlusionEditorRef = useRef(null)
+  // Use refs to track stats immediately (React state updates are async)
+  const sessionStatsRef = useRef({ again: 0, hard: 0, good: 0, easy: 0 })
+  const reviewedCardIdsRef = useRef([])
   const sessionMode = 'review-global'
   const sessionScope = 'global'
 
-  const getStatsSnapshot = (stats = sessionStats, coveredIds = reviewedCardIds) => {
-    const again = Number(stats?.again || 0)
-    const hard = Number(stats?.hard || 0)
-    const good = Number(stats?.good || 0)
-    const easy = Number(stats?.easy || 0)
-    const cardsCovered = Array.isArray(coveredIds) ? coveredIds.length : 0
+  const getStatsSnapshot = (stats, coveredIds) => {
+    // Prefer refs for immediate values, fall back to state
+    const effectiveStats = stats || sessionStatsRef.current || sessionStats
+    const effectiveCoveredIds = coveredIds || reviewedCardIdsRef.current || reviewedCardIds
+    const again = Number(effectiveStats?.again || 0)
+    const hard = Number(effectiveStats?.hard || 0)
+    const good = Number(effectiveStats?.good || 0)
+    const easy = Number(effectiveStats?.easy || 0)
+    const cardsCovered = Array.isArray(effectiveCoveredIds) ? effectiveCoveredIds.length : 0
     return { again, hard, good, easy, cardsCovered }
   }
 
@@ -196,8 +203,12 @@ export function GlobalReviewSession({ user, onBack, autoResumeFromLog = false, o
     setCards(Array.isArray(saved.cards) ? saved.cards : [])
     setCurrentIndex(Number.isFinite(saved.currentIndex) ? saved.currentIndex : 0)
     setIsFlipped(Boolean(saved.isFlipped))
-    setSessionStats(saved.sessionStats || { again: 0, hard: 0, good: 0, easy: 0 })
-    setReviewedCardIds(Array.isArray(saved.reviewedCardIds) ? saved.reviewedCardIds : [])
+    const restoredStats = saved.sessionStats || { again: 0, hard: 0, good: 0, easy: 0 }
+    const restoredReviewedCardIds = Array.isArray(saved.reviewedCardIds) ? saved.reviewedCardIds : []
+    setSessionStats(restoredStats)
+    sessionStatsRef.current = restoredStats
+    setReviewedCardIds(restoredReviewedCardIds)
+    reviewedCardIdsRef.current = restoredReviewedCardIds
     setReviewStartTime(saved.reviewStartTime || null)
     setSessionComplete(false)
     setSessionLogId(saved.sessionLogId || null)
@@ -292,7 +303,9 @@ export function GlobalReviewSession({ user, onBack, autoResumeFromLog = false, o
     setIsFlipped(false)
     setReviewStartTime(null)
     setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
+    sessionStatsRef.current = { again: 0, hard: 0, good: 0, easy: 0 }
     setReviewedCardIds([])
+    reviewedCardIdsRef.current = []
     setSessionComplete(false)
     if (Array.isArray(dueCards) && dueCards.length > 0) {
       const { data: logRow } = await startStudySessionLog({
@@ -351,10 +364,14 @@ export function GlobalReviewSession({ user, onBack, autoResumeFromLog = false, o
   }, [loading, resumePrompt, cards, currentIndex, isFlipped, sessionStats, reviewedCardIds, reviewStartTime, examDate, sessionComplete, sessionLogId])
 
   useEffect(() => {
+    pauseSessionOnUnmountRef.current = pauseSessionIfActive
+  })
+
+  useEffect(() => {
     return () => {
-      pauseSessionIfActive()
+      pauseSessionOnUnmountRef.current()
     }
-  }, [sessionComplete, sessionLogId, cards, currentIndex, isFlipped, sessionStats, reviewedCardIds, reviewStartTime, examDate])
+  }, [])
 
   useEffect(() => {
     if (loading || resumePrompt) return
@@ -411,11 +428,18 @@ export function GlobalReviewSession({ user, onBack, autoResumeFromLog = false, o
       examDate: examDate,
     })
 
+    // Update refs immediately (these are synchronous, unlike React state)
+    const ratingKey = ['', 'again', 'hard', 'good', 'easy'][rating]
+    sessionStatsRef.current = {
+      ...sessionStatsRef.current,
+      [ratingKey]: (sessionStatsRef.current[ratingKey] || 0) + 1,
+    }
+    if (!reviewedCardIdsRef.current.includes(currentCard.id)) {
+      reviewedCardIdsRef.current = [...reviewedCardIdsRef.current, currentCard.id]
+    }
+
     if (!error && updatedCard) {
-      const nextReviewedCardIds = reviewedCardIds.includes(currentCard.id)
-        ? reviewedCardIds
-        : [...reviewedCardIds, currentCard.id]
-      setReviewedCardIds(nextReviewedCardIds)
+      setReviewedCardIds([...reviewedCardIdsRef.current])
       const shouldRequeue = rating === RATING.AGAIN || rating === RATING.HARD
       setCards((prev) => {
         const next = [...prev]
@@ -427,20 +451,11 @@ export function GlobalReviewSession({ user, onBack, autoResumeFromLog = false, o
       })
     }
 
-    // Update stats
-    const ratingKey = ['', 'again', 'hard', 'good', 'easy'][rating]
-    setSessionStats(prev => ({ ...prev, [ratingKey]: prev[ratingKey] + 1 }))
+    // Update React state for UI rendering
+    setSessionStats({ ...sessionStatsRef.current })
 
     if (sessionLogId && !sessionLogClosedRef.current) {
-      const projectedStats = {
-        ...sessionStats,
-        [ratingKey]: Number(sessionStats?.[ratingKey] || 0) + 1,
-      }
-      const projectedCovered = reviewedCardIds.includes(currentCard.id)
-        ? reviewedCardIds
-        : [...reviewedCardIds, currentCard.id]
-      const snapshot = getStatsSnapshot(projectedStats, projectedCovered)
-      updateStudySessionLog(sessionLogId, snapshot).catch(() => {
+      updateStudySessionLog(sessionLogId, getStatsSnapshot(sessionStatsRef.current, reviewedCardIdsRef.current)).catch(() => {
         // Session log update failed - non-critical
       })
     }
@@ -454,17 +469,10 @@ export function GlobalReviewSession({ user, onBack, autoResumeFromLog = false, o
       }
       if (sessionLogId && !sessionLogClosedRef.current) {
         sessionLogClosedRef.current = true
-        const projectedStats = {
-          ...sessionStats,
-          [ratingKey]: Number(sessionStats?.[ratingKey] || 0) + 1,
-        }
-        const projectedCovered = reviewedCardIds.includes(currentCard.id)
-          ? reviewedCardIds
-          : [...reviewedCardIds, currentCard.id]
-        const snapshot = getStatsSnapshot(projectedStats, projectedCovered)
+        // Use refs directly as they have the most up-to-date values
         await closeStudySessionLog(sessionLogId, {
           status: 'completed',
-          stats: snapshot,
+          stats: getStatsSnapshot(sessionStatsRef.current, reviewedCardIdsRef.current),
         })
       }
       setSessionComplete(true)
@@ -856,9 +864,7 @@ export function GlobalReviewSession({ user, onBack, autoResumeFromLog = false, o
           </button>
           <div>
             <h1 className="text-xl font-bold text-primary">Study Session</h1>
-            {lecture && (
-              <p className="text-sm text-secondary">{lecture.title}</p>
-            )}
+            <p className="text-sm text-secondary">Global Review</p>
           </div>
         </div>
       </div>

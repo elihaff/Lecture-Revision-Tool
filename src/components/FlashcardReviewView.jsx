@@ -268,9 +268,13 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
   const keyboardFlashTimeoutRef = useRef(null)
   const sessionLogClosedRef = useRef(false)
   const sessionLogIdRef = useRef(null)
+  const pauseSessionOnUnmountRef = useRef(() => {})
   const allCardsRef = useRef([])
   const editBackRef = useRef(null)
   const occlusionEditorRef = useRef(null)
+  // Use refs to track stats immediately (React state updates are async)
+  const sessionStatsRef = useRef({ again: 0, hard: 0, good: 0, easy: 0 })
+  const reviewedCardIdsRef = useRef([])
   const sessionMode = 'learn-lecture'
   const sessionScope = `lecture:${lecture.id}`
 
@@ -279,12 +283,15 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
     setSessionLogId(value || null)
   }
 
-  const getStatsSnapshot = (stats = sessionStats, coveredIds = reviewedCardIds) => {
-    const again = Number(stats?.again || 0)
-    const hard = Number(stats?.hard || 0)
-    const good = Number(stats?.good || 0)
-    const easy = Number(stats?.easy || 0)
-    const cardsCovered = Array.isArray(coveredIds) ? coveredIds.length : 0
+  const getStatsSnapshot = (stats, coveredIds) => {
+    // Prefer refs for immediate values, fall back to state
+    const effectiveStats = stats || sessionStatsRef.current || sessionStats
+    const effectiveCoveredIds = coveredIds || reviewedCardIdsRef.current || reviewedCardIds
+    const again = Number(effectiveStats?.again || 0)
+    const hard = Number(effectiveStats?.hard || 0)
+    const good = Number(effectiveStats?.good || 0)
+    const easy = Number(effectiveStats?.easy || 0)
+    const cardsCovered = Array.isArray(effectiveCoveredIds) ? effectiveCoveredIds.length : 0
     return {
       again,
       hard,
@@ -296,7 +303,10 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
 
   // Load next card on mount and after each review
   useEffect(() => {
-    initializeSession()
+    initializeSession().catch((err) => {
+      setError(err?.message || 'Failed to initialize session')
+      setLoading(false)
+    })
   }, [lecture.id, user?.id])
 
   const applySavedSession = async (saved) => {
@@ -306,9 +316,13 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
       : null
     const restoredSessionBatchMeta = saved.sessionBatchMeta || { isDefaultDailyBatch: false, size: 0 }
     const restoredQueueIds = Array.isArray(saved.sessionQueueIds) ? saved.sessionQueueIds : []
+    const restoredStats = saved.sessionStats || { again: 0, hard: 0, good: 0, easy: 0 }
+    const restoredReviewedCardIds = Array.isArray(saved.reviewedCardIds) ? saved.reviewedCardIds : []
     setActiveSessionCardIds(restoredActiveSessionCardIds)
-    setSessionStats(saved.sessionStats || { again: 0, hard: 0, good: 0, easy: 0 })
-    setReviewedCardIds(Array.isArray(saved.reviewedCardIds) ? saved.reviewedCardIds : [])
+    setSessionStats(restoredStats)
+    sessionStatsRef.current = restoredStats
+    setReviewedCardIds(restoredReviewedCardIds)
+    reviewedCardIdsRef.current = restoredReviewedCardIds
     setCycleCounts(saved.cycleCounts || { firstCycle: 0, secondCycle: 0, graduated: 0 })
     setSessionBatchMeta(restoredSessionBatchMeta)
     setSessionQueueIds(restoredQueueIds)
@@ -338,7 +352,11 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
 
     if (!user?.id) {
       const { data: allCards, error: fetchError } = await getFlashcardsByLecture(lecture.id)
-      if (fetchError) throw fetchError
+      if (fetchError) {
+        setError(fetchError.message || 'Failed to load flashcards')
+        setLoading(false)
+        return
+      }
       allCardsRef.current = Array.isArray(allCards) ? allCards : []
       await maybeStartOrPrompt(allCards)
       return
@@ -460,10 +478,15 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
 
         const initialQueue = shuffleCards(batchIds)
 
-        // Store session card IDs
+        // Store session card IDs and reset stats for new session
         setActiveSessionCardIds(batchIds)
         setSessionBatchMeta({ isDefaultDailyBatch, size: desiredBatchSize })
         setSessionQueueIds(initialQueue)
+        // Reset stats refs for new session
+        sessionStatsRef.current = { again: 0, hard: 0, good: 0, easy: 0 }
+        reviewedCardIdsRef.current = []
+        setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
+        setReviewedCardIds([])
         if (!effectiveSessionLogId) {
           const { data: logRow } = await startStudySessionLog({
             sourceType: 'lecture',
@@ -501,6 +524,14 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
 
       // Check if all session cards have graduated
       if (sessionCards.length === 0) {
+        // Refresh final summary counts before exiting so completion UI is accurate.
+        const graduated = allCards.filter((card) => card.state === 'review').length
+        setCycleCounts({
+          firstCycle: 0,
+          secondCycle: 0,
+          graduated,
+        })
+
         // Session complete - clear session IDs to start new batch on next load
         if (effectiveSessionBatchMeta.isDefaultDailyBatch && user?.id) {
           markDailyDefaultBatchCompleted(user.id, lecture.id)
@@ -513,9 +544,11 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
         }
         if (effectiveSessionLogId && !sessionLogClosedRef.current) {
           sessionLogClosedRef.current = true
+          // Use refs directly as they have the most up-to-date values
+          // Refs are updated synchronously, unlike React state
           await closeStudySessionLog(effectiveSessionLogId, {
             status: 'completed',
-            stats: getStatsSnapshot(),
+            stats: getStatsSnapshot(sessionStatsRef.current, reviewedCardIdsRef.current),
           })
         }
         setSessionComplete(true)
@@ -789,23 +822,23 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
         allCardsRef.current = nextAllCards
       }
 
-      const nextReviewedCardIds = reviewedCardIds.includes(currentCard.id)
-        ? reviewedCardIds
-        : [...reviewedCardIds, currentCard.id]
-      setReviewedCardIds(nextReviewedCardIds)
-
-      // Update session stats
+      // Update refs immediately (these are synchronous, unlike React state)
       const ratingKey = Object.keys(RATING).find(key => RATING[key] === rating).toLowerCase()
-      setSessionStats(prev => ({
-        ...prev,
-        [ratingKey]: prev[ratingKey] + 1,
-      }))
+      sessionStatsRef.current = {
+        ...sessionStatsRef.current,
+        [ratingKey]: (sessionStatsRef.current[ratingKey] || 0) + 1,
+      }
+      if (!reviewedCardIdsRef.current.includes(currentCard.id)) {
+        reviewedCardIdsRef.current = [...reviewedCardIdsRef.current, currentCard.id]
+      }
+      const nextReviewedCardIds = reviewedCardIdsRef.current
+
+      // Update React state for UI rendering
+      setReviewedCardIds(nextReviewedCardIds)
+      setSessionStats({ ...sessionStatsRef.current })
+
       if (sessionLogId && !sessionLogClosedRef.current) {
-        const projectedStats = {
-          ...sessionStats,
-          [ratingKey]: Number(sessionStats?.[ratingKey] || 0) + 1,
-        }
-        updateStudySessionLog(sessionLogId, getStatsSnapshot(projectedStats, nextReviewedCardIds)).catch((error) => {
+        updateStudySessionLog(sessionLogId, getStatsSnapshot(sessionStatsRef.current, nextReviewedCardIds)).catch((error) => {
           // Session log update failed - non-critical
         })
       }
@@ -836,6 +869,7 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
       setSessionQueueIds(nextQueue)
 
       // Load next card from deterministic queue
+      // Stats are tracked via refs (sessionStatsRef, reviewedCardIdsRef) for immediate updates
       await loadNextCard({
         queueOverride: nextQueue,
         allCardsOverride: allCardsRef.current,
@@ -887,10 +921,14 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
   }, [loading, resumePrompt, continuePrompt, activeSessionCardIds, currentCard, isFlipped, sessionStats, reviewedCardIds, cycleCounts, reviewStartTime, sessionComplete, sessionLogId, sessionBatchMeta, sessionQueueIds])
 
   useEffect(() => {
+    pauseSessionOnUnmountRef.current = pauseSessionIfActive
+  })
+
+  useEffect(() => {
     return () => {
-      pauseSessionIfActive()
+      pauseSessionOnUnmountRef.current()
     }
-  }, [sessionComplete, sessionLogId, activeSessionCardIds, currentCard, isFlipped, sessionStats, reviewedCardIds, cycleCounts, reviewStartTime, sessionBatchMeta, sessionQueueIds])
+  }, [])
 
   const handleResumeSaved = async () => {
     if (!resumePrompt) return
@@ -913,7 +951,9 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
     setContinuePrompt(null)
     setActiveSessionCardIds(null)
     setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
+    sessionStatsRef.current = { again: 0, hard: 0, good: 0, easy: 0 }
     setReviewedCardIds([])
+    reviewedCardIdsRef.current = []
     setCycleCounts({ firstCycle: 0, secondCycle: 0, graduated: 0 })
     setSessionBatchMeta({ isDefaultDailyBatch: false, size: 0 })
     setSessionQueueIds([])
@@ -1016,7 +1056,9 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
       // Reset UI state
       setIsFlipped(false)
       setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
+      sessionStatsRef.current = { again: 0, hard: 0, good: 0, easy: 0 }
       setReviewedCardIds([])
+      reviewedCardIdsRef.current = []
       setSessionComplete(false)
       setActiveSessionCardIds(null) // Clear active session
       setSessionBatchMeta({ isDefaultDailyBatch: false, size: 0 })
@@ -1207,12 +1249,6 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
             <p className="text-secondary mb-4">
               You reviewed {totalReviewed} card{totalReviewed !== 1 ? 's' : ''}
             </p>
-            <div className="bg-green-50 border border-green-200 rounded-xl p-6 mb-8">
-              <p className="text-green-900 font-medium mb-2">All cards graduated! 🎉</p>
-              <p className="text-sm text-green-700">
-                {cycleCounts.graduated} card{cycleCounts.graduated !== 1 ? 's' : ''} completed learning cycles and scheduled for review.
-              </p>
-            </div>
 
             {/* Stats */}
             {totalReviewed > 0 && (
@@ -1267,7 +1303,7 @@ export function FlashcardReviewView({ lecture, module, user, examDate, onBack, a
 
   // Active review interface
   return (
-    <div className="p-8">
+    <div className="min-h-screen p-8">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-4">

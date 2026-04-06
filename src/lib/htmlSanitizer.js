@@ -3,6 +3,14 @@
  * Allows safe formatting tags while removing potentially dangerous content
  */
 
+function applyInlineMarkdownFormatting(value) {
+  return String(value || '')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
+    .replace(/(?<!_)_(?!_)([^_]+)(?<!_)_(?!_)/g, '<em>$1</em>')
+}
+
 /**
  * Sanitize HTML content for safe display
  * Allows: <strong>, <em>, <b>, <i>, <u>, <br>, <p>, <span>, <img>
@@ -16,7 +24,7 @@ export function sanitizeHtml(html) {
 
   // Create a temporary div to parse HTML
   const temp = document.createElement('div')
-  temp.innerHTML = html
+  temp.innerHTML = applyInlineMarkdownFormatting(html)
 
   // Remove dangerous elements
   const dangerousTags = ['script', 'iframe', 'object', 'embed', 'link', 'style']
@@ -58,7 +66,7 @@ export function stripHtml(html) {
   if (!html || typeof html !== 'string') return ''
 
   const temp = document.createElement('div')
-  temp.innerHTML = html
+  temp.innerHTML = applyInlineMarkdownFormatting(html)
   return temp.textContent || temp.innerText || ''
 }
 

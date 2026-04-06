@@ -226,27 +226,28 @@ export function CustomStudyView({ user, onBack, autoResumeFromLog = false, onAut
   const [newTagInput, setNewTagInput] = useState('')
   const keyboardFlashTimeoutRef = useRef(null)
   const sessionLogClosedRef = useRef(false)
+  const pauseSessionOnUnmountRef = useRef(() => {})
   const editBackRef = useRef(null)
   const occlusionEditorRef = useRef(null)
+  // Use refs to track stats immediately (React state updates are async)
+  const sessionStatsRef = useRef({ again: 0, hard: 0, good: 0, easy: 0 })
+  const reviewedCardIdsRef = useRef([])
   const sessionScope = 'custom-study'
   const sessionModeKey = 'custom-study'
 
-  const getStatsSnapshot = (stats = sessionStats, coveredIds = reviewedCardIds) => {
-    const again = Number(stats?.again || 0)
-    const hard = Number(stats?.hard || 0)
-    const good = Number(stats?.good || 0)
-    const easy = Number(stats?.easy || 0)
-    const cardsCovered = Array.isArray(coveredIds) ? coveredIds.length : 0
+  const getStatsSnapshot = (stats, coveredIds) => {
+    // Prefer refs for immediate values, fall back to state
+    const effectiveStats = stats || sessionStatsRef.current || sessionStats
+    const effectiveCoveredIds = coveredIds || reviewedCardIdsRef.current || reviewedCardIds
+    const again = Number(effectiveStats?.again || 0)
+    const hard = Number(effectiveStats?.hard || 0)
+    const good = Number(effectiveStats?.good || 0)
+    const easy = Number(effectiveStats?.easy || 0)
+    const cardsCovered = Array.isArray(effectiveCoveredIds) ? effectiveCoveredIds.length : 0
     return { again, hard, good, easy, cardsCovered }
   }
 
-  const predefinedTags = new Set(Object.values(TAG_CATEGORIES).flat())
-  const uncategorizedTags = Object.keys(tagCounts)
-    .filter((tag) => !predefinedTags.has(tag))
-    .sort((a, b) => a.localeCompare(b))
-  const displayTagCategories = uncategorizedTags.length > 0
-    ? { ...TAG_CATEGORIES, other: uncategorizedTags }
-    : TAG_CATEGORIES
+  const displayTagCategories = TAG_CATEGORIES
 
   // Load modules, lectures, and tag counts on mount
   useEffect(() => {
@@ -307,8 +308,12 @@ export function CustomStudyView({ user, onBack, autoResumeFromLog = false, onAut
     setCurrentBatchStart(Number.isFinite(saved.currentBatchStart) ? saved.currentBatchStart : 0)
     setCurrentCardIndex(Number.isFinite(saved.currentCardIndex) ? saved.currentCardIndex : 0)
     setIsFlipped(Boolean(saved.isFlipped))
-    setSessionStats(saved.sessionStats || { again: 0, hard: 0, good: 0, easy: 0 })
-    setReviewedCardIds(Array.isArray(saved.reviewedCardIds) ? saved.reviewedCardIds : [])
+    const restoredStats = saved.sessionStats || { again: 0, hard: 0, good: 0, easy: 0 }
+    const restoredReviewedCardIds = Array.isArray(saved.reviewedCardIds) ? saved.reviewedCardIds : []
+    setSessionStats(restoredStats)
+    sessionStatsRef.current = restoredStats
+    setReviewedCardIds(restoredReviewedCardIds)
+    reviewedCardIdsRef.current = restoredReviewedCardIds
     setReviewStartTime(saved.reviewStartTime || null)
     setStep(saved.step === 'batch-complete' ? 'batch-complete' : 'session')
     setResumePrompt(null)
@@ -548,21 +553,14 @@ export function CustomStudyView({ user, onBack, autoResumeFromLog = false, onAut
   ])
 
   useEffect(() => {
+    pauseSessionOnUnmountRef.current = pauseSessionIfActive
+  })
+
+  useEffect(() => {
     return () => {
-      pauseSessionIfActive()
+      pauseSessionOnUnmountRef.current()
     }
-  }, [
-    step,
-    sessionLogId,
-    allCards,
-    currentBatchStart,
-    currentCardIndex,
-    isFlipped,
-    sessionStats,
-    reviewedCardIds,
-    reviewStartTime,
-    examDate,
-  ])
+  }, [])
 
   const loadDifficultyCounts = async () => {
     const baseline = {}
@@ -767,7 +765,9 @@ export function CustomStudyView({ user, onBack, autoResumeFromLog = false, onAut
     setCurrentBatchStart(0)
     setCurrentCardIndex(0)
     setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
+    sessionStatsRef.current = { again: 0, hard: 0, good: 0, easy: 0 }
     setReviewedCardIds([])
+    reviewedCardIdsRef.current = []
     setStep('session')
     setStarting(false)
   }
@@ -817,13 +817,20 @@ export function CustomStudyView({ user, onBack, autoResumeFromLog = false, onAut
       examDate: examDate,
     })
 
+    // Update refs immediately (these are synchronous, unlike React state)
+    const ratingKey = ['', 'again', 'hard', 'good', 'easy'][rating]
+    sessionStatsRef.current = {
+      ...sessionStatsRef.current,
+      [ratingKey]: (sessionStatsRef.current[ratingKey] || 0) + 1,
+    }
+    if (!reviewedCardIdsRef.current.includes(currentCard.id)) {
+      reviewedCardIdsRef.current = [...reviewedCardIdsRef.current, currentCard.id]
+    }
+
     if (error) {
       // Recording review failed
     } else if (updatedCard) {
-      const nextReviewedCardIds = reviewedCardIds.includes(currentCard.id)
-        ? reviewedCardIds
-        : [...reviewedCardIds, currentCard.id]
-      setReviewedCardIds(nextReviewedCardIds)
+      setReviewedCardIds([...reviewedCardIdsRef.current])
       const shouldRequeue = sessionMode === 'review' && (rating === RATING.AGAIN || rating === RATING.HARD)
       if (shouldRequeue) {
         setAllCards(prev => [...prev, { ...currentCard, ...updatedCard }])
@@ -832,19 +839,11 @@ export function CustomStudyView({ user, onBack, autoResumeFromLog = false, onAut
       }
     }
 
-    // Update stats
-    const ratingKey = ['', 'again', 'hard', 'good', 'easy'][rating]
-    setSessionStats(prev => ({ ...prev, [ratingKey]: prev[ratingKey] + 1 }))
+    // Update React state for UI rendering
+    setSessionStats({ ...sessionStatsRef.current })
 
     if (sessionLogId && !sessionLogClosedRef.current) {
-      const projectedStats = {
-        ...sessionStats,
-        [ratingKey]: Number(sessionStats?.[ratingKey] || 0) + 1,
-      }
-      const projectedCovered = reviewedCardIds.includes(currentCard.id)
-        ? reviewedCardIds
-        : [...reviewedCardIds, currentCard.id]
-      updateStudySessionLog(sessionLogId, getStatsSnapshot(projectedStats, projectedCovered)).catch((err) => {
+      updateStudySessionLog(sessionLogId, getStatsSnapshot(sessionStatsRef.current, reviewedCardIdsRef.current)).catch((err) => {
         // Session log update failed - non-critical
       })
     }
@@ -861,16 +860,10 @@ export function CustomStudyView({ user, onBack, autoResumeFromLog = false, onAut
         }
         if (sessionLogId && !sessionLogClosedRef.current) {
           sessionLogClosedRef.current = true
-          const projectedStats = {
-            ...sessionStats,
-            [ratingKey]: Number(sessionStats?.[ratingKey] || 0) + 1,
-          }
-          const projectedCovered = reviewedCardIds.includes(currentCard.id)
-            ? reviewedCardIds
-            : [...reviewedCardIds, currentCard.id]
+          // Use refs directly as they have the most up-to-date values
           await closeStudySessionLog(sessionLogId, {
             status: 'completed',
-            stats: getStatsSnapshot(projectedStats, projectedCovered),
+            stats: getStatsSnapshot(sessionStatsRef.current, reviewedCardIdsRef.current),
           })
         }
         setStep('complete')
@@ -890,16 +883,10 @@ export function CustomStudyView({ user, onBack, autoResumeFromLog = false, onAut
         }
         if (sessionLogId && !sessionLogClosedRef.current) {
           sessionLogClosedRef.current = true
-          const projectedStats = {
-            ...sessionStats,
-            [ratingKey]: Number(sessionStats?.[ratingKey] || 0) + 1,
-          }
-          const projectedCovered = reviewedCardIds.includes(currentCard.id)
-            ? reviewedCardIds
-            : [...reviewedCardIds, currentCard.id]
+          // Use refs directly as they have the most up-to-date values
           await closeStudySessionLog(sessionLogId, {
             status: 'completed',
-            stats: getStatsSnapshot(projectedStats, projectedCovered),
+            stats: getStatsSnapshot(sessionStatsRef.current, reviewedCardIdsRef.current),
           })
         }
         setStep('complete')
@@ -1032,7 +1019,9 @@ export function CustomStudyView({ user, onBack, autoResumeFromLog = false, onAut
     setCurrentCardIndex(0)
     setIsFlipped(false)
     setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
+    sessionStatsRef.current = { again: 0, hard: 0, good: 0, easy: 0 }
     setReviewedCardIds([])
+    reviewedCardIdsRef.current = []
     setReviewStartTime(null)
     setStep('filter')
   }

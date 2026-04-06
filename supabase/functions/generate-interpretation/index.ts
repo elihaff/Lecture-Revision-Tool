@@ -6,6 +6,46 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+function sanitizeContextText(value: unknown, maxLen: number): string {
+  const text = String(value ?? '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!text) return ''
+  return text.slice(0, maxLen)
+}
+
+function buildContextInfo(context: any): string {
+  if (!context || typeof context !== 'object') return ''
+
+  const sectionTitle = sanitizeContextText(context.sectionTitle, 140)
+  const pointText = sanitizeContextText(context.pointText, 320)
+  const sectionPoints = Array.isArray(context.sectionPoints)
+    ? context.sectionPoints
+        .map((point: unknown) => sanitizeContextText(point, 220))
+        .filter(Boolean)
+        .slice(0, 12)
+    : []
+
+  if (!sectionTitle && !pointText && sectionPoints.length === 0) return ''
+
+  let contextInfo = '\n\nIMPORTANT CONTEXT FROM LECTURE NOTES:\n'
+  if (sectionTitle) {
+    contextInfo += `Section: ${sectionTitle}\n`
+  }
+  if (pointText) {
+    contextInfo += `Related bullet point: ${pointText}\n`
+  }
+  if (sectionPoints.length > 0) {
+    contextInfo += '\nBullet points in this section:\n'
+    sectionPoints.forEach((point) => {
+      contextInfo += `- ${point}\n`
+    })
+  }
+  contextInfo += '\nUse this context to ensure your interpretation is accurate and matches the lecture content. The bullet point text should be treated as the primary source of truth.'
+  return contextInfo
+}
+
 serve(async (req) => {
   // Handle CORS
   if (req.method === 'OPTIONS') {
@@ -43,15 +83,29 @@ serve(async (req) => {
       throw new Error('Invalid or expired token')
     }
 
-    const { image_base64, media_type } = await req.json()
+    const { image_base64, media_type, context } = await req.json()
 
     if (!image_base64) {
       throw new Error('image_base64 is required')
+    }
+    const imageBase64 = String(image_base64)
+    const estimatedImageBytes = Math.ceil((imageBase64.length * 3) / 4)
+    const maxImageBytes = 2_200_000
+    if (estimatedImageBytes > maxImageBytes) {
+      return new Response(
+        JSON.stringify({ error: 'Image payload too large for interpretation generation. Please crop the image tighter or use a lower-resolution image.' }),
+        {
+          status: 413,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        }
+      )
     }
 
     // Default to jpeg if not specified, but use provided media type
     const imageMediaType = media_type || 'image/jpeg'
     console.log('Using media type:', imageMediaType)
+
+    const contextInfo = buildContextInfo(context)
 
     // Call Anthropic API with vision
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -72,12 +126,12 @@ serve(async (req) => {
               source: {
                 type: 'base64',
                 media_type: imageMediaType,
-                data: image_base64
+                data: imageBase64
               }
             },
             {
               type: 'text',
-              text: `You are a medical education expert. Analyze this medical image and create an interpretation question and answer for flashcard study.
+              text: `You are a medical education expert. Analyze this medical image and create an interpretation question and answer for flashcard study.${contextInfo}
 
 Generate:
 1. A concise clinical question about what abnormality or finding is shown (e.g., "What abnormality is shown in this X-ray?")
@@ -92,7 +146,7 @@ Format your response EXACTLY as JSON:
   "answer": "<b>Diagnosis</b><br><br>Key features and clinical details"
 }
 
-Keep the answer concise and focused on the most important clinical information. Use proper HTML tags (<b>, <br>, etc.) for formatting.`
+Keep the answer concise and focused on the most important clinical information. Use proper HTML tags (<b>, <br>, etc.) for formatting.${contextInfo ? ' Base your answer primarily on the provided lecture context to ensure accuracy.' : ''}`
             }
           ]
         }]
@@ -102,7 +156,7 @@ Keep the answer concise and focused on the most important clinical information. 
     if (!response.ok) {
       const error = await response.text()
       console.error('Anthropic API error:', error)
-      throw new Error('Failed to generate interpretation')
+      throw new Error(`Failed to generate interpretation (${response.status})`)
     }
 
     const data = await response.json()

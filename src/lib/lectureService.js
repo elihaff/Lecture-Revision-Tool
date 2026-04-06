@@ -177,6 +177,7 @@ export async function uploadAndProcessLecture(file, lectureId, userId, onProgres
     // Call the Edge Function to process the PDF
     if (onProgress) onProgress({ stage: 'processing', progress: 0 })
 
+    await supabase.auth.refreshSession()
     const { data: sessionData } = await supabase.auth.getSession()
     const accessToken = sessionData?.session?.access_token
 
@@ -185,6 +186,7 @@ export async function uploadAndProcessLecture(file, lectureId, userId, onProgres
     }
 
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
     const functionUrl = `${supabaseUrl}/functions/v1/process-lecture`
 
     const response = await fetch(functionUrl, {
@@ -192,6 +194,7 @@ export async function uploadAndProcessLecture(file, lectureId, userId, onProgres
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${accessToken}`,
+        'apikey': anonKey,
       },
       body: JSON.stringify({
         lecture_id: lectureId,

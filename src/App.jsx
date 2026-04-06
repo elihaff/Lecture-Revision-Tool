@@ -53,22 +53,21 @@ function App() {
   const handleResumeFromSessionLog = async (row) => {
     if (!row || !row.source_type) return
     if (row.source_type === 'global') {
-      const saved = loadPersistedSession({ userId: user.id, mode: 'review-global', scope: 'global' })
-      if (!saved || saved.sessionComplete) return
+      // Always route into the session view from Resume.
+      // If persisted state exists, auto-resume uses it; otherwise the view falls back safely.
+      loadPersistedSession({ userId: user.id, mode: 'review-global', scope: 'global' })
       setResumeTargetView('review')
       setCurrentView('review')
       return
     }
     if (row.source_type === 'custom') {
-      const saved = loadPersistedSession({ userId: user.id, mode: 'custom-study', scope: 'custom-study' })
-      if (!saved || saved.sessionComplete) return
+      loadPersistedSession({ userId: user.id, mode: 'custom-study', scope: 'custom-study' })
       setResumeTargetView('custom-study')
       setCurrentView('custom-study')
       return
     }
     if (row.source_type === 'lecture' && row.lecture_id) {
-      const saved = loadPersistedSession({ userId: user.id, mode: 'learn-lecture', scope: `lecture:${row.lecture_id}` })
-      if (!saved || saved.sessionComplete) return
+      loadPersistedSession({ userId: user.id, mode: 'learn-lecture', scope: `lecture:${row.lecture_id}` })
       const { data: lecture, error: lectureError } = await supabase
         .from('lectures')
         .select('id, title, module_id')
@@ -138,7 +137,7 @@ function App() {
                 <span className="font-semibold text-primary">
                   Eli's Revision Tool
                 </span>
-                <span className="ml-2 text-xs text-secondary">v5.85</span>
+                <span className="ml-2 text-xs text-secondary">v6.51</span>
               </div>
             </button>
 

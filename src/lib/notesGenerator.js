@@ -15,14 +15,13 @@ async function fileToBase64(file) {
   })
 }
 
-async function callNotesFunction({
+async function callEdgeFunction({
+  endpoint,
   supabaseUrl,
   accessToken,
   anonKey,
   body
 }) {
-  const endpoint = 'generate-notes'
-
   const response = await fetch(`${supabaseUrl}/functions/v1/${endpoint}`, {
     method: 'POST',
     headers: {
@@ -36,14 +35,29 @@ async function callNotesFunction({
   const result = await response.json().catch(() => ({}))
   if (!response.ok) {
     const message = result?.error || `HTTP ${response.status}`
-    throw new Error(`Notes generation failed: ${message}`)
+    throw new Error(`${endpoint} failed: ${message}`)
   }
 
   if (!result.success) {
-    throw new Error(`Notes generation failed: ${result.error || 'Unknown error'}`)
+    throw new Error(`${endpoint} failed: ${result.error || 'Unknown error'}`)
   }
 
   return result
+}
+
+async function callNotesFunction(params) {
+  return callEdgeFunction({ ...params, endpoint: 'generate-notes' })
+}
+
+async function getFreshAccessToken() {
+  await supabase.auth.refreshSession()
+  const { data: sessionData } = await supabase.auth.getSession()
+  return sessionData?.session?.access_token || null
+}
+
+function isAuthError(error) {
+  const text = String(error?.message || '').toLowerCase()
+  return text.includes('401') || text.includes('unauthorized') || text.includes('jwt')
 }
 
 /**
@@ -63,9 +77,7 @@ export async function generateNotesFromPdf(pdfFile, userLearningObjectives = '',
     if (onProgress) onProgress({ stage: 'reading', message: 'Reading PDF file...' })
     const base64Data = await fileToBase64(pdfFile)
 
-    // Get user session for auth
-    const { data: sessionData } = await supabase.auth.getSession()
-    const accessToken = sessionData?.session?.access_token
+    const accessToken = await getFreshAccessToken()
 
     if (!accessToken) {
       throw new Error('Please sign in to generate notes')
@@ -108,19 +120,13 @@ export async function generateNotesFromPdf(pdfFile, userLearningObjectives = '',
  * @param {function} onProgress - Progress callback
  * @returns {Promise<{success: boolean, error?: string}>}
  */
-export async function generateAndSaveNotes(pdfFile, lectureId, userLearningObjectives = '', onProgress) {
+export async function generateAndSaveNotes(pdfFile, lectureId, userLearningObjectives = '', onProgress, options = {}) {
   try {
     if (!pdfFile) {
       throw new Error('No PDF file provided')
     }
 
-    // Convert PDF to base64
-    if (onProgress) onProgress({ stage: 'reading', message: 'Reading PDF file...' })
-    const base64Data = await fileToBase64(pdfFile)
-
-    // Get user session for auth
-    const { data: sessionData } = await supabase.auth.getSession()
-    const accessToken = sessionData?.session?.access_token
+    const accessToken = await getFreshAccessToken()
 
     if (!accessToken) {
       throw new Error('Please sign in to generate notes')
@@ -131,6 +137,57 @@ export async function generateAndSaveNotes(pdfFile, lectureId, userLearningObjec
 
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
     const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+    const uploadedFilePath = typeof options?.filePath === 'string' && options.filePath.trim()
+      ? options.filePath.trim()
+      : null
+
+    // Prefer storage-path processing (more reliable on mobile Safari/iPad).
+    // If a file path is provided, do not silently fall back to base64.
+    if (uploadedFilePath) {
+      try {
+        await callEdgeFunction({
+          endpoint: 'process-lecture',
+          supabaseUrl,
+          accessToken,
+          anonKey,
+          body: {
+            lecture_id: lectureId,
+            file_path: uploadedFilePath,
+            user_learning_objectives: userLearningObjectives,
+          }
+        })
+      } catch (error) {
+        if (!isAuthError(error)) throw error
+
+        // Retry once with a freshly refreshed session token.
+        const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession()
+        const refreshedToken = refreshData?.session?.access_token
+        if (refreshError || !refreshedToken) {
+          throw error
+        }
+
+        await callEdgeFunction({
+          endpoint: 'process-lecture',
+          supabaseUrl,
+          accessToken: refreshedToken,
+          anonKey,
+          body: {
+            lecture_id: lectureId,
+            file_path: uploadedFilePath,
+            user_learning_objectives: userLearningObjectives,
+          }
+        })
+      }
+
+      if (onProgress) onProgress({ stage: 'complete', message: 'Notes saved!' })
+      return { success: true }
+    }
+
+    // Fallback path: inline base64 payload
+    if (onProgress) onProgress({ stage: 'reading', message: 'Reading PDF file...' })
+    const base64Data = await fileToBase64(pdfFile)
+
     await callNotesFunction({
       supabaseUrl,
       accessToken,

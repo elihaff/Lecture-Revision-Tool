@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Save, Plus, Upload, Download, Trash2, Edit2, Check, X, Loader2, EyeOff, MessageSquare, ImageIcon, Type, Layers } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { sanitizeHtml } from '../lib/htmlSanitizer'
 import { getCardDisplayTags, getFlashcardsByLecture, syncLectureFlashcards } from '../lib/flashcardService'
+import { generateFlashcardsFromNotes } from '../lib/flashcardsGenerator'
 import { useToast } from './Toast'
 
 function parseCsvLine(line) {
@@ -59,6 +60,12 @@ function normalizeTagArray(value) {
   if (!Array.isArray(value)) return []
   const tags = value.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean)
   return [...new Set(tags)].slice(0, 3)
+}
+
+function normalizeEditableTagList(value) {
+  if (!Array.isArray(value)) return []
+  const tags = value.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean)
+  return [...new Set(tags)]
 }
 
 function parseTagInput(input) {
@@ -118,11 +125,42 @@ function getCardExportTags(card) {
   return [...new Set([typeTag, ...legacyTags, ...contentTags, ...customUserTags, ...aiSuggestionTags])]
 }
 
+function getEditableTopicTags(card) {
+  const blocked = new Set(['text', 'image occlusion', 'interpretation'])
+  const merged = [
+    ...normalizeExportTagArray(card?.contentTags || card?.content_tags),
+    ...normalizeExportTagArray(card?.customUserTags || card?.custom_user_tags),
+    ...normalizeExportTagArray(card?.tags),
+    ...extractAiSuggestionTags(card?.aiTagSuggestions || card?.ai_tag_suggestions)
+  ]
+  return [...new Set(merged)].filter((tag) => !blocked.has(tag))
+}
+
 function stripHtml(value) {
   return String(value || '')
     .replace(/<[^>]+>/g, ' ')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)/g, '$1')
+    .replace(/(?<!_)_(?!_)([^_]+)(?<!_)_(?!_)/g, '$1')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function createEmptyCardDraft() {
+  return {
+    front: '',
+    back: '',
+    tags: '',
+    sectionIndex: null,
+    sourcePointIndex: null,
+    sourcePointText: '',
+    sectionTitle: '',
+  }
+}
+
+function getCoverageKey(sectionIndex, pointIndex) {
+  return `${sectionIndex}:${pointIndex}`
 }
 
 function mapDbCardToViewCard(card = {}) {
@@ -209,14 +247,120 @@ async function resolveImageSourceToDataUrl(src) {
   })
 }
 
+function estimateBase64Bytes(base64) {
+  if (!base64 || typeof base64 !== 'string') return 0
+  return Math.ceil((base64.length * 3) / 4)
+}
+
+async function optimizeInterpretationImageDataUrl(dataUrl, options = {}) {
+  const {
+    maxBytes = 1_800_000,
+    maxDimension = 1400,
+    minQuality = 0.52,
+  } = options
+
+  if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
+    return { dataUrl, mediaType: 'image/jpeg', bytes: 0, optimized: false }
+  }
+
+  const [prefix = '', originalBase64 = ''] = dataUrl.split(',')
+  const originalMediaMatch = prefix.match(/^data:(image\/[a-z0-9.+-]+);base64$/i)
+  const originalMediaType = originalMediaMatch ? originalMediaMatch[1].toLowerCase() : 'image/jpeg'
+  const originalBytes = estimateBase64Bytes(originalBase64)
+
+  if (originalBytes > 0 && originalBytes <= maxBytes) {
+    return { dataUrl, mediaType: originalMediaType, bytes: originalBytes, optimized: false }
+  }
+
+  const image = await new Promise((resolve, reject) => {
+    const img = new window.Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Failed to decode image for optimization'))
+    img.src = dataUrl
+  })
+
+  const naturalWidth = Number(image.naturalWidth || image.width || 0)
+  const naturalHeight = Number(image.naturalHeight || image.height || 0)
+  if (!naturalWidth || !naturalHeight) {
+    throw new Error('Invalid image dimensions')
+  }
+
+  const scale = Math.min(1, maxDimension / Math.max(naturalWidth, naturalHeight))
+  const baseWidth = Math.max(1, Math.round(naturalWidth * scale))
+  const baseHeight = Math.max(1, Math.round(naturalHeight * scale))
+
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Could not initialize canvas for image optimization')
+
+  const widthSteps = [1, 0.9, 0.8, 0.72]
+  const qualitySteps = [0.82, 0.74, 0.66, 0.58, minQuality]
+  let bestDataUrl = null
+  let bestBytes = Number.POSITIVE_INFINITY
+
+  for (const widthStep of widthSteps) {
+    const outWidth = Math.max(1, Math.round(baseWidth * widthStep))
+    const outHeight = Math.max(1, Math.round(baseHeight * widthStep))
+    canvas.width = outWidth
+    canvas.height = outHeight
+    ctx.clearRect(0, 0, outWidth, outHeight)
+    ctx.drawImage(image, 0, 0, outWidth, outHeight)
+
+    for (const quality of qualitySteps) {
+      const candidate = canvas.toDataURL('image/jpeg', quality)
+      const candidateBase64 = candidate.split(',')[1] || ''
+      const candidateBytes = estimateBase64Bytes(candidateBase64)
+
+      if (candidateBytes < bestBytes) {
+        bestDataUrl = candidate
+        bestBytes = candidateBytes
+      }
+      if (candidateBytes <= maxBytes) {
+        return { dataUrl: candidate, mediaType: 'image/jpeg', bytes: candidateBytes, optimized: true }
+      }
+    }
+  }
+
+  return {
+    dataUrl: bestDataUrl || dataUrl,
+    mediaType: bestDataUrl ? 'image/jpeg' : originalMediaType,
+    bytes: Number.isFinite(bestBytes) ? bestBytes : originalBytes,
+    optimized: !!bestDataUrl,
+  }
+}
+
+function sanitizeInterpretationContextText(value, maxLen = 280) {
+  if (typeof value !== 'string') return ''
+  const cleaned = value.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!cleaned) return ''
+  return cleaned.slice(0, maxLen)
+}
+
+function buildInterpretationContext(imageData) {
+  const sectionTitle = sanitizeInterpretationContextText(imageData?.sectionTitle || '', 140)
+  const pointText = sanitizeInterpretationContextText(imageData?.pointText || '', 320)
+  const sectionPointsRaw = Array.isArray(imageData?.sectionPoints) ? imageData.sectionPoints : []
+  const sectionPoints = sectionPointsRaw
+    .map((point) => sanitizeInterpretationContextText(String(point || ''), 220))
+    .filter(Boolean)
+    .slice(0, 12)
+
+  if (!sectionTitle && !pointText && sectionPoints.length === 0) return null
+  return { sectionTitle: sectionTitle || null, pointText: pointText || null, sectionPoints }
+}
+
 export function FlashcardsView({ lecture, module, onBack, onSaved }) {
   const toast = useToast()
   const [flashcards, setFlashcards] = useState([])
   const [hasChanges, setHasChanges] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveStatus, setSaveStatus] = useState('saved') // 'saved' | 'saving' | 'error'
+  const [loadingFlashcards, setLoadingFlashcards] = useState(true)
   const [showAddCard, setShowAddCard] = useState(false)
-  const [newCard, setNewCard] = useState({ front: '', back: '', tags: '' })
+  const [newCard, setNewCard] = useState(createEmptyCardDraft)
+  const [showSourceCoverage, setShowSourceCoverage] = useState(false)
+  const [coverageFilter, setCoverageFilter] = useState('all')
+  const [creatingFromCoverageKey, setCreatingFromCoverageKey] = useState(null)
   const [expandedCards, setExpandedCards] = useState({})
   const [editingCard, setEditingCard] = useState(null) // {index, front, back, tags, contentTags}
   const [newTagInput, setNewTagInput] = useState('') // For adding new tags in edit mode
@@ -260,6 +404,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
   const lastDebouncedPayloadRef = useRef(null)
   const isMountedRef = useRef(true)
   const exitingRef = useRef(false)
+  const cardRowRefs = useRef({})
 
   const essentialSymbols = [
     { symbol: 'α' }, { symbol: 'β' }, { symbol: 'Δ' }, { symbol: 'μ' },
@@ -321,12 +466,32 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
         const pendingImages = []
         const paths = []
 
+        // Helper to get point text from notes structure
+        const getPointText = (sectionIdx, pointIdx) => {
+          const section = rawNotes.notes?.[sectionIdx]
+          if (!section?.points) return null
+          const point = section.points[pointIdx]
+          if (!point) return null
+          // Strip HTML tags to get plain text
+          return String(point).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+        }
+
+        // Get all bullet points from a section (for section-level images)
+        const getSectionPoints = (sectionIdx) => {
+          const section = rawNotes.notes?.[sectionIdx]
+          if (!section?.points || !Array.isArray(section.points)) return []
+          return section.points
+            .map((point) => String(point).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim())
+            .filter(Boolean)
+        }
+
         if (rawNotes._pointImages) {
           Object.entries(rawNotes._pointImages).forEach(([key, imageData]) => {
             const [sectionIdx, pointIdx] = key.split('-').map(Number)
             const safeSectionIdx = Number.isNaN(sectionIdx) ? 0 : sectionIdx
             const safePointIdx = Number.isNaN(pointIdx) ? 0 : pointIdx
             const pointImages = normalizePointImageEntry(imageData)
+            const pointText = getPointText(safeSectionIdx, safePointIdx)
             pointImages.forEach((pointImage, pointImageIndex) => {
               if (pointImage?.storagePath) paths.push(pointImage.storagePath)
               pendingImages.push({
@@ -335,6 +500,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                 sectionKey: `section-${safeSectionIdx}`,
                 sectionTitle: getSectionTitle(safeSectionIdx),
                 pointIndex: safePointIdx,
+                pointText: pointText,
                 label: `Section ${safeSectionIdx + 1}, Point ${safePointIdx + 1}${pointImages.length > 1 ? ` (Image ${pointImageIndex + 1})` : ''}`,
                 image: pointImage
               })
@@ -346,16 +512,22 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
           Object.entries(rawNotes._sectionImages).forEach(([sectionIndexRaw, imageData]) => {
             const sectionIndex = Number(sectionIndexRaw)
             if (Number.isNaN(sectionIndex)) return
-            const sectionImage = Array.isArray(imageData) ? imageData[0] : imageData
-            if (!sectionImage) return
-            if (sectionImage.storagePath) paths.push(sectionImage.storagePath)
-            pendingImages.push({
-              type: 'section-image',
-              sectionIndex,
-              sectionKey: `section-${sectionIndex}`,
-              sectionTitle: getSectionTitle(sectionIndex),
-              label: `Section ${sectionIndex + 1}`,
-              image: sectionImage
+            const sectionImages = normalizePointImageEntry(imageData)
+            if (sectionImages.length === 0) return
+            // For section images, gather all bullet points from the section
+            // This provides context for interpretation cards since section images apply to all points
+            const sectionPoints = getSectionPoints(sectionIndex)
+            sectionImages.forEach((sectionImage, sectionImageIndex) => {
+              if (sectionImage?.storagePath) paths.push(sectionImage.storagePath)
+              pendingImages.push({
+                type: 'section-image',
+                sectionIndex,
+                sectionKey: `section-${sectionIndex}`,
+                sectionTitle: getSectionTitle(sectionIndex),
+                sectionPoints, // All bullet points in this section
+                label: `Section ${sectionIndex + 1}${sectionImages.length > 1 ? ` (Image ${sectionImageIndex + 1})` : ''}`,
+                image: sectionImage
+              })
             })
           })
         }
@@ -395,6 +567,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
             if (section.points) {
               section.points.forEach((point, pIdx) => {
                 const pointHtml = String(point)
+                const pointText = pointHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
                 const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/g
                 let match
                 while ((match = imgRegex.exec(pointHtml)) !== null) {
@@ -404,6 +577,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                     sectionKey: `section-${sIdx}`,
                     sectionTitle: getSectionTitle(sIdx),
                     pointIndex: pIdx,
+                    pointText: pointText,
                     image: { dataUrl: match[1] },
                     label: pointHtml.replace(/<[^>]+>/g, '').substring(0, 50)
                   })
@@ -672,6 +846,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
     setFlashcards([])
     setHasChanges(false)
     setSaveStatus('saving')
+    setLoadingFlashcards(true)
     imageTagBackfillRef.current = null
 
     ;(async () => {
@@ -680,6 +855,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
         // Failed to fetch flashcards
         if (!isCancelled) {
           setSaveStatus('error')
+          setLoadingFlashcards(false)
         }
         return
       }
@@ -702,6 +878,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
         setFlashcards(inferCardsSectionMetadata(mappedCards, lecture.notes))
         setHasChanges(false)
         setSaveStatus('saved')
+        setLoadingFlashcards(false)
       }
     })()
 
@@ -727,6 +904,12 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
   const suggestTopicTagsForCards = async (cardsToTag) => {
     if (!Array.isArray(cardsToTag) || cardsToTag.length === 0) return {}
     try {
+      await supabase.auth.refreshSession()
+      const { data: sessionData } = await supabase.auth.getSession()
+      const accessToken = sessionData?.session?.access_token
+      if (!accessToken) return {}
+      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+
       const payloadCards = cardsToTag
         .map((card, index) => buildTagInputFromCard(card, index))
         .filter((card) => card.front && card.back)
@@ -734,7 +917,11 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
       if (payloadCards.length === 0) return {}
 
       const { data, error } = await supabase.functions.invoke('suggest-flashcard-tags', {
-        body: { cards: payloadCards }
+        body: { cards: payloadCards },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          apikey: anonKey,
+        },
       })
 
       if (error) throw error
@@ -948,29 +1135,37 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
 
   const addCard = async () => {
     if (!newCard.front.trim() || !newCard.back.trim()) return
+    const sectionIndex = Number.isInteger(newCard.sectionIndex) ? newCard.sectionIndex : null
+    const sourcePointIndex = Number.isInteger(newCard.sourcePointIndex) ? newCard.sourcePointIndex : null
+    const sourcePointText = String(newCard.sourcePointText || '').trim()
+    const sectionTitle = String(newCard.sectionTitle || '').trim()
     const updatedFlashcards = [
       ...flashcards,
       {
         front: newCard.front.trim(),
         back: newCard.back.trim(),
         tags: (newCard.tags || '').trim(),
+        ...(sectionIndex !== null ? {
+          sectionIndex,
+          sectionKey: `section-${sectionIndex}`,
+          sectionTitle: sectionTitle || getSectionTitle(sectionIndex),
+        } : {}),
+        ...(sourcePointIndex !== null ? {
+          sourcePointIndex,
+          sourcePointText,
+        } : {}),
       },
     ]
 
     setFlashcards(updatedFlashcards)
-    setNewCard({ front: '', back: '', tags: '' })
+    setNewCard(createEmptyCardDraft())
     setShowAddCard(false)
     await persistFlashcards(updatedFlashcards, { immediate: true, errorPrefix: 'Failed to save flashcard' })
   }
 
   const startEditCard = (index) => {
     const card = flashcards[index]
-    let initialContentTags = []
-    if (Array.isArray(card.contentTags)) {
-      initialContentTags = [...card.contentTags]
-    } else if (card.aiTagSuggestions?.contentTags?.length > 0) {
-      initialContentTags = [...card.aiTagSuggestions.contentTags]
-    }
+    const initialContentTags = getEditableTopicTags(card)
 
     // Check if this is an occlusion card
     if (card.occlusionData) {
@@ -1001,24 +1196,45 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
   const saveEditCard = async () => {
     if (!editingCard) return
     const { index, front, back, tags, contentTags } = editingCard
+    const normalizedContentTags = normalizeEditableTagList(contentTags)
+    const legacyTagsString = normalizedContentTags.join(', ')
     const updatedFlashcards = flashcards.map((card, i) => {
       if (i !== index) return card
       const nextBack = back.trim()
       const existingAnswerImages = Array.isArray(card.answerImages) ? card.answerImages : []
       const syncedAnswerImages = existingAnswerImages.filter((img) => nextBack.includes(img.dataUrl))
 
-      // Mark AI suggestions as accepted if we're saving tags
-      const updatedAiTagSuggestions = card.aiTagSuggestions?.status === 'pending'
-        ? { ...card.aiTagSuggestions, status: 'accepted', acceptedAt: new Date().toISOString() }
-        : card.aiTagSuggestions
+      // Sync AI suggestions with edited tags to prevent deleted tags from reappearing
+      // and ensure newly added tags don't get lost. Clear both contentTags and content_tags
+      // since getSuggestedTagsList merges both formats.
+      let updatedAiTagSuggestions = card.aiTagSuggestions
+      if (updatedAiTagSuggestions) {
+        const existingTags = [
+          ...(Array.isArray(updatedAiTagSuggestions.contentTags) ? updatedAiTagSuggestions.contentTags : []),
+          ...(Array.isArray(updatedAiTagSuggestions.content_tags) ? updatedAiTagSuggestions.content_tags : [])
+        ]
+        const syncedSuggestionTags = existingTags.filter((tag) => normalizedContentTags.includes(tag))
+        updatedAiTagSuggestions = {
+          ...updatedAiTagSuggestions,
+          contentTags: syncedSuggestionTags,
+          content_tags: syncedSuggestionTags,
+          status: 'accepted',
+          acceptedAt: new Date().toISOString()
+        }
+      }
 
       return {
         ...card,
         front: front.trim(),
         back: nextBack,
-        tags: tags.trim(),
-        contentTags: Array.isArray(contentTags) ? contentTags : [],
+        tags: legacyTagsString || tags.trim(),
+        // Update both camelCase and snake_case versions since getCardFilterTags checks snake_case first
+        contentTags: normalizedContentTags,
+        content_tags: normalizedContentTags,
+        customUserTags: normalizedContentTags,
+        custom_user_tags: normalizedContentTags,
         aiTagSuggestions: updatedAiTagSuggestions,
+        ai_tag_suggestions: updatedAiTagSuggestions,
         answerImages: syncedAnswerImages.length > 0 ? syncedAnswerImages : undefined
       }
     })
@@ -1132,14 +1348,20 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
     const { index, originalImage, label, questionText, contentTags } = editingOcclusionCard
 
     const maskedDataUrl = await createMaskedImage(originalImage, label)
+    const normalizedTags = Array.isArray(contentTags) ? contentTags : []
 
     const updatedCard = {
       ...flashcards[index],
       front: `<img src="${maskedDataUrl}" style="max-width:400px;"><br><br>${questionText}`,
       back: `<b>${label.text}</b>`,
-      contentTags: Array.isArray(contentTags) ? contentTags : [],
-      customUserTags: Array.isArray(contentTags) ? contentTags : [],
+      // Update both camelCase and snake_case versions since getCardFilterTags checks snake_case first
+      contentTags: normalizedTags,
+      content_tags: normalizedTags,
+      customUserTags: normalizedTags,
+      custom_user_tags: normalizedTags,
+      // Clear both camelCase and snake_case AI suggestions
       aiTagSuggestions: null,
+      ai_tag_suggestions: null,
       occlusionData: {
         originalImage,
         label: { ...label },
@@ -1150,6 +1372,7 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
     updated[index] = updatedCard
     setFlashcards(updated)
     setEditingOcclusionCard(null)
+    setOcclusionModalOpen(false)
     await persistFlashcards(updated, { immediate: true, errorPrefix: 'Failed to save occlusion card' })
   }
 
@@ -1163,6 +1386,8 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
     setInterpretationStep('generating')
 
     try {
+      const debugId = `interp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+      await supabase.auth.refreshSession()
       const { data: sessionData } = await supabase.auth.getSession()
       const accessToken = sessionData?.session?.access_token
 
@@ -1171,21 +1396,55 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
       }
 
       // Extract media type from data URL (e.g., "data:image/png;base64,...")
-      const dataUrl = await resolveImageSourceToDataUrl(imageData.image.dataUrl)
-      if (!dataUrl) {
+      const sourceDataUrl = await resolveImageSourceToDataUrl(imageData.image.dataUrl)
+      if (!sourceDataUrl) {
         throw new Error('Could not load selected image data')
       }
-      const mediaTypeMatch = dataUrl.match(/^data:(image\/[a-z]+);base64,/)
-      const mediaType = mediaTypeMatch ? mediaTypeMatch[1] : 'image/jpeg'
-      const base64Data = dataUrl.split(',')[1]
+      const optimizedImage = await optimizeInterpretationImageDataUrl(sourceDataUrl, {
+        maxBytes: 1_800_000,
+        maxDimension: 1400,
+      })
+      const mediaType = optimizedImage.mediaType || 'image/jpeg'
+      const base64Data = String(optimizedImage.dataUrl || '').split(',')[1] || ''
+      const estimatedBytes = estimateBase64Bytes(base64Data)
+      if (!base64Data) {
+        throw new Error('Could not prepare selected image for interpretation')
+      }
+      if (estimatedBytes > 2_100_000) {
+        throw new Error('Selected image is too large. Please crop tighter or use a smaller image.')
+      }
+      console.info('[interpretation]', debugId, 'prepared payload', {
+        mediaType,
+        estimatedBytes,
+        optimized: !!optimizedImage.optimized,
+      })
+
+      // Keep trace context concise to avoid oversized requests.
+      const context = buildInterpretationContext(imageData)
 
       // Primary path: Supabase client invoke
-      const { data: result, error } = await supabase.functions.invoke('generate-interpretation', {
-        body: {
-          image_base64: base64Data,
-          media_type: mediaType
-        }
-      })
+      let result = null
+      let error = null
+      let invokeThrownError = null
+      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+      try {
+        const invokeResponse = await supabase.functions.invoke('generate-interpretation', {
+          body: {
+            image_base64: base64Data,
+            media_type: mediaType,
+            context
+          },
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            apikey: anonKey,
+          },
+        })
+        result = invokeResponse?.data || null
+        error = invokeResponse?.error || null
+      } catch (invokeErr) {
+        invokeThrownError = invokeErr
+        console.warn('[interpretation]', debugId, 'invoke threw', invokeErr)
+      }
 
       if (!error && result?.question) {
         // Success - use result
@@ -1197,10 +1456,12 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
         setInterpretationStep('confirm')
         return
       }
+      if (error) {
+        console.warn('[interpretation]', debugId, 'invoke returned error object', error)
+      }
 
       // Fallback path: direct fetch (same pattern used by flashcards generation)
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
       const functionUrl = `${supabaseUrl}/functions/v1/generate-interpretation`
 
       const response = await fetch(functionUrl, {
@@ -1212,17 +1473,77 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
         },
         body: JSON.stringify({
           image_base64: base64Data,
-          media_type: mediaType
+          media_type: mediaType,
+          context
         }),
       })
 
-      const fallbackResult = await response.json().catch(() => ({}))
+      const fallbackRaw = await response.text()
+      let fallbackResult = {}
+      try {
+        fallbackResult = fallbackRaw ? JSON.parse(fallbackRaw) : {}
+      } catch {
+        fallbackResult = {}
+      }
+      console.info('[interpretation]', debugId, 'fallback response', {
+        status: response.status,
+        ok: response.ok,
+        bodyPreview: String(fallbackRaw || '').slice(0, 220),
+      })
 
       if (!response.ok || !fallbackResult?.question) {
+        const fallbackStatusDetail = fallbackRaw
+          ? `Edge Function request failed (${response.status}): ${fallbackRaw.slice(0, 220)}`
+          : `Edge Function request failed (${response.status})`
         const baseError =
           fallbackResult?.error ||
+          fallbackStatusDetail ||
           error?.message ||
-          `Edge Function request failed (${response.status})`
+          invokeThrownError?.message ||
+          (fallbackRaw ? `Edge Function request failed (${response.status}): ${fallbackRaw.slice(0, 220)}` : `Edge Function request failed (${response.status})`)
+        const authErrorText = String(baseError || '').toLowerCase()
+        const isAuthError = response.status === 401
+          || response.status === 403
+          || authErrorText.includes('invalid jwt')
+          || authErrorText.includes('invalid token')
+          || authErrorText.includes('expired token')
+          || authErrorText.includes('unauthorized')
+        if (isAuthError) {
+          await supabase.auth.refreshSession()
+          const { data: retrySessionData } = await supabase.auth.getSession()
+          const retryAccessToken = retrySessionData?.session?.access_token
+          if (retryAccessToken && retryAccessToken !== accessToken) {
+            const retryResponse = await fetch(functionUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${retryAccessToken}`,
+                apikey: anonKey,
+              },
+              body: JSON.stringify({
+                image_base64: base64Data,
+                media_type: mediaType,
+                context
+              }),
+            })
+            const retryRaw = await retryResponse.text()
+            let retryResult = {}
+            try {
+              retryResult = retryRaw ? JSON.parse(retryRaw) : {}
+            } catch {
+              retryResult = {}
+            }
+            if (retryResponse.ok && retryResult?.question) {
+              setInterpretationCard({
+                question: retryResult.question,
+                answer: retryResult.answer,
+                imageDataUrl: imageData.image.dataUrl
+              })
+              setInterpretationStep('confirm')
+              return
+            }
+          }
+        }
         throw new Error(baseError)
       }
 
@@ -1232,8 +1553,10 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
         imageDataUrl: imageData.image.dataUrl
       })
       setInterpretationStep('confirm')
-    } catch {
-      toast.error('Failed to generate interpretation card. Please try again.')
+    } catch (err) {
+      console.error('Interpretation generation failed:', err)
+      const message = err?.message ? `Failed to generate interpretation card: ${err.message}` : 'Failed to generate interpretation card. Please try again.'
+      toast.error(message)
       setInterpretationStep('select')
     } finally {
       setInterpretationProcessing(false)
@@ -1300,6 +1623,112 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
     setAddCardMenuOpen(false)
     setInterpretationModalOpen(true)
     setInterpretationStep('select')
+  }
+
+  const notesCoverageSections = useMemo(() => {
+    const sections = Array.isArray(lecture?.notes?.notes) ? lecture.notes.notes : []
+    return sections.map((section, sectionIndex) => {
+      const points = Array.isArray(section?.points) ? section.points : []
+      const levels = Array.isArray(section?.pointLevels) ? section.pointLevels : []
+      return {
+        sectionIndex,
+        sectionTitle: String(section?.section || `Section ${sectionIndex + 1}`),
+        points: points.map((point, pointIndex) => {
+          const levelRaw = Number(levels[pointIndex] ?? 0)
+          const level = Number.isFinite(levelRaw) ? Math.max(0, Math.floor(levelRaw)) : 0
+          const text = stripHtml(point)
+          return {
+            key: getCoverageKey(sectionIndex, pointIndex),
+            sectionIndex,
+            pointIndex,
+            level,
+            text: text || '(Empty bullet)',
+          }
+        }),
+      }
+    }).filter((section) => section.points.length > 0)
+  }, [lecture?.notes])
+
+  const sourceCoverageByKey = useMemo(() => {
+    const map = {}
+    flashcards.forEach((card, index) => {
+      const sectionIndex = Number.isInteger(card?.sectionIndex) ? card.sectionIndex : null
+      const pointIndex = Number.isInteger(card?.sourcePointIndex) ? card.sourcePointIndex : null
+      if (!Number.isInteger(sectionIndex) || !Number.isInteger(pointIndex)) return
+      const key = getCoverageKey(sectionIndex, pointIndex)
+      if (!map[key]) map[key] = []
+      map[key].push(index)
+    })
+    return map
+  }, [flashcards])
+
+  const coverageSummary = useMemo(() => {
+    const points = notesCoverageSections.flatMap((section) => section.points)
+    const total = points.length
+    const covered = points.filter((point) => (sourceCoverageByKey[point.key] || []).length > 0).length
+    const uncovered = Math.max(0, total - covered)
+    const coveragePct = total > 0 ? ((covered / total) * 100).toFixed(1) : '0.0'
+    return { total, covered, uncovered, coveragePct }
+  }, [notesCoverageSections, sourceCoverageByKey])
+
+  const openAddCardFromCoverage = async (point) => {
+    const coverageKey = getCoverageKey(point.sectionIndex, point.pointIndex)
+    setCreatingFromCoverageKey(coverageKey)
+    let aiQuestion = ''
+    let aiAnswer = ''
+    try {
+      const aiCards = await generateFlashcardsFromNotes({
+        notes: {
+          title: lecture?.title || 'Lecture',
+          notes: [
+            {
+              section: point.sectionTitle || `Section ${point.sectionIndex + 1}`,
+              points: [point.text],
+            },
+          ],
+        },
+        lectureTitle: lecture?.title || 'Lecture',
+        moduleAbbreviation: module?.abbreviation || '',
+      })
+      const first = Array.isArray(aiCards) ? aiCards[0] : null
+      aiQuestion = stripHtml(first?.front || '')
+      aiAnswer = stripHtml(first?.back || '')
+    } catch {
+      // AI question generation fallback handled below.
+    }
+    const fallbackQuestion = `What is the key idea from this point?\n${point.text}`
+    const nextFront = aiQuestion || fallbackQuestion
+    const nextBack = aiAnswer || point.text
+
+    setShowSourceCoverage(false)
+    setShowAddCard(true)
+    setNewCard({
+      ...createEmptyCardDraft(),
+      front: point.text === '(Empty bullet)' ? '' : nextFront,
+      sectionIndex: point.sectionIndex,
+      sourcePointIndex: point.pointIndex,
+      sourcePointText: point.text === '(Empty bullet)' ? '' : point.text,
+      sectionTitle: point.sectionTitle || '',
+      back: point.text === '(Empty bullet)' ? '' : nextBack,
+    })
+    setCreatingFromCoverageKey(null)
+  }
+
+  const openLinkedCardsFromCoverage = (linkedIndices) => {
+    if (!Array.isArray(linkedIndices) || linkedIndices.length === 0) return
+    setShowSourceCoverage(false)
+    setExpandedCards((prev) => {
+      const next = { ...prev }
+      linkedIndices.forEach((index) => { next[index] = true })
+      return next
+    })
+    const firstIndex = linkedIndices[0]
+    window.setTimeout(() => {
+      const row = cardRowRefs.current[firstIndex]
+      if (row && typeof row.scrollIntoView === 'function') {
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }, 40)
   }
 
   const pickerCard = imagePickerCardIndex !== null ? flashcards[imagePickerCardIndex] : null
@@ -1535,11 +1964,16 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
                 placeholder="Tags (optional)"
                 className="w-full bg-white border border-divider rounded-lg px-3 py-2 text-sm"
               />
+              {Number.isInteger(newCard.sectionIndex) && Number.isInteger(newCard.sourcePointIndex) && (
+                <p className="text-xs text-secondary">
+                  Source linked: Section {newCard.sectionIndex + 1}, Bullet {newCard.sourcePointIndex + 1}
+                </p>
+              )}
               <div className="flex gap-2 justify-end">
                 <button
                   onClick={() => {
                     setShowAddCard(false)
-                    setNewCard({ front: '', back: '', tags: '' })
+                    setNewCard(createEmptyCardDraft())
                   }}
                   className="px-3 py-1.5 bg-gray-200 hover:bg-gray-300 text-primary rounded-lg text-sm"
                 >
@@ -1560,46 +1994,59 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
         <div className="bg-surface rounded-xl border border-divider p-4">
           <div className="flex items-center justify-between mb-3">
             <h2 className="font-semibold text-primary">{flashcards.length} Flashcards</h2>
-            <div className="relative">
+            <div className="flex items-center gap-2">
               <button
-                onClick={() => setAddCardMenuOpen((prev) => !prev)}
-                className="p-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
-                title="Add flashcard"
+                onClick={() => setShowSourceCoverage(true)}
+                className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-medium transition-colors"
               >
-                <Plus className="w-4 h-4" />
+                View Source Coverage
               </button>
-              {addCardMenuOpen && (
-                <div className="absolute right-0 mt-2 bg-white border border-divider rounded-lg shadow-lg p-2 flex gap-2 z-20">
-                  <button
-                    onClick={() => {
-                      setShowAddCard(true)
-                      setAddCardMenuOpen(false)
-                    }}
-                    className="p-2 bg-gray-100 hover:bg-gray-200 rounded text-gray-700"
-                    title="Add text flashcard"
-                  >
-                    <Type className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={openInterpretationFromMenu}
-                    className="p-2 bg-teal-50 hover:bg-teal-100 text-teal-700 rounded"
-                    title="Add interpretation flashcard"
-                  >
-                    <MessageSquare className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={openOcclusionFromMenu}
-                    className="p-2 bg-orange-50 hover:bg-orange-100 text-orange-700 rounded"
-                    title="Add image occlusion flashcard"
-                  >
-                    <EyeOff className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
+              <div className="relative">
+                <button
+                  onClick={() => setAddCardMenuOpen((prev) => !prev)}
+                  className="p-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
+                  title="Add flashcard"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+                {addCardMenuOpen && (
+                  <div className="absolute right-0 mt-2 bg-white border border-divider rounded-lg shadow-lg p-2 flex gap-2 z-20">
+                    <button
+                      onClick={() => {
+                        setNewCard(createEmptyCardDraft())
+                        setShowAddCard(true)
+                        setAddCardMenuOpen(false)
+                      }}
+                      className="p-2 bg-gray-100 hover:bg-gray-200 rounded text-gray-700"
+                      title="Add text flashcard"
+                    >
+                      <Type className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={openInterpretationFromMenu}
+                      className="p-2 bg-teal-50 hover:bg-teal-100 text-teal-700 rounded"
+                      title="Add interpretation flashcard"
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={openOcclusionFromMenu}
+                      className="p-2 bg-orange-50 hover:bg-orange-100 text-orange-700 rounded"
+                      title="Add image occlusion flashcard"
+                    >
+                      <EyeOff className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
-          {flashcards.length === 0 ? (
+          {loadingFlashcards ? (
+            <div className="min-h-[240px] flex items-center justify-center">
+              <Loader2 className="w-8 h-8 text-accent animate-spin" />
+            </div>
+          ) : flashcards.length === 0 ? (
             <div className="text-center py-12">
               <div className="inline-flex items-center justify-center w-14 h-14 bg-gray-100 rounded-2xl mb-4">
                 <Layers className="w-7 h-7 text-secondary" />
@@ -1612,13 +2059,23 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
           ) : (
             <div className="space-y-3">
               {flashcards.map((card, index) => (
-                <div key={index} className="border border-divider rounded-lg overflow-hidden">
+                <div
+                  key={index}
+                  ref={(el) => {
+                    if (el) {
+                      cardRowRefs.current[index] = el
+                    } else {
+                      delete cardRowRefs.current[index]
+                    }
+                  }}
+                  className="border border-divider rounded-lg overflow-hidden"
+                >
                   <button
                     onClick={() => setExpandedCards((prev) => ({ ...prev, [index]: !prev[index] }))}
                     className="w-full px-4 py-3 flex justify-between items-center text-left bg-gray-50 hover:bg-gray-100"
                   >
                     <span className="text-sm text-primary truncate pr-3">
-                      #{index + 1} {card.front.replace(/<[^>]+>/g, '').substring(0, 100)}
+                      #{index + 1} {stripHtml(card.front).substring(0, 100)}
                     </span>
                     <span className="text-xs text-secondary">{expandedCards[index] ? '▲' : '▼'}</span>
                   </button>
@@ -1947,6 +2404,152 @@ export function FlashcardsView({ lecture, module, onBack, onSaved }) {
           )}
         </div>
       </div>
+
+      {showSourceCoverage && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-surface rounded-xl border border-divider p-6 max-w-5xl w-full max-h-[88vh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-primary">Source Notes Coverage</h3>
+                <p className="text-sm text-secondary mt-1">
+                  Coverage is based on flashcard source links (`section + bullet`), including nested bullets.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowSourceCoverage(false)}
+                className="p-2 bg-gray-100 hover:bg-gray-200 rounded-lg"
+                aria-label="Close coverage panel"
+              >
+                <X className="w-4 h-4 text-gray-600" />
+              </button>
+            </div>
+
+            {coverageSummary.total === 0 ? (
+              <div className="text-sm text-secondary bg-gray-50 border border-divider rounded-lg p-4">
+                No note bullets found for this lecture.
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                  <div className="bg-gray-50 rounded-lg border border-divider p-3">
+                    <div className="text-xs text-secondary">Total Bullets</div>
+                    <div className="text-lg font-semibold text-primary">{coverageSummary.total}</div>
+                  </div>
+                  <div className="bg-green-50 rounded-lg border border-green-200 p-3">
+                    <div className="text-xs text-green-700">Covered</div>
+                    <div className="text-lg font-semibold text-green-700">{coverageSummary.covered}</div>
+                  </div>
+                  <div className="bg-amber-50 rounded-lg border border-amber-200 p-3">
+                    <div className="text-xs text-amber-700">Uncovered</div>
+                    <div className="text-lg font-semibold text-amber-700">{coverageSummary.uncovered}</div>
+                  </div>
+                  <div className="bg-blue-50 rounded-lg border border-blue-200 p-3">
+                    <div className="text-xs text-blue-700">Coverage</div>
+                    <div className="text-lg font-semibold text-blue-700">{coverageSummary.coveragePct}%</div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 mb-4">
+                  <button
+                    onClick={() => setCoverageFilter('all')}
+                    className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                      coverageFilter === 'all'
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-white text-secondary border-divider hover:bg-gray-50'
+                    }`}
+                  >
+                    All
+                  </button>
+                  <button
+                    onClick={() => setCoverageFilter('uncovered')}
+                    className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                      coverageFilter === 'uncovered'
+                        ? 'bg-amber-600 text-white border-amber-600'
+                        : 'bg-white text-secondary border-divider hover:bg-gray-50'
+                    }`}
+                  >
+                    Uncovered Only
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {notesCoverageSections.map((section) => {
+                    const pointsForSection = section.points.filter((point) => {
+                      const linkedIndices = sourceCoverageByKey[point.key] || []
+                      if (coverageFilter === 'uncovered') return linkedIndices.length === 0
+                      return true
+                    })
+                    if (pointsForSection.length === 0) return null
+
+                    return (
+                      <div key={`coverage-section-${section.sectionIndex}`} className="border border-divider rounded-lg overflow-hidden">
+                        <div className="px-4 py-2 bg-gray-50 border-b border-divider">
+                          <p className="text-sm font-medium text-primary">
+                            Section {section.sectionIndex + 1}: {section.sectionTitle}
+                          </p>
+                        </div>
+                        <div className="divide-y divide-divider">
+                          {pointsForSection.map((point) => {
+                            const linkedIndices = sourceCoverageByKey[point.key] || []
+                            const covered = linkedIndices.length > 0
+                            return (
+                              <div key={`coverage-point-${point.key}`} className="px-4 py-3">
+                                <div className="flex items-start justify-between gap-4">
+                                  <div className="min-w-0 flex-1" style={{ paddingLeft: `${Math.min(point.level, 4) * 16}px` }}>
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                                        covered
+                                          ? 'bg-green-100 text-green-700'
+                                          : 'bg-amber-100 text-amber-700'
+                                      }`}>
+                                        {covered ? `Covered (${linkedIndices.length})` : 'Uncovered'}
+                                      </span>
+                                      <span className="text-[11px] text-secondary">
+                                        S{point.sectionIndex + 1} • P{point.pointIndex + 1}
+                                      </span>
+                                    </div>
+                                    <p className="text-sm text-primary break-words">{point.text}</p>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    {!covered && (
+                                      <button
+                                        disabled={creatingFromCoverageKey === point.key}
+                                        onClick={() => openAddCardFromCoverage({ ...point, sectionTitle: section.sectionTitle })}
+                                        className="px-2.5 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 disabled:cursor-not-allowed text-white rounded text-xs font-medium transition-colors inline-flex items-center gap-1.5"
+                                      >
+                                        {creatingFromCoverageKey === point.key ? (
+                                          <>
+                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                            Generating...
+                                          </>
+                                        ) : (
+                                          'Create Card'
+                                        )}
+                                      </button>
+                                    )}
+                                    {covered && (
+                                      <button
+                                        onClick={() => openLinkedCardsFromCoverage(linkedIndices)}
+                                        className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-medium transition-colors"
+                                      >
+                                        Show Linked Cards
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {cardImagePickerOpen && pickerCard && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">

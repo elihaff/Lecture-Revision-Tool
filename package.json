@@ -1,6 +1,6 @@
 {
   "name": "lecture-revision-tool",
-  "version": "5.85.0",
+  "version": "6.51.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,6 +12,8 @@
     "test:review-integration": "node src/lib/testReviewSystemIntegration.js"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
     "@supabase/supabase-js": "^2.49.1",
     "lucide-react": "^0.469.0",
     "pdfjs-dist": "^5.5.207",

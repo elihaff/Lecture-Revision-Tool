@@ -18,6 +18,13 @@ const MOTIVATIONAL_QUOTES = [
   { text: "No distractions, no excuses.", quoted: false },
   { text: "Do it. Do it. Do it.", quoted: false },
   { text: "You know what to do.", quoted: false },
+  { text: "Start already. What are you waiting for?", quoted: false },
+  { text: "Every second that passes is a second closer to your exam.", quoted: false },
+  { text: "Nu, you've got work to do", quoted: false },
+  { text: "Scientific fact: this study session will make you a better person", quoted: false },
+  { text: "Overcome that resistance and become the academic WEAPON you've been dreaming about.", quoted: false },
+  { text: "Don't make me generate all this revision material for nothing.", quoted: false },
+  { text: "Just start. I'm begging you. PLEASE.", quoted: false },
   { text: "work, work, work, work, work, work", author: "Rihanna", quoted: true },
 ]
 

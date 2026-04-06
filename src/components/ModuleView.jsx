@@ -79,6 +79,39 @@ export function ModuleView({ module, user, examDate, onBack }) {
     return lectures.filter((l) => !l.submodule_id)
   }
 
+  const persistLectureOrdering = async (nextLectures, affectedSubmoduleIds = []) => {
+    const normalizedIds = affectedSubmoduleIds.map((id) => id ?? null)
+    const affectedSet = new Set(normalizedIds)
+    const rowsToPersist = normalizedIds.length > 0
+      ? nextLectures.filter((lecture) => affectedSet.has(lecture.submodule_id ?? null))
+      : nextLectures
+
+    for (const lecture of rowsToPersist) {
+      const { error } = await supabase
+        .from('lectures')
+        .update({
+          submodule_id: lecture.submodule_id ?? null,
+          display_order: lecture.display_order,
+        })
+        .eq('id', lecture.id)
+      if (error) throw error
+    }
+  }
+
+  const applyLectureReorder = async (nextLectures, affectedSubmoduleIds = []) => {
+    setLectures(nextLectures)
+    moduleViewCache.set(module.id, {
+      submodules,
+      lectures: nextLectures,
+    })
+
+    try {
+      await persistLectureOrdering(nextLectures, affectedSubmoduleIds)
+    } catch {
+      await fetchData({ showLoading: false })
+    }
+  }
+
   const handleCreateSubmodule = async (data) => {
     const maxOrder = Math.max(0, ...submodules.map((s) => s.display_order || 0))
 
@@ -382,16 +415,7 @@ export function ModuleView({ module, user, examDate, onBack }) {
       })
     })
 
-    setLectures(newLectures)
-    moduleViewCache.set(module.id, {
-      submodules,
-      lectures: newLectures,
-    })
-
-    await supabase
-      .from('lectures')
-      .update({ submodule_id: targetSubmoduleId, display_order: targetIndex })
-      .eq('id', draggedLecture.id)
+    await applyLectureReorder(newLectures, [oldSubmoduleId, targetSubmoduleId])
 
     setDraggedLecture(null)
   }
@@ -449,16 +473,7 @@ export function ModuleView({ module, user, examDate, onBack }) {
       })
     })
 
-    setLectures(newLectures)
-    moduleViewCache.set(module.id, {
-      submodules,
-      lectures: newLectures,
-    })
-
-    await supabase
-      .from('lectures')
-      .update({ submodule_id: targetSubmoduleId, display_order: newIndex })
-      .eq('id', draggedLecture.id)
+    await applyLectureReorder(newLectures, [oldSubmoduleId, targetSubmoduleId])
 
     setDraggedLecture(null)
   }
@@ -476,26 +491,13 @@ export function ModuleView({ module, user, examDate, onBack }) {
       : getUnassignedLectures()
     const maxOrder = Math.max(0, ...targetLectures.map((l) => l.display_order || 0))
 
-    setLectures((prev) =>
-      prev.map((l) =>
-        l.id === draggedLecture.id
-          ? { ...l, submodule_id: targetSubmoduleId, display_order: maxOrder + 1 }
-          : l
-      )
+    const nextLectures = lectures.map((l) =>
+      l.id === draggedLecture.id
+        ? { ...l, submodule_id: targetSubmoduleId, display_order: maxOrder + 1 }
+        : l
     )
-    moduleViewCache.set(module.id, {
-      submodules,
-      lectures: lectures.map((l) =>
-        l.id === draggedLecture.id
-          ? { ...l, submodule_id: targetSubmoduleId, display_order: maxOrder + 1 }
-          : l
-      ),
-    })
 
-    await supabase
-      .from('lectures')
-      .update({ submodule_id: targetSubmoduleId, display_order: maxOrder + 1 })
-      .eq('id', draggedLecture.id)
+    await applyLectureReorder(nextLectures, [draggedLecture.submodule_id, targetSubmoduleId])
 
     setDraggedLecture(null)
   }
@@ -547,26 +549,13 @@ export function ModuleView({ module, user, examDate, onBack }) {
     const unassigned = getUnassignedLectures()
     const maxOrder = Math.max(0, ...unassigned.map((l) => l.display_order || 0))
 
-    setLectures((prev) =>
-      prev.map((l) =>
-        l.id === draggedLecture.id
-          ? { ...l, submodule_id: null, display_order: maxOrder + 1 }
-          : l
-      )
+    const nextLectures = lectures.map((l) =>
+      l.id === draggedLecture.id
+        ? { ...l, submodule_id: null, display_order: maxOrder + 1 }
+        : l
     )
-    moduleViewCache.set(module.id, {
-      submodules,
-      lectures: lectures.map((l) =>
-        l.id === draggedLecture.id
-          ? { ...l, submodule_id: null, display_order: maxOrder + 1 }
-          : l
-      ),
-    })
 
-    await supabase
-      .from('lectures')
-      .update({ submodule_id: null, display_order: maxOrder + 1 })
-      .eq('id', draggedLecture.id)
+    await applyLectureReorder(nextLectures, [draggedLecture.submodule_id, null])
 
     setDraggedLecture(null)
   }
